@@ -55,6 +55,7 @@ const RESET_TO_DEFAULT_KEYS = [
   'inzu_role_perms',
   'inzu_approvals',
   'inzu_branding',
+  'inzu_docs_general_seed_v1', // one-time general-library seed marker — clear so a demo restore re-seeds
 ]
 const ALL_KEYS = [...ARRAY_KEYS, ...OBJECT_KEYS, ...RESET_TO_DEFAULT_KEYS]
 

@@ -2,6 +2,8 @@ import { useSyncExternalStore } from 'react'
 import { ROLES, BRANCHES, type RoleKey, type BranchCode } from '@/lib/roles'
 import type { ModuleKey, Permission, PermMap } from '@/lib/permissions'
 import { registerCrossTabSync } from '@/lib/storage/sync'
+import { isSupabaseConfigured } from '@/lib/supabase/client'
+import { supaUsersStore } from './profiles'
 
 /**
  * Identity store — the shell-phase "backend" for authentication. Users are
@@ -167,8 +169,11 @@ export const sessionsStore = {
   subscribe(cb: () => void) { sListeners.add(cb); return () => sListeners.delete(cb) },
 }
 
+// The live user directory: the Supabase `profiles` table when configured, else
+// the local seed store. Same AppUser[] shape either way.
+const directory = isSupabaseConfigured ? supaUsersStore : usersStore
 export function useUsers(): AppUser[] {
-  return useSyncExternalStore(usersStore.subscribe, usersStore.list, usersStore.list)
+  return useSyncExternalStore(directory.subscribe, directory.list, directory.list)
 }
 export function useSessions(): SessionEvent[] {
   return useSyncExternalStore(sessionsStore.subscribe, sessionsStore.list, sessionsStore.list)

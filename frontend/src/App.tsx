@@ -29,6 +29,7 @@ import ToolInspections from '@/pages/safety/ToolInspections'
 import DocumentsLibrary from '@/pages/documents/DocumentsLibrary'
 import Messages from '@/pages/messages/Messages'
 import Admin from '@/pages/admin/Admin'
+import ChangePassword from '@/pages/auth/ChangePassword'
 import PlaceholderPage from '@/components/PlaceholderPage'
 import { ALL_PAGES } from '@/lib/nav'
 
@@ -74,6 +75,10 @@ function Gate({ module, path, children }: { module: any; path: string; children:
 }
 
 export default function App() {
+  const { user, mustChangePassword } = useAuth()
+  // A user signed in with a temporary password must set their own before anything else.
+  if (user && mustChangePassword) return <ChangePassword />
+
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />

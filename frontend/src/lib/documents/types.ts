@@ -64,7 +64,122 @@ export interface DocumentRecord {
   uploaded_by: string // actor name, for audit
   uploaded_by_role: RoleKey | 'seed'
   uploaded_at: string // ISO
+
+  // ── Library / general-document metadata (optional; older records omit these,
+  //    and the store back-fills sensible defaults on load — see coerce()) ──
+  doc_type?: DocType // richer classification for general/organisational docs
+  department?: string // owning function (Operations, Safety, HR…)
+  owner?: string // responsible person/role — may differ from the uploader
+  tags?: string[] // free-form tags for search
+  review_date?: string // periodic-review due date (policies/SOPs) — ISO yyyy-mm-dd or ''
+  all_branches?: boolean // company-wide document, visible to both branches
+  approval_status?: ApprovalStatus // workflow state (defaults to 'approved' for legacy rows)
+  audit?: AuditEvent[] // lifecycle trail: upload → submit → approve / reject …
+
+  // ── Access control ──
+  visibility?: DocVisibility // public (default) or private to chosen people
+  owner_id?: string // creator's user id — may manage access and the document
+  shared_with?: ShareGrant[] // who a private document is shared with, and at what level
 }
+
+// ── Access control ─────────────────────────────────────────────────────
+export type DocVisibility = 'public' | 'private'
+export interface ShareGrant {
+  user_id: string
+  access: 'view' | 'edit'
+}
+
+export interface AccessCtx { userId: string; role: RoleKey; branch: BranchCode; canToggle: boolean }
+
+/** Effective visibility (legacy rows with none are public). */
+export function visibilityOf(d: DocumentRecord): DocVisibility {
+  return d.visibility ?? 'public'
+}
+
+/** Can this user see the document at all? Private docs are limited to the owner
+ *  and the people it's shared with; public docs follow normal branch scoping. */
+export function canAccessDoc(d: DocumentRecord, c: AccessCtx): boolean {
+  if (c.role === 'administrator') return true
+  if (d.owner_id && d.owner_id === c.userId) return true
+  if (visibilityOf(d) === 'private') return (d.shared_with ?? []).some((g) => g.user_id === c.userId)
+  return c.canToggle || d.branch === c.branch || !!d.all_branches
+}
+
+/** Can this user manage the document (share, version, submit, delete)? Owner,
+ *  administrator, or someone granted edit access. */
+export function canManageDoc(d: DocumentRecord, c: AccessCtx): boolean {
+  if (c.role === 'administrator') return true
+  if (d.owner_id && d.owner_id === c.userId) return true
+  return (d.shared_with ?? []).some((g) => g.user_id === c.userId && g.access === 'edit')
+}
+
+// ── Library document classification (general / organisational documents) ───
+// The vehicle/driver licensing taxonomy lives in DocCategory above; this richer
+// set classifies everything else the library now holds — policies, SOPs, risk
+// assessments, permits, IDs, contracts, registers, reports…
+export type DocType =
+  | 'policy' | 'procedure' | 'risk_assessment' | 'form' | 'register'
+  | 'report' | 'license' | 'permit' | 'certificate' | 'contract'
+  | 'manual' | 'minutes' | 'correspondence' | 'statutory' | 'identity' | 'other'
+
+export const DOC_TYPE_META: Record<DocType, { label: string; expiry: boolean }> = {
+  policy: { label: 'Policy', expiry: false },
+  procedure: { label: 'Procedure / SOP', expiry: false },
+  risk_assessment: { label: 'Risk Assessment', expiry: true },
+  form: { label: 'Form / Template', expiry: false },
+  register: { label: 'Register / Log', expiry: false },
+  report: { label: 'Report', expiry: false },
+  license: { label: 'Licence', expiry: true },
+  permit: { label: 'Permit', expiry: true },
+  certificate: { label: 'Certificate', expiry: true },
+  contract: { label: 'Contract / Agreement', expiry: true },
+  manual: { label: 'Manual / Guideline', expiry: false },
+  minutes: { label: 'Meeting Minutes', expiry: false },
+  correspondence: { label: 'Correspondence', expiry: false },
+  statutory: { label: 'Statutory Return', expiry: true },
+  identity: { label: 'Identity Document (NRC, passport)', expiry: true },
+  other: { label: 'Other', expiry: false },
+}
+export const DOC_TYPE_KEYS = Object.keys(DOC_TYPE_META) as DocType[]
+
+// Owning function/department — used for filing and search.
+export const DEPARTMENTS = [
+  'Operations', 'Safety', 'Workshop', 'Fleet', 'Drivers', 'HR',
+  'Payroll', 'Finance', 'Administration', 'Board', 'Company-wide',
+] as const
+
+// ── Approval workflow ──────────────────────────────────────────────────
+export type ApprovalStatus = 'draft' | 'pending' | 'approved' | 'rejected'
+
+export const APPROVAL_STATUS_META: Record<ApprovalStatus, { label: string; tone: StatusTone }> = {
+  draft: { label: 'Draft', tone: 'neutral' },
+  pending: { label: 'Pending approval', tone: 'warning' },
+  approved: { label: 'Approved', tone: 'good' },
+  rejected: { label: 'Rejected', tone: 'critical' },
+}
+export const APPROVAL_STATUS_KEYS = Object.keys(APPROVAL_STATUS_META) as ApprovalStatus[]
+
+// ── Audit trail ────────────────────────────────────────────────────────
+export type AuditAction = 'uploaded' | 'submitted' | 'approved' | 'rejected' | 'new_version' | 'updated' | 'restored' | 'shared'
+export interface AuditEvent {
+  action: AuditAction
+  by: string
+  role: RoleKey | 'seed' | 'system'
+  at: string // ISO
+  note?: string
+}
+export const AUDIT_LABEL: Record<AuditAction, string> = {
+  uploaded: 'Uploaded',
+  submitted: 'Submitted for approval',
+  approved: 'Approved',
+  rejected: 'Rejected',
+  new_version: 'New version uploaded',
+  updated: 'Details updated',
+  restored: 'Re-opened',
+  shared: 'Access changed',
+}
+
+export const REVIEW_WARNING_DAYS = 30
 
 // ── Status derived from expiry + supersession ──────────────────────────
 export type DocStatus = 'current' | 'expiring' | 'expired' | 'superseded' | 'none'
@@ -93,4 +208,39 @@ export function docStatus(rec: DocumentRecord, today = new Date()): DocStatus {
   if (days < 0) return 'expired'
   if (days <= EXPIRY_WARNING_DAYS) return 'expiring'
   return 'current'
+}
+
+// ── Display + classification helpers (work for both licensing and library docs) ──
+
+/** Effective approval status (legacy rows with no workflow are treated as approved). */
+export function approvalOf(d: DocumentRecord): ApprovalStatus {
+  return d.approval_status ?? 'approved'
+}
+
+/** Human label for a document's kind — doc_type for library docs, category otherwise. */
+export function typeLabelOf(d: DocumentRecord): string {
+  if (d.entity_type === 'general') return DOC_TYPE_META[d.doc_type ?? 'other'].label
+  return CATEGORY_META[d.category]?.label ?? 'Document'
+}
+
+/** The name to show for a document — its title if it has one, else its kind. */
+export function displayNameOf(d: DocumentRecord): string {
+  return (d.title && d.title.trim()) || typeLabelOf(d)
+}
+
+/** Owning department — explicit field, or derived from the linked entity. */
+export function departmentOf(d: DocumentRecord): string {
+  if (d.department) return d.department
+  if (d.entity_type === 'vehicle') return 'Fleet'
+  if (d.entity_type === 'driver') return 'Drivers'
+  return 'General'
+}
+
+/** Periodic-review state for policies/SOPs that carry a review date. */
+export function reviewStatus(d: DocumentRecord, today = new Date()): 'due' | 'soon' | 'ok' | null {
+  const days = daysUntil(d.review_date ?? '', today)
+  if (days === null) return null
+  if (days < 0) return 'due'
+  if (days <= REVIEW_WARNING_DAYS) return 'soon'
+  return 'ok'
 }

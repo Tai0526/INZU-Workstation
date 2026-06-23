@@ -11,6 +11,8 @@ import {
 import { ROLE_LIST, ROLES, BRANCHES, BRANCH_CODES, brandingStore, useBranches, type RoleKey, type BranchCode } from '@/lib/roles'
 import { NAV } from '@/lib/nav'
 import { useUsers, usersStore, useSessions, allowedBranches, type AppUser, type NewUser } from '@/lib/auth/users'
+import { isSupabaseConfigured } from '@/lib/supabase/client'
+import { supaUsersStore } from '@/lib/auth/profiles'
 import { useApprovals, approvalsStore } from '@/lib/auth/approvals'
 import { employeesStore } from '@/lib/hr/store'
 import type { JobRole } from '@/lib/hr/types'
@@ -141,6 +143,8 @@ function UsersTab({ currentId }: { currentId: string }) {
 
 function UserModal({ user, currentId, onClose }: { user: AppUser | null; currentId: string; onClose: () => void }) {
   const isNew = !user
+  const supa = isSupabaseConfigured
+  const directory = useUsers()
   const [form, setForm] = useState<AppUser>(() =>
     user ?? ({
       id: '', username: '', password: '', full_name: '', email: '', role: 'viewer', branch: 'trident',
@@ -148,7 +152,10 @@ function UserModal({ user, currentId, onClose }: { user: AppUser | null; current
       active: true, created_at: '', created_by: '', last_login_at: '', login_count: 0,
     } as AppUser),
   )
+  const [initialPw, setInitialPw] = useState('')
+  const [tempPw, setTempPw] = useState('') // shown after a create / reset
   const [err, setErr] = useState('')
+  const [busy, setBusy] = useState(false)
   const set = <K extends keyof AppUser>(k: K, v: AppUser[K]) => setForm((f) => ({ ...f, [k]: v }))
 
   function toggleBranch(b: BranchCode) {
@@ -163,50 +170,122 @@ function UserModal({ user, currentId, onClose }: { user: AppUser | null; current
     set('hidden_pages', form.hidden_pages.includes(path) ? form.hidden_pages.filter((p) => p !== path) : [...form.hidden_pages, path])
   }
 
-  function save() {
+  async function save() {
+    setErr('')
     if (!form.full_name.trim()) return setErr('Full name is required.')
-    if (!form.username.trim()) return setErr('Username is required.')
-    if (isNew && !form.password.trim()) return setErr('Set an initial password.')
-    const clash = usersStore.list().find((u) => u.username.toLowerCase() === form.username.trim().toLowerCase() && u.id !== form.id)
+    if (supa) {
+      if (isNew && !form.email.trim()) return setErr('Email is required — it is the login.')
+    } else {
+      if (!form.username.trim()) return setErr('Username is required.')
+      if (isNew && !form.password.trim()) return setErr('Set an initial password.')
+    }
+    const uname = (form.username.trim() || (supa ? form.email.trim().split('@')[0] : ''))
+    const clash = directory.find((u) => u.username.toLowerCase() === uname.toLowerCase() && u.id !== form.id)
     if (clash) return setErr('That username is already taken.')
     if (form.id === currentId && !form.active) return setErr("You can't deactivate the account you're signed in with.")
     if (form.id === currentId && (form.perm_overrides.admin === 'none' || form.perm_overrides.admin === 'view')) return setErr("You can't reduce your own admin access.")
 
-    // Create / link an HR employee profile when flagged.
-    let employee_id = form.employee_id
-    if (form.is_employee && !employee_id) {
-      const emp = employeesStore.add({
-        branch: form.branch, employee_no: `INZ-U${(employeesStore.list().length + 1).toString().padStart(3, '0')}`,
-        full_name: form.full_name.trim(), job_role: roleToJob(form.role), status: 'active', phone: '', hod: ROLES[form.role].label,
-      })
-      employee_id = emp.id
-    }
+    setBusy(true)
+    try {
+      if (supa) {
+        const extra = form.extra_branches.filter((b) => b !== form.branch)
+        if (isNew) {
+          const res = await supaUsersStore.createUser({
+            email: form.email.trim(), full_name: form.full_name.trim(), role: form.role, branch: form.branch,
+            username: form.username.trim() || undefined, password: initialPw.trim() || undefined,
+            extra_branches: extra, perm_overrides: form.perm_overrides, hidden_pages: form.hidden_pages,
+            is_employee: form.is_employee, employee_id: form.employee_id,
+          })
+          setTempPw(res.temp_password) // keep modal open to reveal the one-time password
+        } else {
+          await supaUsersStore.updateProfile(form.id, {
+            full_name: form.full_name.trim(), username: uname, role: form.role, branch: form.branch,
+            extra_branches: extra, perm_overrides: form.perm_overrides, hidden_pages: form.hidden_pages,
+            is_employee: form.is_employee, employee_id: form.employee_id,
+          })
+          if (user && user.active !== form.active) await supaUsersStore.setActive(form.id, form.active)
+          onClose()
+        }
+        return
+      }
 
-    const payload = { ...form, username: form.username.trim(), full_name: form.full_name.trim(), employee_id, extra_branches: form.extra_branches.filter((b) => b !== form.branch) }
-    if (isNew) usersStore.add(payload as NewUser)
-    else usersStore.update(form.id, payload)
-    onClose()
+      // ── Local fallback ──
+      let employee_id = form.employee_id
+      if (form.is_employee && !employee_id) {
+        const emp = employeesStore.add({
+          branch: form.branch, employee_no: `INZ-U${(employeesStore.list().length + 1).toString().padStart(3, '0')}`,
+          full_name: form.full_name.trim(), job_role: roleToJob(form.role), status: 'active', phone: '', hod: ROLES[form.role].label,
+        })
+        employee_id = emp.id
+      }
+      const payload = { ...form, username: form.username.trim(), full_name: form.full_name.trim(), employee_id, extra_branches: form.extra_branches.filter((b) => b !== form.branch) }
+      if (isNew) usersStore.add(payload as NewUser)
+      else usersStore.update(form.id, payload)
+      onClose()
+    } catch (e) {
+      setErr((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
   }
-  function remove() {
+
+  async function resetPassword() {
+    if (!user) return
+    setErr(''); setBusy(true)
+    try { const res = await supaUsersStore.resetPassword(user.id); setTempPw(res.temp_password) }
+    catch (e) { setErr((e as Error).message) }
+    finally { setBusy(false) }
+  }
+
+  async function remove() {
     if (form.id === currentId) { setErr("You can't delete the account you're signed in with."); return }
-    if (window.confirm(`Delete ${form.full_name}? They will no longer be able to sign in.`)) { usersStore.remove(form.id); onClose() }
+    if (!window.confirm(`Delete ${form.full_name}? They will no longer be able to sign in.`)) return
+    setBusy(true)
+    try {
+      if (supa) await supaUsersStore.deleteUser(form.id)
+      else usersStore.remove(form.id)
+      onClose()
+    } catch (e) { setErr((e as Error).message); setBusy(false) }
+  }
+
+  // After a create/reset, reveal the one-time password instead of the form.
+  if (tempPw) {
+    return (
+      <Modal open onClose={onClose} size="md" title="One-time password" subtitle="Share this with the user — they'll be asked to change it on first sign-in."
+        footer={<Button onClick={onClose}>Done</Button>}>
+        <div className="space-y-3">
+          <div className="rounded-lg border border-black/10 bg-canvas px-4 py-3">
+            <div className="text-[11px] uppercase tracking-wide text-status-neutral">Temporary password</div>
+            <div className="mt-1 select-all font-mono text-lg font-bold text-navy">{tempPw}</div>
+          </div>
+          <Button variant="secondary" onClick={() => navigator.clipboard?.writeText(tempPw)}>Copy to clipboard</Button>
+          <p className="text-xs text-status-neutral">For security this password is shown once. If it's lost, just reset it again.</p>
+        </div>
+      </Modal>
+    )
   }
 
   return (
     <Modal open onClose={onClose} size="xl" title={isNew ? 'Add user' : `Edit ${form.full_name}`} subtitle="Accounts, access and per-user permissions"
       footer={
         <div className="flex w-full items-center justify-between">
-          {!isNew ? <Button variant="danger" onClick={remove}>Delete user</Button> : <span />}
-          <div className="flex gap-2"><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={save}>{isNew ? 'Create user' : 'Save'}</Button></div>
+          {!isNew ? <Button variant="danger" onClick={remove} disabled={busy}>Delete user</Button> : <span />}
+          <div className="flex gap-2"><Button variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button><Button onClick={save} disabled={busy}>{busy ? 'Working…' : isNew ? 'Create user' : 'Save'}</Button></div>
         </div>
       }>
       {err && <div className="mb-4 rounded-lg border border-status-critical/30 bg-status-critical/5 px-3 py-2 text-sm text-status-critical">{err}</div>}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Full name *</span><input className={inputCls} value={form.full_name} onChange={(e) => set('full_name', e.target.value)} /></label>
-        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Email</span><input className={inputCls} value={form.email} onChange={(e) => set('email', e.target.value)} /></label>
-        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Username *</span><input className={inputCls} value={form.username} onChange={(e) => set('username', e.target.value)} autoComplete="off" /></label>
-        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">{isNew ? 'Password *' : 'Reset password (leave to keep)'}</span><input className={inputCls} value={isNew ? form.password : ''} placeholder={isNew ? '' : '••••••••'} onChange={(e) => set('password', e.target.value)} autoComplete="new-password" /></label>
+        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Email{supa ? ' *' : ''}{supa && !isNew ? ' (login — fixed)' : ''}</span><input className={inputCls} type="email" value={form.email} disabled={supa && !isNew} onChange={(e) => set('email', e.target.value)} /></label>
+        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Username{supa ? ' (optional)' : ' *'}</span><input className={inputCls} value={form.username} onChange={(e) => set('username', e.target.value)} autoComplete="off" placeholder={supa ? 'defaults to the email name' : ''} /></label>
+        {supa ? (
+          isNew
+            ? <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Initial password (optional)</span><input className={inputCls} value={initialPw} onChange={(e) => setInitialPw(e.target.value)} autoComplete="new-password" placeholder="leave blank to auto-generate" /></label>
+            : <div className="block"><span className="mb-1 block text-xs font-medium text-navy">Password</span><Button variant="secondary" type="button" onClick={resetPassword} disabled={busy}>Reset password</Button></div>
+        ) : (
+          <label className="block"><span className="mb-1 block text-xs font-medium text-navy">{isNew ? 'Password *' : 'Reset password (leave to keep)'}</span><input className={inputCls} value={isNew ? form.password : ''} placeholder={isNew ? '' : '••••••••'} onChange={(e) => set('password', e.target.value)} autoComplete="new-password" /></label>
+        )}
 
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Role</span>
           <select className={inputCls} value={form.role} onChange={(e) => set('role', e.target.value as RoleKey)}>

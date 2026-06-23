@@ -1,0 +1,8 @@
+project_id = "uwzofykghqebqhvroxxh"
+
+# admin-users is called from the browser and verifies the caller itself
+# (it checks the JWT and that the user is an active administrator before doing
+# anything). Platform-level JWT verification must be OFF, or the CORS preflight
+# — which carries no token — gets rejected and the call fails.
+[functions.admin-users]
+verify_jwt = false

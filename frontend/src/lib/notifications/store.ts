@@ -2,7 +2,10 @@ import { useSyncExternalStore } from 'react'
 import { ROLES, type BranchCode, type RoleKey } from '@/lib/roles'
 import { useDocuments } from '@/lib/documents/store'
 import { useVehicles } from '@/lib/fleet/store'
-import { CATEGORY_META, docStatus, daysUntil, LICENSING_CATEGORIES } from '@/lib/documents/types'
+import {
+  CATEGORY_META, docStatus, daysUntil, LICENSING_CATEGORIES,
+  approvalOf, reviewStatus, typeLabelOf, displayNameOf,
+} from '@/lib/documents/types'
 import { useCases, CASE_STAGE_META, INCIDENT_TYPE_META } from '@/lib/safety/cases'
 import { useSpeedEvents } from '@/lib/speed/store'
 import { overBy, isGlitch } from '@/lib/speed/types'
@@ -24,6 +27,7 @@ const OPS_DECIDERS: RoleKey[] = ['operations_manager', 'asst_operations_manager'
 const SPEED_ACTORS: RoleKey[] = ['tracker', 'operations_manager', 'asst_operations_manager'] // log / confirm / escalate speed events
 const WORKSHOP_ACTORS: RoleKey[] = ['workshop_supervisor', 'operations_manager', 'asst_operations_manager'] // workshop does it, ops is aware
 const PLANNER_ACTORS: RoleKey[] = ['bus_controller', 'route_supervisor', 'operations_manager', 'asst_operations_manager'] // plan daily/weekly bus movements
+const DOC_APPROVERS: RoleKey[] = ['operations_manager', 'asst_operations_manager', 'managing_director'] // approve library documents (admins see all anyway)
 
 export interface AppNotification {
   id: string
@@ -170,27 +174,54 @@ export function useNotifications(branch: BranchCode, role?: RoleKey): {
     })
   }
 
-  // ── Licensing expiries (everyone) ──
+  // ── Document library: approvals, review cycles, and expiries ──
   for (const d of docs) {
-    if (d.superseded || d.branch !== branch) continue
+    // Company-wide documents surface in both branches.
+    if (d.superseded || (d.branch !== branch && !d.all_branches)) continue
     const meta = CATEGORY_META[d.category]
     if (!meta) continue // unknown/legacy category — skip rather than crash
+    const kind = typeLabelOf(d)
+    const subject = d.entity_type === 'general' ? displayNameOf(d) : d.entity_label
+    const link = meta.licensing ? '/fleet/licensing' : '/documents'
+
+    // Awaiting approval — alert the approvers (admins see it regardless).
+    if (approvalOf(d) === 'pending') {
+      items.push({
+        id: `doc:${d.id}:pending`, severity: 'warning', audience: DOC_APPROVERS,
+        title: `Document awaiting approval: ${subject}`,
+        detail: `${kind} submitted by ${d.uploaded_by} — review and approve or reject.`,
+        date: d.uploaded_at.slice(0, 10), link: '/documents',
+      })
+    }
+
+    // Periodic review due (policies, SOPs, registers).
+    const rv = reviewStatus(d)
+    if (rv === 'due' || rv === 'soon') {
+      const days = daysUntil(d.review_date ?? '')
+      items.push({
+        id: `doc:${d.id}:review`, severity: rv === 'due' ? 'warning' : 'info', audience: null,
+        title: `Review due: ${subject}`,
+        detail: rv === 'due' ? `Review was due ${d.review_date}.` : `Review due in ${days} day${days === 1 ? '' : 's'} (${d.review_date}).`,
+        date: d.review_date ?? '', link: '/documents',
+      })
+    }
+
+    // Expiry (licensing, permits, certificates, contracts…).
     const st = docStatus(d)
-    const label = meta.label
     if (st === 'expired') {
       items.push({
         id: `lic:${d.id}:expired`, severity: 'critical', audience: null,
-        title: `${label} expired — ${d.entity_label}`,
+        title: `${kind} expired — ${subject}`,
         detail: `Expired ${d.expiry_date}. Upload the renewed document.`,
-        date: d.expiry_date, link: '/fleet/licensing',
+        date: d.expiry_date, link,
       })
     } else if (st === 'expiring') {
       const days = daysUntil(d.expiry_date)
       items.push({
         id: `lic:${d.id}:expiring`, severity: 'warning', audience: null,
-        title: `${label} expiring — ${d.entity_label}`,
+        title: `${kind} expiring — ${subject}`,
         detail: `Due in ${days} day${days === 1 ? '' : 's'} (${d.expiry_date}).`,
-        date: d.expiry_date, link: '/fleet/licensing',
+        date: d.expiry_date, link,
       })
     }
   }

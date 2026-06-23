@@ -124,7 +124,7 @@ export const NAV: NavNode[] = [
   },
   {
     module: 'documents', label: 'Documents', icon: FolderOpen, standalone: true,
-    pages: [{ label: 'Documents', path: '/documents', blurb: 'Versioned document library: SOPs, policies, forms, registers. Metadata, search, and review-due reminders.' }],
+    pages: [{ label: 'Documents', path: '/documents', blurb: 'Central library for every document — policies, SOPs, risk assessments, licences, permits, IDs, contracts, registers. Versioned, searchable by metadata, approval workflow, expiry/review reminders, and a full audit trail of who filed what and when.' }],
   },
 ]
 

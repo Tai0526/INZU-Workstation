@@ -23,3 +23,7 @@ Thumbs.db
 .idea/
 .claude/
 *.local
+
+# Supabase CLI local cache (machine-specific — never commit)
+supabase/.temp/
+supabase/.branches/

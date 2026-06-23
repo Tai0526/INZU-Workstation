@@ -1,24 +1,24 @@
-import { useState } from 'react'
+import { useState, type FormEvent } from 'react'
 import { useNavigate, Navigate } from 'react-router-dom'
-import { LogIn, User, Lock } from 'lucide-react'
+import { LogIn, Mail, Lock } from 'lucide-react'
 import { useAuth } from '@/auth/AuthContext'
 
 /** Credential login. Accounts are created by an administrator — there is no sign-up. */
 export default function LoginPage() {
   const { user, login } = useAuth()
   const navigate = useNavigate()
-  const [username, setUsername] = useState('')
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
   if (user) return <Navigate to="/" replace />
 
-  function submit(e: React.FormEvent) {
+  async function submit(e: FormEvent) {
     e.preventDefault()
     setError('')
     setLoading(true)
-    const res = login(username, password)
+    const res = await login(email, password)
     if (res.ok) navigate(res.landing || '/')
     else { setError(res.reason || 'Sign-in failed.'); setLoading(false) }
   }
@@ -65,11 +65,11 @@ export default function LoginPage() {
 
           <form onSubmit={submit} className="space-y-4">
             <label className="block">
-              <span className="mb-1.5 block text-xs font-medium text-navy">Username</span>
+              <span className="mb-1.5 block text-xs font-medium text-navy">Email</span>
               <div className="relative">
-                <User size={16} className="pointer-events-none absolute left-3.5 top-3.5 text-status-neutral" />
-                <input value={username} onChange={(e) => setUsername(e.target.value)} autoFocus autoComplete="username"
-                  className="h-11 w-full rounded-[10px] border-[1.5px] border-navy/15 bg-white pl-10 pr-3.5 text-sm text-navy outline-none focus:border-brand" placeholder="e.g. admin" />
+                <Mail size={16} className="pointer-events-none absolute left-3.5 top-3.5 text-status-neutral" />
+                <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoFocus autoComplete="username"
+                  className="h-11 w-full rounded-[10px] border-[1.5px] border-navy/15 bg-white pl-10 pr-3.5 text-sm text-navy outline-none focus:border-brand" placeholder="you@inzumcs.com" />
               </div>
             </label>
             <label className="block">
