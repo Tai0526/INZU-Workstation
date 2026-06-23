@@ -1,0 +1,16 @@
+# Netlify build + deploy config for the INZU Workstation frontend (Vite + React).
+# The app lives in /frontend, so the build runs there and publishes its dist folder.
+[build]
+  base = "frontend"
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+# Single-page app: send every route back to index.html so react-router handles
+# deep links and page refreshes instead of 404ing.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

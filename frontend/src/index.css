@@ -1,0 +1,39 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-canvas text-navy font-sans antialiased;
+  }
+}
+
+@layer components {
+  /* Reusable surface card */
+  .card {
+    @apply rounded-xl bg-surface shadow-card border border-black/5;
+  }
+  /* Page container padding */
+  .page {
+    @apply p-5 md:p-7 max-w-[1400px] mx-auto w-full;
+  }
+}
+
+/* Thin, unobtrusive scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(15, 27, 51, 0.2) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(15, 27, 51, 0.18);
+  border-radius: 8px;
+}
