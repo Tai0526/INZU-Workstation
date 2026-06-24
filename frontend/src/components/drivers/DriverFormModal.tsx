@@ -8,6 +8,7 @@ import { driversStore } from '@/lib/drivers/store'
 import { type Driver, type DriverInput, type Crew, type DriverStatus, patternFor, shiftWindow } from '@/lib/drivers/types'
 import { schedulingStore, useScheduling, crewLabel, crewShiftLabel, crewShiftKind, shiftTime, shiftKindOf } from '@/lib/drivers/scheduling'
 import { driverShiftsStore } from '@/lib/drivers/driverShifts'
+import { isContinuousSection } from '@/lib/drivers/schedule'
 
 function Field({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) {
   return (
@@ -72,8 +73,10 @@ export default function DriverFormModal({
     if (driversStore.conflict(employee_no, editing?.id)) return setError(`Employee number "${employee_no}" already exists.`)
 
     const payload = { ...form, full_name, employee_no }
-    if (editing) { driversStore.update(editing.id, payload); driverShiftsStore.set(editing.id, shiftId || undefined) }
-    else { const created = driversStore.add(payload); driverShiftsStore.set(created.id, shiftId || undefined) }
+    // Morning/Afternoon only applies to 7/7 split sections; continuous rotates by crew.
+    const blockShift = isContinuousSection(form.section) ? undefined : (shiftId || undefined)
+    if (editing) { driversStore.update(editing.id, payload); driverShiftsStore.set(editing.id, blockShift) }
+    else { const created = driversStore.add(payload); driverShiftsStore.set(created.id, blockShift) }
     onClose()
   }
 
@@ -132,12 +135,18 @@ export default function DriverFormModal({
             ))}
           </select>
         </Field>
-        <Field label="Shift / block" hint={selShift ? `${shiftKindOf(selShift) === 'night' ? 'Counts as night' : 'Counts as day'}${shiftTime(selShift) ? ` · ${shiftTime(selShift)}` : ''}` : 'Follows the crew’s shift'}>
-          <select className={inputCls} value={shiftId} onChange={(e) => setShiftId(e.target.value)}>
-            <option value="">Use crew default</option>
-            {sched.shifts.map((s) => <option key={s.id} value={s.id}>{s.label}{shiftTime(s) ? ` · ${shiftTime(s)}` : ''}</option>)}
-          </select>
-        </Field>
+        {isContinuousSection(form.section) ? (
+          <Field label="Shift / block" hint="Continuous section — day/night rotates by crew">
+            <div className={`${inputCls} bg-canvas text-status-neutral`}>A Day · B Night · C Off (auto-rotates)</div>
+          </Field>
+        ) : (
+          <Field label="Shift / block" hint={selShift ? `${shiftKindOf(selShift) === 'night' ? 'Counts as night' : 'Counts as day'}${shiftTime(selShift) ? ` · ${shiftTime(selShift)}` : ''}` : 'Follows the crew’s shift'}>
+            <select className={inputCls} value={shiftId} onChange={(e) => setShiftId(e.target.value)}>
+              <option value="">Use crew default</option>
+              {sched.shifts.map((s) => <option key={s.id} value={s.id}>{s.label}{shiftTime(s) ? ` · ${shiftTime(s)}` : ''}</option>)}
+            </select>
+          </Field>
+        )}
         <Field label="Section">
           <select className={inputCls} value={form.section} onChange={(e) => set('section', e.target.value)}>
             {SECTIONS[form.branch].map((s) => <option key={s} value={s}>{s}</option>)}

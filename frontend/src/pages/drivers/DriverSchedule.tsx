@@ -10,9 +10,9 @@ import SetScheduleModal from '@/components/drivers/SetScheduleModal'
 import DutyReportModal from '@/components/drivers/DutyReportModal'
 import { useDrivers } from '@/lib/drivers/store'
 import type { Driver } from '@/lib/drivers/types'
-import { ROTATIONS, SHIFT_META, shiftHours, shiftOnDate, patternKeyFor, anchorFor, type ShiftKind } from '@/lib/drivers/schedule'
+import { ROTATIONS, SHIFT_META, driverShiftOnDate, dutyShort, dutyLabel, dutyHours, patternKeyFor, type ShiftKind } from '@/lib/drivers/schedule'
 import { useScheduling, windowForKind } from '@/lib/drivers/scheduling'
-import { effectiveShort, effectiveWindow, effectiveLabel, useDriverShifts } from '@/lib/drivers/driverShifts'
+import { useDriverShifts } from '@/lib/drivers/driverShifts'
 import { useWeeklyAssign } from '@/lib/operations/store'
 import { buildAssignmentIndex, dutyOn } from '@/lib/drivers/duty'
 
@@ -70,7 +70,7 @@ export default function DriverSchedule() {
   const coverage = useMemo(() => days.map((d) => {
     let day = 0, night = 0
     for (const dr of drivers) {
-      const k = SHIFT_META[shiftOnDate(patternKeyFor(dr), anchorFor(dr), d.dateISO)].kind
+      const k = SHIFT_META[driverShiftOnDate(dr, d.dateISO)].kind
       if (k === 'day') day++; else if (k === 'night') night++
     }
     return { day, night }
@@ -143,9 +143,9 @@ export default function DriverSchedule() {
                       const duty = dutyOn(dr, d.dateISO, idx)
                       const meta = SHIFT_META[duty.shift]
                       const isOT = duty.kind === 'overtime'
-                      const wLabel = meta.kind === 'off' ? meta.label : (effectiveLabel(dr) || meta.label)
-                      const wHours = meta.kind === 'off' ? '' : (effectiveWindow(dr) || shiftHours(duty.shift))
-                      const cellShort = meta.kind === 'off' ? meta.short : effectiveShort(dr)
+                      const wLabel = dutyLabel(dr, duty.shift)
+                      const wHours = dutyHours(dr, duty.shift)
+                      const cellShort = dutyShort(dr, duty.shift)
                       const tip = `${dr.full_name} · ${d.dateISO} — ${isOT ? `Overtime${duty.vehicle ? ` on ${duty.vehicle}` : ''}` : `${wLabel}${wHours ? ` (${wHours})` : ''}${duty.vehicle ? ` · ${duty.vehicle}` : ''}`}`
                       return (
                         <td key={d.day} className={clsx('h-8 w-7 border-l border-black/5 text-center', d.weekend && meta.kind === 'off' && !isOT && 'bg-black/[0.02]')}>

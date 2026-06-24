@@ -7,6 +7,7 @@ import { driversStore } from '@/lib/drivers/store'
 import { type Driver, type Crew, SHIFT_LABEL, patternFor, shiftWindow } from '@/lib/drivers/types'
 import { useScheduling, crewShiftKind, crewShiftLabel, shiftKindOf, shiftTime } from '@/lib/drivers/scheduling'
 import { driverShiftsStore } from '@/lib/drivers/driverShifts'
+import { isContinuousSection } from '@/lib/drivers/schedule'
 
 const selCls = 'w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand'
 
@@ -31,7 +32,7 @@ export default function ReassignModal({ driver, open, onClose }: { driver: Drive
 
   function save() {
     driversStore.update(driver!.id, { crew, section })
-    driverShiftsStore.set(driver!.id, shiftId || undefined)
+    driverShiftsStore.set(driver!.id, isContinuousSection(section) ? undefined : (shiftId || undefined))
     onClose()
   }
 
@@ -49,10 +50,14 @@ export default function ReassignModal({ driver, open, onClose }: { driver: Drive
         </label>
         <label className="block">
           <span className="mb-1 block text-xs font-medium text-navy">Shift / block</span>
-          <select className={selCls} value={shiftId} onChange={(e) => setShiftId(e.target.value)}>
-            <option value="">Use crew default</option>
-            {sched.shifts.map((s) => <option key={s.id} value={s.id}>{s.label}{shiftTime(s) ? ` · ${shiftTime(s)}` : ''}</option>)}
-          </select>
+          {isContinuousSection(section || driver.section) ? (
+            <div className={`${selCls} bg-canvas text-status-neutral`}>Rotates by crew (auto)</div>
+          ) : (
+            <select className={selCls} value={shiftId} onChange={(e) => setShiftId(e.target.value)}>
+              <option value="">Use crew default</option>
+              {sched.shifts.map((s) => <option key={s.id} value={s.id}>{s.label}{shiftTime(s) ? ` · ${shiftTime(s)}` : ''}</option>)}
+            </select>
+          )}
         </label>
         <label className="block sm:col-span-2">
           <span className="mb-1 block text-xs font-medium text-navy">Section</span>
@@ -63,7 +68,9 @@ export default function ReassignModal({ driver, open, onClose }: { driver: Drive
       </div>
       <div className="mt-4 flex items-center gap-2 rounded-lg bg-canvas px-3 py-2.5 text-sm text-navy">
         <ShiftIcon size={16} className="text-brand" />
-        <span>{selShift?.label ?? `${SHIFT_LABEL[shiftKey]} shift`} · {section || driver.section} — <span className="text-status-neutral">{window || '—'}</span></span>
+        {isContinuousSection(section || driver.section)
+          ? <span>{section || driver.section} — <span className="text-status-neutral">Day→Night→Off rotates by crew</span></span>
+          : <span>{selShift?.label ?? `${SHIFT_LABEL[shiftKey]} shift`} · {section || driver.section} — <span className="text-status-neutral">{window || '—'}</span></span>}
       </div>
       <p className="mt-2 text-[11px] text-status-neutral">Crew is the rotation (on/off cycle); shift is the daily block (e.g. Morning → day, Afternoon → night). To edit a driver's record or add a driver, use Driver Profiles.</p>
     </Modal>

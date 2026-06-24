@@ -529,6 +529,14 @@ function SchedulingTab() {
         <Button variant="secondary" onClick={() => { if (window.confirm('Reset shifts, crews and schedules to the built-in defaults?')) schedulingStore.reset() }}><RotateCcw size={14} /> Reset</Button>
       </div>
 
+      <div className="card flex flex-wrap items-end gap-3 p-4">
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-navy">Rotation cycle start</span>
+          <input type="date" className={`${inputCls} max-w-[200px]`} value={sched.cycleAnchor} onChange={(e) => schedulingStore.setCycleAnchor(e.target.value)} />
+        </label>
+        <p className="flex-1 text-[11px] text-status-neutral">When the Day→Night→Off cycle began. For continuous sections (10/5 &amp; 14/7) the crews stagger from here — at the start crew A is on Day, B on Night, C resting, then each rotates every block.</p>
+      </div>
+
       <div className="grid gap-4 lg:grid-cols-3">
         {/* Shifts */}
         <div className="card p-4">

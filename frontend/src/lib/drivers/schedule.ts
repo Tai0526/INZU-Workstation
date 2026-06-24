@@ -1,18 +1,20 @@
 /**
- * Work / rest rotation schedules for the mine. A driver is assigned a rotation
- * pattern + a cycle start date ("anchor"); from those we can compute what they're
- * doing on any calendar day — Day shift, Night shift, or Off/rest — and the exact
- * hours for that shift.
+ * Work / rest rotation schedules for the mine. The schedule depends on the
+ * driver's SECTION, with two structures:
  *
- *  • 7 on / 7 off  — SPLIT 12-hour shift (two blocks with a break). Day people work
- *    03:00–09:00 & 14:00–20:00; night people 11:00–16:00 & 20:00–02:00. (No day↔night
- *    rotation within the cycle — assign the day or the night variant.)
- *  • 14 on / 7 off — CONTINUOUS 12-hour: 7 days Day, 7 days Night, 7 days off.
- *  • 10 on / 5 off — CONTINUOUS 12-hour: 5 days Day, 5 days Night, 5 days off.
+ *  • CONTINUOUS 12-hour (Pit 14/7 → 7-day blocks · Security & Dewatering 10/5 →
+ *    5-day blocks): the crews rotate Day → Night → Off ACROSS each other. At the
+ *    cycle anchor crew A is on Day, crew B on Night, crew C resting, and every
+ *    block they each advance one phase. Day = 05:00–17:00, Night = 17:00–05:00.
+ *  • 7 on / 7 off SPLIT (Sentinel, Enterprise, Omega): crews alternate the on/off
+ *    week; within the on week a driver works their Morning block (→ day) or
+ *    Afternoon block (ends ~02:00 → night). Set per driver.
+ *
+ * Day/night windows come from Admin → Scheduling; the cycle start is configurable.
  */
 
-import { schedulingStore, windowForKind, blocksForKind, inAnyBlock } from '@/lib/drivers/scheduling'
-import { effectiveKind } from '@/lib/drivers/driverShifts'
+import { schedulingStore, windowForKind, blocksForKind, shiftBlocks } from '@/lib/drivers/scheduling'
+import { effectiveKind, effectiveShort, effectiveWindow, effectiveLabel, effectiveShiftDef } from '@/lib/drivers/driverShifts'
 
 export type ShiftType = 'day_split' | 'night_split' | 'day_cont' | 'night_cont' | 'off'
 export type ShiftKind = 'day' | 'night' | 'off'
@@ -104,16 +106,74 @@ export function anchorFor(d: { schedule_anchor?: string }): string {
   return d.schedule_anchor || DEFAULT_ANCHOR
 }
 
-// ── Time-of-day windows (for "on shift now") ────────────────────────────
-/** Is the current time within this shift's configured working window? */
-export function isWithinShift(t: ShiftType, now: Date = new Date()): boolean {
-  const kind = SHIFT_META[t].kind
-  if (kind === 'off') return false
-  return inAnyBlock(blocksForKind(schedulingStore.get(), kind), now)
+// ── Crew-staggered rotation ──────────────────────────────────────────────
+// Continuous sections rotate Day → Night → Off ACROSS crews: at the cycle
+// anchor crew A (index 0) is on Day, crew B (index 1) on Night, crew C (index 2)
+// resting, then each advances a phase every block. We get this by shifting each
+// crew's cycle start back by (crewIndex × block length). The 7/7 split sections
+// alternate on/off by crew, with day/night from the driver's Morning/Afternoon.
+const DAY = 86_400_000
+function addDaysISO(iso: string, n: number): string {
+  const d = new Date(`${iso}T00:00:00`)
+  d.setTime(d.getTime() + n * DAY)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+export function isContinuousSection(section: string): boolean {
+  return section.startsWith('Pit') || section === 'Security' || section === 'Dewatering'
+}
+/** Block length (days per phase): Pit 14/7 → 7 · Security & Dewatering 10/5 → 5 · 7/7 → 7. */
+function blockLen(section: string): number {
+  if (section.startsWith('Pit')) return 7
+  if (section === 'Security' || section === 'Dewatering') return 5
+  return 7
+}
+/** Crew's position (A=0, B=1, C=2…) among the configured crews — its rotation phase. */
+function crewIndex(crewId: string): number {
+  const i = schedulingStore.get().crews.findIndex((c) => c.id === crewId)
+  return i >= 0 ? i : 0
+}
+/** Global rotation cycle start (Admin → Scheduling), falling back to the default Friday. */
+export function cycleAnchor(): string {
+  return schedulingStore.get().cycleAnchor || DEFAULT_ANCHOR
+}
+
+/** Shift type for a driver on a date, given a cycle anchor, with crews staggered by phase. */
+export function previewShiftOnDate(d: { id?: string; section: string; crew: string }, anchor: string, dateISO: string): ShiftType {
+  const staggered = addDaysISO(anchor || DEFAULT_ANCHOR, -crewIndex(d.crew) * blockLen(d.section))
+  return shiftOnDate(patternKeyFor(d), staggered, dateISO)
+}
+/** Shift type for a driver on a date using the live global cycle anchor. */
+export function driverShiftOnDate(d: { id?: string; section: string; crew: string }, dateISO: string): ShiftType {
+  return previewShiftOnDate(d, cycleAnchor(), dateISO)
 }
 
 const localISO = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 /** The shift a driver's rotation puts them on today (local date). */
-export function scheduledShift(d: { id?: string; section: string; schedule_anchor?: string; crew: string }, now: Date = new Date()): ShiftType {
-  return shiftOnDate(patternKeyFor(d), anchorFor(d), localISO(now))
+export function scheduledShift(d: { id?: string; section: string; crew: string }, now: Date = new Date()): ShiftType {
+  return driverShiftOnDate(d, localISO(now))
+}
+
+// ── Per-driver display (continuous = D/N by phase · split = M/A by block) ──
+/** Short code for a driver's day: continuous → D/N (phase); split → M/A (block); off → ·. */
+export function dutyShort(d: { id?: string; section: string; crew: string }, type: ShiftType): string {
+  if (SHIFT_META[type].kind === 'off') return SHIFT_META.off.short
+  return isContinuousSection(d.section) ? SHIFT_META[type].short : effectiveShort(d)
+}
+/** Human label for a driver's day (Day/Night for continuous, Morning/Afternoon for split). */
+export function dutyLabel(d: { id?: string; section: string; crew: string }, type: ShiftType): string {
+  if (SHIFT_META[type].kind === 'off') return SHIFT_META.off.label
+  if (isContinuousSection(d.section)) return SHIFT_META[type].kind === 'day' ? 'Day' : 'Night'
+  return effectiveLabel(d) || (SHIFT_META[type].kind === 'day' ? 'Day' : 'Night')
+}
+/** Clock window for a driver's day. Continuous → canonical day/night; split → the driver's block. */
+export function dutyHours(d: { id?: string; section: string; crew: string }, type: ShiftType): string {
+  if (SHIFT_META[type].kind === 'off') return ''
+  if (isContinuousSection(d.section)) return windowForKind(schedulingStore.get(), SHIFT_META[type].kind)
+  return effectiveWindow(d) || windowForKind(schedulingStore.get(), SHIFT_META[type].kind)
+}
+/** Numeric blocks for "on shift now". Continuous → canonical day/night; split → the driver's block. */
+export function dutyBlocks(d: { id?: string; section: string; crew: string }, type: ShiftType): [number, number][] {
+  if (SHIFT_META[type].kind === 'off') return []
+  if (isContinuousSection(d.section)) return blocksForKind(schedulingStore.get(), SHIFT_META[type].kind)
+  return shiftBlocks(effectiveShiftDef(d))
 }

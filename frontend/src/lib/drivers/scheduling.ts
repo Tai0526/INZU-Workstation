@@ -24,6 +24,8 @@ export interface SchedulingConfig {
   shifts: ShiftDef[]
   crews: CrewDef[]
   schedules: WorkScheduleDef[]
+  /** Date the Day→Night→Off rotation cycle starts (crews are staggered from here). */
+  cycleAnchor: string
 }
 
 export const DEFAULT_SCHEDULING: SchedulingConfig = {
@@ -40,6 +42,7 @@ export const DEFAULT_SCHEDULING: SchedulingConfig = {
     { id: '14x7', label: '14 on / 7 off', on_days: 14, off_days: 7, continuous: true },
     { id: '10x5', label: '10 on / 5 off', on_days: 10, off_days: 5, continuous: true },
   ],
+  cycleAnchor: '2026-01-02', // a Friday — shift change is Friday 10:00
 }
 
 const cfg = createSyncConfig<SchedulingConfig>({
@@ -50,6 +53,7 @@ const cfg = createSyncConfig<SchedulingConfig>({
     shifts: saved?.shifts ?? DEFAULT_SCHEDULING.shifts,
     crews: saved?.crews ?? DEFAULT_SCHEDULING.crews,
     schedules: saved?.schedules ?? DEFAULT_SCHEDULING.schedules,
+    cycleAnchor: saved?.cycleAnchor ?? DEFAULT_SCHEDULING.cycleAnchor,
   }),
 })
 
@@ -125,6 +129,11 @@ export const schedulingStore = {
   removeSchedule(id: string) {
     const c = cfg.get()
     cfg.set({ ...c, schedules: c.schedules.filter((s) => s.id !== id) })
+  },
+
+  // ── Rotation cycle start ──
+  setCycleAnchor(dateISO: string) {
+    cfg.set({ ...cfg.get(), cycleAnchor: dateISO })
   },
 }
 

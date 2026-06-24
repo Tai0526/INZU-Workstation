@@ -1,6 +1,6 @@
 import type { Driver } from './types'
 import type { WeeklyAssignment } from '@/lib/operations/types'
-import { shiftOnDate, patternKeyFor, anchorFor, SHIFT_META, type ShiftType } from './schedule'
+import { driverShiftOnDate, SHIFT_META, type ShiftType } from './schedule'
 
 /**
  * Duty = what a driver actually did on a day, combining their work/rest ROTATION
@@ -55,7 +55,7 @@ export function buildAssignmentIndex(assigns: WeeklyAssignment[]): Map<string, W
 
 /** What a driver did on a given date (rotation + the assignment whose cover covers it). */
 export function dutyOn(driver: Driver, dateISO: string, idx: Map<string, WeeklyAssignment[]>): DayDuty {
-  const shift = shiftOnDate(patternKeyFor(driver), anchorFor(driver), dateISO)
+  const shift = driverShiftOnDate(driver, dateISO)
   const isOff = SHIFT_META[shift].kind === 'off'
   const assignment = (idx.get(driver.id) ?? []).find((a) => coverStart(a) <= dateISO && dateISO <= coverEnd(a))
   const vehicle = assignment?.fleet_no ?? ''
