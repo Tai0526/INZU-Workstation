@@ -4,7 +4,7 @@ import { getActor } from '@/lib/audit/actor'
 import type { StatusTone } from '@/components/ui/StatusBadge'
 import { deductionsStore } from '@/lib/payroll/deductions'
 import { speedStore } from '@/lib/speed/store'
-import { registerCrossTabSync } from '@/lib/storage/sync'
+import { createSyncTable } from '@/lib/supabase/syncTable'
 
 /**
  * Safety incidents. Two sources feed the same workflow:
@@ -156,42 +156,7 @@ export interface DisciplinaryCase {
 
 const KEY = 'inzu_disciplinary_cases'
 
-let cache: DisciplinaryCase[] | null = null
-const listeners = new Set<() => void>()
-
-/** Backfill defaults for cases stored before incidents were generalised. */
-function migrate(c: DisciplinaryCase): DisciplinaryCase {
-  return {
-    ...c,
-    source: c.source ?? 'speed',
-    incident_type: c.incident_type ?? 'speeding',
-    title: c.title ?? (c.driver_name ? `Speeding — ${c.driver_name}` : 'Incident'),
-    description: c.description ?? '',
-    severity: c.severity ?? '',
-    memo: c.memo ?? null,
-    incident_report: c.incident_report ?? null,
-    safety_report: c.safety_report ?? '',
-    proposal: c.proposal ?? null,
-    trail: c.trail ?? [],
-  }
-}
-
-function load(): DisciplinaryCase[] {
-  if (cache) return cache
-  try {
-    const raw = localStorage.getItem(KEY)
-    cache = raw ? (JSON.parse(raw) as DisciplinaryCase[]).map(migrate) : []
-  } catch {
-    cache = []
-  }
-  return cache!
-}
-function commit(next: DisciplinaryCase[]) {
-  cache = next
-  localStorage.setItem(KEY, JSON.stringify(next))
-  listeners.forEach((l) => l())
-}
-registerCrossTabSync(KEY, () => { cache = null; load(); listeners.forEach((l) => l()) })
+const { load, commit, subscribe } = createSyncTable<DisciplinaryCase>({ table: 'disciplinary_cases', lsKey: KEY, seed: [] })
 function newId() {
   return typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `c_${Date.now()}_${Math.round(Math.random() * 1e6)}`
 }
@@ -349,10 +314,6 @@ export const casesStore = {
   },
 }
 
-function subscribe(cb: () => void) {
-  listeners.add(cb)
-  return () => listeners.delete(cb)
-}
 export function useCases(): DisciplinaryCase[] {
   return useSyncExternalStore(subscribe, load, load)
 }

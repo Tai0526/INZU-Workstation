@@ -14,4 +14,15 @@ truncate table
   public.op_mileage,
   public.op_daily_plan,
   public.op_weekly_assign,
-  public.documents;
+  public.documents,
+  public.speed_events,
+  public.disciplinary_cases,
+  public.safety_compliance,
+  public.safety_training,
+  public.safety_hazards,
+  public.safety_cap,
+  public.safety_loto,
+  public.safety_tools,
+  public.fuel_issuances,
+  public.fuel_receipts,
+  public.fuel_generator;

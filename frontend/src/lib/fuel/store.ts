@@ -3,7 +3,7 @@ import { getActor } from '@/lib/audit/actor'
 import type { Audited } from '@/lib/operations/types'
 import { type FuelIssuance, type IssuanceInput, type FuelReceipt, type FuelConfig, type FuelRate, type GenFuel, isOpen, DEFAULT_FUEL_CONFIG, DEFAULT_FUEL_RATE } from './types'
 import { TRIDENT_BUSES, REFUEL_DATES } from '@/lib/demo/buses'
-import { registerCrossTabSync } from '@/lib/storage/sync'
+import { createSyncTable } from '@/lib/supabase/syncTable'
 
 function newId() {
   return typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `f_${Date.now()}_${Math.round(Math.random() * 1e6)}`
@@ -13,16 +13,7 @@ const who = () => getActor().name
 type Input<T extends Audited> = Omit<T, keyof Audited>
 
 function makeStore<T extends Audited>(key: string, seed: T[]) {
-  let cache: T[] | null = null
-  const listeners = new Set<() => void>()
-  function load(): T[] {
-    if (cache) return cache
-    try { const raw = localStorage.getItem(key); cache = raw ? (JSON.parse(raw) as T[]) : seed } catch { cache = seed }
-    if (!localStorage.getItem(key)) localStorage.setItem(key, JSON.stringify(cache))
-    return cache!
-  }
-  function commit(next: T[]) { cache = next; localStorage.setItem(key, JSON.stringify(next)); listeners.forEach((l) => l()) }
-  registerCrossTabSync(key, () => { cache = null; load(); listeners.forEach((l) => l()) })
+  const { load, commit, subscribe } = createSyncTable<T>({ table: key.replace(/^inzu_/, ''), lsKey: key, seed })
   return {
     list: () => load(),
     add(data: Input<T>): T {
@@ -37,7 +28,7 @@ function makeStore<T extends Audited>(key: string, seed: T[]) {
     },
     update(id: string, patch: Partial<T>) { commit(load().map((x) => (x.id === id ? { ...x, ...patch, id: x.id, updated_by: who(), updated_at: stampNow() } : x))) },
     remove(id: string) { commit(load().filter((x) => x.id !== id)) },
-    subscribe(cb: () => void) { listeners.add(cb); return () => listeners.delete(cb) },
+    subscribe,
     snapshot: () => load(),
   }
 }

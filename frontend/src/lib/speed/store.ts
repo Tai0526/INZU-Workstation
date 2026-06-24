@@ -2,7 +2,7 @@ import { useSyncExternalStore } from 'react'
 import type { BranchCode } from '@/lib/roles'
 import { getActor } from '@/lib/audit/actor'
 import { type SpeedEvent, type SpeedEventInput, type SpeedStatus } from './types'
-import { registerCrossTabSync } from '@/lib/storage/sync'
+import { createSyncTable } from '@/lib/supabase/syncTable'
 
 /** Mock data layer for speed events — localStorage-backed, reactive, audit-stamped. */
 
@@ -62,27 +62,7 @@ const SEED: SpeedEvent[] = [
   mk('S-G02', 'trident', '2026-06-02T09:30', 'INZ-D203', 'Emmanuel Lungu', 'INZ 127', 146, 60, 'flagged', 'Inzu Workshop, Kalumbila'),
 ]
 
-let cache: SpeedEvent[] | null = null
-const listeners = new Set<() => void>()
-
-function load(): SpeedEvent[] {
-  if (cache) return cache
-  try {
-    const raw = localStorage.getItem(KEY)
-    cache = raw ? (JSON.parse(raw) as SpeedEvent[]) : SEED
-  } catch {
-    cache = SEED
-  }
-  if (!localStorage.getItem(KEY)) localStorage.setItem(KEY, JSON.stringify(cache))
-  return cache!
-}
-
-function commit(next: SpeedEvent[]) {
-  cache = next
-  localStorage.setItem(KEY, JSON.stringify(next))
-  listeners.forEach((l) => l())
-}
-registerCrossTabSync(KEY, () => { cache = null; load(); listeners.forEach((l) => l()) })
+const { load, commit, subscribe } = createSyncTable<SpeedEvent>({ table: 'speed_events', lsKey: KEY, seed: SEED })
 
 function newId(): string {
   return typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `s_${Date.now()}_${Math.round(Math.random() * 1e6)}`
@@ -123,11 +103,6 @@ export const speedStore = {
     commit([...load(), ...created])
     return created
   },
-}
-
-function subscribe(cb: () => void) {
-  listeners.add(cb)
-  return () => listeners.delete(cb)
 }
 
 export function useSpeedEvents(): SpeedEvent[] {
