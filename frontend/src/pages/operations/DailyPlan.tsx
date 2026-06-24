@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { CalendarDays, Plus, Pencil, Trash2, Download, FileText, ArrowRight, Bus, Clock } from 'lucide-react'
+import { Plus, Pencil, Trash2, Download, FileText, ArrowRight, Bus, Clock, Check } from 'lucide-react'
 import clsx from 'clsx'
 import { useAuth } from '@/auth/AuthContext'
 import { ROLES, BRANCHES } from '@/lib/roles'
@@ -38,6 +38,7 @@ export default function DailyPlan() {
   const [tripType, setTripType] = useState<TripType>('pickup')
   const [form, setForm] = useState<FormState>(() => blankForm('pickup'))
   const [editingId, setEditingId] = useState<string | null>(null)
+  const [gateOverride, setGateOverride] = useState(false)
   const [error, setError] = useState('')
 
   const trips = useMemo(
@@ -52,14 +53,18 @@ export default function DailyPlan() {
     return [...names].filter(Boolean)
   }, [routes])
 
+  // The non-gate end is the one you actually enter; the gate end auto-fills.
+  const primaryField: keyof FormState = tripType === 'pickup' ? 'from_location' : 'to_location'
+  const gateField: keyof FormState = tripType === 'pickup' ? 'to_location' : 'from_location'
+
   function set<K extends keyof FormState>(k: K, v: FormState[K]) { setForm((p) => ({ ...p, [k]: v })); setError('') }
   function onFleet(v: string) {
     const veh = vehicles.find((x) => x.fleet_no.toLowerCase() === v.trim().toLowerCase())
     setForm((p) => ({ ...p, fleet_no: v, reg_no: veh ? veh.reg_plate : p.reg_no })); setError('')
   }
-  // Switching mode applies to every trip you add next, and flips the Main Mine Gate end.
   function chooseType(t: TripType) {
     setTripType(t)
+    setGateOverride(false)
     setForm((p) => t === 'pickup'
       ? { ...p, to_location: DEFAULT_TO_LOCATION, from_location: p.from_location === DEFAULT_TO_LOCATION ? '' : p.from_location }
       : { ...p, from_location: DEFAULT_TO_LOCATION, to_location: p.to_location === DEFAULT_TO_LOCATION ? '' : p.to_location })
@@ -68,13 +73,15 @@ export default function DailyPlan() {
   function startEdit(id: string) {
     const t = trips.find((x) => x.id === id); if (!t) return
     setEditingId(id); setTripType(t.trip_type)
+    const gate = t.trip_type === 'pickup' ? t.to_location : t.from_location
+    setGateOverride(gate !== DEFAULT_TO_LOCATION)
     setForm({ driver_name: t.driver_name, fleet_no: t.fleet_no, reg_no: t.reg_no, from_location: t.from_location, to_location: t.to_location, departure_time: t.departure_time })
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
-  function cancelEdit() { setEditingId(null); setForm(blankForm(tripType)); setError('') }
+  function cancelEdit() { setEditingId(null); setForm(blankForm(tripType)); setGateOverride(false); setError('') }
   function submit() {
     if (!form.fleet_no.trim()) return setError('Pick the bus (fleet number).')
-    if (!form.from_location.trim() || !form.to_location.trim()) return setError('Enter both the from and to locations.')
+    if (!form.from_location.trim() || !form.to_location.trim()) return setError(`Enter where to ${tripType === 'pickup' ? 'pick up from' : 'drop off'}.`)
     const payload: DailyPlanInput = {
       branch, date, trip_type: tripType, driver_name: form.driver_name.trim(), fleet_no: form.fleet_no.trim(), reg_no: form.reg_no.trim(),
       from_location: form.from_location.trim(), to_location: form.to_location.trim(), departure_time: form.departure_time, notes: '',
@@ -83,6 +90,7 @@ export default function DailyPlan() {
     else dailyPlanStore.add(payload)
     setEditingId(null)
     setForm(blankForm(tripType)) // keep the mode for the next trip
+    setGateOverride(false)
     setError('')
   }
 
@@ -96,87 +104,109 @@ export default function DailyPlan() {
     downloadTablePdf({ title: `Daily Movement Plan — ${branchLabel}`, subtitle: `${date} · ${trips.length} trips`, tables, landscape: true, filename: `Daily Plan - ${branchLabel} - ${date}.pdf` })
   }
 
+  const stat = (label: string, value: number) => (
+    <div className="rounded-xl border border-black/10 bg-white px-3 py-2">
+      <div className="text-lg font-bold leading-none text-navy">{value}</div>
+      <div className="mt-0.5 text-[11px] text-status-neutral">{label}</div>
+    </div>
+  )
+
   return (
-    <div className="page space-y-5">
+    <div className="page space-y-4">
       <p className="max-w-2xl text-sm text-status-neutral">
-        The day’s <span className="font-medium text-navy">intended movements</span> — driver, bus, from → to and time. Pick <span className="font-medium text-navy">Pickup</span> or
-        <span className="font-medium text-navy"> Knock-off</span> once and it sticks for every trip you add, filling in Main Mine Gate automatically. Enter it from your phone in seconds.
+        The day's <span className="font-medium text-navy">intended movements</span>. Pick <span className="font-medium text-navy">Pickup</span> or
+        <span className="font-medium text-navy"> Knock-off</span> once — it sticks and fills in Main Mine Gate — then just add bus, time and the pick-up point. This is what
+        <span className="font-medium text-navy"> Bus Allocation</span> checks the actual runs against.
       </p>
 
-      {/* Header: date + total trips + export */}
-      <div className="card flex flex-wrap items-center gap-3 p-4">
-        <CalendarDays size={18} className="text-brand" />
+      <div className="flex flex-wrap items-center gap-2">
         <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand" />
-        <div className="flex items-baseline gap-1.5">
-          <span className="font-display text-2xl font-bold text-navy">{trips.length}</span>
-          <span className="text-sm text-status-neutral">trip{trips.length === 1 ? '' : 's'} · {pickups.length} pickup{pickups.length === 1 ? '' : 's'} · {knockoffs.length} knock-off{knockoffs.length === 1 ? '' : 's'}</span>
-        </div>
-        <div className="ml-auto flex flex-wrap gap-2">
+        {date === todayISO() && <span className="rounded-full bg-status-good/10 px-2 py-0.5 text-xs font-medium text-status-good">Today</span>}
+        <div className="ml-auto flex gap-2">
           <Button variant="secondary" onClick={() => exportDailyPlan(trips, branchLabel)} disabled={trips.length === 0}><Download size={15} /> Excel</Button>
           <Button variant="secondary" onClick={exportPdf} disabled={trips.length === 0}><FileText size={15} /> PDF</Button>
         </div>
       </div>
+      <div className="grid grid-cols-3 gap-2">
+        {stat('Trips', trips.length)}
+        {stat('Pickups', pickups.length)}
+        {stat('Knock-offs', knockoffs.length)}
+      </div>
 
-      {/* Quick add / edit (mobile-friendly) */}
+      {/* Quick add / edit — mobile-first */}
       {canPlan && (
-        <div className="card p-4">
-          <div className="mb-3 flex flex-wrap items-center gap-2">
-            <Plus size={16} className="text-brand" />
-            <h3 className="font-display text-sm font-bold text-navy">{editingId ? 'Edit trip' : 'Add trips'}</h3>
-            {/* Pickup / Knock-off mode — applies to every trip you add */}
-            <div className="ml-1 inline-flex overflow-hidden rounded-lg border border-black/15">
-              {(['pickup', 'knockoff'] as TripType[]).map((t) => (
-                <button key={t} onClick={() => chooseType(t)}
-                  className={clsx('px-3 py-1.5 text-xs font-semibold transition-colors', tripType === t ? 'bg-navy text-white' : 'bg-white text-navy hover:bg-canvas')}>
-                  {TRIP_LABEL[t]}
-                </button>
-              ))}
-            </div>
+        <div className="card space-y-3 p-4">
+          <div className="flex items-center gap-2">
+            <h3 className="font-display text-sm font-bold text-navy">{editingId ? 'Edit trip' : 'Add trip'}</h3>
             {editingId && <button onClick={cancelEdit} className="ml-auto text-xs font-medium text-status-neutral hover:text-navy">Cancel edit</button>}
           </div>
-          {error && <div className="mb-3 rounded-lg border border-status-critical/30 bg-status-critical/5 px-3 py-2 text-sm text-status-critical">{error}</div>}
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            <label className="block">
-              <span className="mb-1 block text-xs font-medium text-navy">Driver</span>
-              <input list="dp-drivers" className={inputCls} value={form.driver_name} onChange={(e) => set('driver_name', e.target.value)} placeholder="Driver name" />
-            </label>
+
+          {/* Pickup / Knock-off — full-width segmented, sticks for the next trip */}
+          <div className="grid grid-cols-2 gap-2">
+            {(['pickup', 'knockoff'] as TripType[]).map((t) => (
+              <button key={t} onClick={() => chooseType(t)}
+                className={clsx('rounded-lg border py-2.5 text-sm font-semibold transition-colors', tripType === t ? 'border-navy bg-navy text-white' : 'border-black/15 bg-white text-navy hover:bg-canvas')}>
+                {TRIP_LABEL[t]}
+              </button>
+            ))}
+          </div>
+
+          {error && <div className="rounded-lg border border-status-critical/30 bg-status-critical/5 px-3 py-2 text-sm text-status-critical">{error}</div>}
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <label className="block">
               <span className="mb-1 block text-xs font-medium text-navy">Bus (fleet no)</span>
               <input list="dp-fleet" className={inputCls} value={form.fleet_no} onChange={(e) => onFleet(e.target.value)} placeholder="INZ 226" />
+              {form.reg_no && <span className="mt-1 block text-[11px] text-status-neutral">Reg: <span className="font-medium text-navy">{form.reg_no}</span></span>}
             </label>
             <label className="block">
               <span className="mb-1 block text-xs font-medium text-navy">Departure time</span>
               <input type="time" className={inputCls} value={form.departure_time} onChange={(e) => set('departure_time', e.target.value)} />
             </label>
-            <label className="block">
-              <span className="mb-1 block text-xs font-medium text-navy">From {tripType === 'knockoff' && <span className="text-status-neutral">(gate)</span>}</span>
-              <input list="dp-locations" className={inputCls} value={form.from_location} onChange={(e) => set('from_location', e.target.value)} placeholder="Pick-up point" />
+            <label className="block sm:col-span-2">
+              <span className="mb-1 block text-xs font-medium text-navy">{tripType === 'pickup' ? 'Pick up from' : 'Drop off at'}</span>
+              <input list="dp-locations" className={inputCls} value={form[primaryField]} onChange={(e) => set(primaryField, e.target.value)} placeholder={tripType === 'pickup' ? 'Pick-up point' : 'Drop-off point'} />
             </label>
-            <label className="block">
-              <span className="mb-1 block text-xs font-medium text-navy">To {tripType === 'pickup' && <span className="text-status-neutral">(gate)</span>}</span>
-              <input list="dp-locations" className={inputCls} value={form.to_location} onChange={(e) => set('to_location', e.target.value)} placeholder={DEFAULT_TO_LOCATION} />
+            <label className="block sm:col-span-2">
+              <span className="mb-1 block text-xs font-medium text-navy">Driver <span className="text-status-neutral">(optional)</span></span>
+              <input list="dp-drivers" className={inputCls} value={form.driver_name} onChange={(e) => set('driver_name', e.target.value)} placeholder="Driver name" />
             </label>
-            <div className="flex items-end">
-              <Button onClick={submit} className="w-full justify-center py-2.5">{editingId ? 'Save trip' : `Add ${TRIP_LABEL[tripType].toLowerCase()}`}</Button>
-            </div>
           </div>
-          {form.reg_no && <p className="mt-2 text-xs text-status-neutral">Reg: <span className="font-medium text-navy">{form.reg_no}</span></p>}
+
+          {/* The Main Mine Gate end — auto, with an optional override */}
+          {!gateOverride ? (
+            <div className="flex flex-wrap items-center gap-1.5 text-sm text-status-neutral">
+              {tripType === 'pickup'
+                ? <><span>→</span> <span className="font-medium text-brand">{form.to_location || DEFAULT_TO_LOCATION}</span></>
+                : <><span className="font-medium text-brand">{form.from_location || DEFAULT_TO_LOCATION}</span> <span>→</span></>}
+              <button onClick={() => setGateOverride(true)} className="ml-1 text-xs font-medium text-brand hover:underline">change</button>
+            </div>
+          ) : (
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-navy">{tripType === 'pickup' ? 'To' : 'From'}</span>
+              <input list="dp-locations" className={inputCls} value={form[gateField]} onChange={(e) => set(gateField, e.target.value)} placeholder={DEFAULT_TO_LOCATION} />
+            </label>
+          )}
+
+          <Button onClick={submit} className="w-full justify-center py-3 text-base">
+            {editingId ? <><Check size={16} /> Save trip</> : <><Plus size={16} /> Add {TRIP_LABEL[tripType].toLowerCase()}</>}
+          </Button>
         </div>
       )}
 
-      {/* Trips grouped by pickups / knock-offs */}
+      {/* Trips */}
       {trips.length === 0 ? (
-        <div className="card px-6 py-12 text-center text-sm text-status-neutral">
+        <div className="card flex flex-col items-center gap-2 py-12 text-center text-sm text-status-neutral">
+          <Bus size={26} className="text-status-neutral/60" />
           No trips planned for {date}.{canPlan && ' Add the first one above.'}
         </div>
       ) : (
         <div className="space-y-4">
-          <TripGroup title="Pickups" trips={pickups} canPlan={canPlan} onEdit={startEdit} />
-          <TripGroup title="Knock-offs" trips={knockoffs} canPlan={canPlan} onEdit={startEdit} />
+          <TripGroup title="Pickups" trips={pickups} canPlan={canPlan} onEdit={startEdit} editingId={editingId} />
+          <TripGroup title="Knock-offs" trips={knockoffs} canPlan={canPlan} onEdit={startEdit} editingId={editingId} />
         </div>
       )}
 
-      {/* datalists for quick entry */}
       <datalist id="dp-drivers">{drivers.map((d) => <option key={d.id} value={d.full_name} />)}</datalist>
       <datalist id="dp-fleet">{vehicles.map((v) => <option key={v.id} value={v.fleet_no} />)}</datalist>
       <datalist id="dp-locations">{locationOptions.map((n) => <option key={n} value={n} />)}</datalist>
@@ -187,7 +217,7 @@ export default function DailyPlan() {
   )
 }
 
-function TripGroup({ title, trips, canPlan, onEdit }: { title: string; trips: DailyPlanTrip[]; canPlan: boolean; onEdit: (id: string) => void }) {
+function TripGroup({ title, trips, canPlan, onEdit, editingId }: { title: string; trips: DailyPlanTrip[]; canPlan: boolean; onEdit: (id: string) => void; editingId: string | null }) {
   if (trips.length === 0) return null
   return (
     <div>
@@ -197,7 +227,7 @@ function TripGroup({ title, trips, canPlan, onEdit }: { title: string; trips: Da
       </div>
       <div className="space-y-2">
         {trips.map((t) => (
-          <div key={t.id} className="card flex flex-wrap items-center gap-x-4 gap-y-2 p-3.5">
+          <div key={t.id} className={clsx('card flex flex-wrap items-center gap-x-4 gap-y-2 p-3.5', editingId === t.id && 'ring-2 ring-brand')}>
             <div className="flex w-16 shrink-0 items-center gap-1.5 font-display text-base font-bold text-navy">
               <Clock size={14} className="text-brand" /> {t.departure_time || '—'}
             </div>
