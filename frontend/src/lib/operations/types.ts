@@ -36,6 +36,7 @@ export interface Allocation extends Audited {
   passengers: number | null
   planned_km: number // the route's distance — shown as mileage, not typed
   notes: string
+  plan_trip_id?: string // the Daily Plan trip this run fulfils (links actual ↔ plan)
 }
 export type AllocationInput = Omit<Allocation, 'id' | 'created_by' | 'created_at' | 'updated_by' | 'updated_at'>
 

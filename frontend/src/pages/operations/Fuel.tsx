@@ -109,6 +109,7 @@ export default function Fuel() {
 // ── Issuances tab ──────────────────────────────────────────────────────
 function IssuancesTab({ issuances, genFuel, branch, branchLabel, vehicles, drivers, routes, attendants, canManage, canAuthorize }: { issuances: FuelIssuance[]; genFuel: GenFuel[]; branch: BranchCode; branchLabel: string; vehicles: any[]; drivers: any[]; routes: any[]; attendants: any[]; canManage: boolean; canAuthorize: boolean }) {
   const [vehicleFilter, setVehicleFilter] = useState('all')
+  const [quickOpen, setQuickOpen] = useState(false)
   const [addOpen, setAddOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [editing, setEditing] = useState<FuelIssuance | null>(null)
@@ -136,7 +137,8 @@ function IssuancesTab({ issuances, genFuel, branch, branchLabel, vehicles, drive
           {canManage && <Button variant="secondary" onClick={() => setImportOpen(true)}><Upload size={15} /> Bulk upload</Button>}
           {canManage && <Button variant="secondary" onClick={() => setGenModal({ open: true, editing: null, kind: 'generator' })}><Zap size={15} /> Generator fuel</Button>}
           {canManage && <Button variant="secondary" onClick={() => setGenModal({ open: true, editing: null, kind: 'visitor' })}><Users size={15} /> Authorised vehicle</Button>}
-          {canManage && <Button onClick={() => setAddOpen(true)}><Plus size={15} /> Record refuels</Button>}
+          {canManage && <Button variant="secondary" onClick={() => setAddOpen(true)}><Plus size={15} /> Bulk refuels</Button>}
+          {canManage && <Button onClick={() => setQuickOpen(true)}><FuelIcon size={15} /> Refuel</Button>}
         </div>
       </div>
 
@@ -229,6 +231,7 @@ function IssuancesTab({ issuances, genFuel, branch, branchLabel, vehicles, drive
         </div>
       )}
 
+      <QuickRefuelModal open={quickOpen} onClose={() => setQuickOpen(false)} branch={branch} vehicles={vehicles} drivers={drivers} routes={routes} attendants={attendants} />
       <AddIssuancesModal open={addOpen} onClose={() => setAddOpen(false)} branch={branch} vehicles={vehicles} drivers={drivers} routes={routes} attendants={attendants} />
       <EditIssuanceModal editing={editing} onClose={() => setEditing(null)} vehicles={vehicles} drivers={drivers} routes={routes} attendants={attendants} />
       <ImportModal open={importOpen} onClose={() => setImportOpen(false)} branch={branch} vehicles={vehicles} attendants={attendants} />
@@ -353,6 +356,68 @@ function AddIssuancesModal({ open, onClose, branch, vehicles, drivers, routes, a
       <button onClick={() => setRows((rs) => [...rs, draft(rs[rs.length - 1]?.date ?? '')])} className="mt-2 inline-flex items-center gap-1 rounded-lg border border-dashed border-navy/25 px-3 py-1.5 text-xs font-medium text-brand hover:border-brand"><Plus size={14} /> Add row</button>
       <p className="mt-1 text-[11px] text-status-neutral">Both tank levels (before &amp; after fuelling) are recorded now. Only the closing odometer &amp; KM/L are filled in at the next refuel. Routes come from the Mileage route catalogue.</p>
       {routes.length === 0 && <p className="mt-1 rounded-lg bg-brand-tint/40 px-3 py-2 text-[11px] text-[#8a4513]">No routes for this branch yet — add them in Mileage → Setup → Route catalogue.</p>}
+    </Modal>
+  )
+}
+
+// ── Quick refuel (mobile-first, one bus) — for the attendant at the pump ─
+function QuickRefuelModal({ open, onClose, branch, vehicles, drivers, routes, attendants }: { open: boolean; onClose: () => void; branch: BranchCode; vehicles: any[]; drivers: any[]; routes: any[]; attendants: any[] }) {
+  const todayStr = new Date().toISOString().slice(0, 10)
+  const [date, setDate] = useState(todayStr)
+  const [fleet, setFleet] = useState(''); const [reg, setReg] = useState(''); const [driver, setDriver] = useState(''); const [attendant, setAttendant] = useState('')
+  const [odo, setOdo] = useState(''); const [litres, setLitres] = useState('')
+  const [before, setBefore] = useState(''); const [after, setAfter] = useState('Full')
+  const [route, setRoute] = useState(''); const [trips, setTrips] = useState('')
+  const [more, setMore] = useState(false)
+  const [wasOpen, setWasOpen] = useState(false)
+  if (open && !wasOpen) { setWasOpen(true); setDate(todayStr); setFleet(''); setReg(''); setDriver(''); setAttendant(''); setOdo(''); setLitres(''); setBefore(''); setAfter('Full'); setRoute(''); setTrips(''); setMore(false) }
+  if (!open && wasOpen) setWasOpen(false)
+
+  function onFleet(v: string) { setFleet(v); const veh = vehicles.find((x: any) => x.fleet_no.toLowerCase() === v.toLowerCase()); if (veh) setReg(veh.reg_plate) }
+  const ready = !!fleet.trim() && Number(odo) > 0 && Number(litres) > 0
+  function save() {
+    if (!ready) return
+    recordRefuel({
+      branch, date, fleet_no: fleet.trim(), vehicle_reg: reg.trim(), driver: driver.trim(), fuel_attendant: attendant.trim(),
+      trip_number: trips ? Number(trips) : null, route: route.trim(), opening_fuel_level: before, closing_fuel_level: after,
+      opening_mileage: Number(odo), closing_mileage: 0, liters_given: Number(litres), notes: '',
+    })
+    onClose()
+  }
+  const bigCls = 'h-12 w-full rounded-lg border border-black/15 bg-white px-3 text-lg font-semibold text-navy outline-none focus:border-brand'
+
+  return (
+    <Modal open={open} onClose={onClose} title="Refuel" subtitle="Enter it as you fuel — finish fuelling, finish entering."
+      footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={save} disabled={!ready}><Check size={15} /> Save refuel</Button></>}>
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-3">
+          <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Fleet No</span><input list="dl-fuel-fleet" className={inputCls} placeholder="INZ 120" value={fleet} onChange={(e) => onFleet(e.target.value)} /></label>
+          <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Reg No</span><input className={inputCls} placeholder="BCG 4270" value={reg} onChange={(e) => setReg(e.target.value)} /></label>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Odometer now</span><input type="number" inputMode="numeric" className={bigCls} placeholder="km" value={odo} onChange={(e) => setOdo(e.target.value)} /></label>
+          <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Litres given</span><input type="number" inputMode="decimal" className={bigCls} placeholder="L" value={litres} onChange={(e) => setLitres(e.target.value)} /></label>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Tank before</span><select className={inputCls} value={before} onChange={(e) => setBefore(e.target.value)}><option value="">—</option>{FUEL_LEVELS.map((l) => <option key={l} value={l}>{l}</option>)}</select></label>
+          <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Tank after</span><select className={inputCls} value={after} onChange={(e) => setAfter(e.target.value)}>{FUEL_LEVELS.map((l) => <option key={l} value={l}>{l}</option>)}</select></label>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Driver</span><select className={inputCls} value={driver} onChange={(e) => setDriver(e.target.value)}><option value="">—</option>{drivers.map((d: any) => <option key={d.id} value={d.full_name}>{d.full_name}</option>)}</select></label>
+          <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Attendant</span><select className={inputCls} value={attendant} onChange={(e) => setAttendant(e.target.value)}><option value="">—</option>{attendants.map((a: any) => <option key={a.id} value={a.full_name}>{a.full_name}</option>)}</select></label>
+        </div>
+        {!more ? (
+          <button onClick={() => setMore(true)} className="text-xs font-medium text-brand hover:underline">Add date / route / trips</button>
+        ) : (
+          <div className="grid grid-cols-3 gap-3">
+            <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Date</span><input type="date" className={inputCls} value={date} onChange={(e) => setDate(e.target.value)} /></label>
+            <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Route</span><select className={inputCls} value={route} onChange={(e) => setRoute(e.target.value)}><option value="">—</option>{routes.map((x: any) => <option key={x.id} value={x.name}>{x.name}</option>)}</select></label>
+            <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Trips</span><input type="number" className={inputCls} value={trips} onChange={(e) => setTrips(e.target.value)} /></label>
+          </div>
+        )}
+        <datalist id="dl-fuel-fleet">{vehicles.map((v: any) => <option key={v.id} value={v.fleet_no} />)}</datalist>
+        <p className="text-[11px] text-status-neutral">You only enter the odometer now — the next refuel for this bus closes this one automatically and computes km/L.</p>
+      </div>
     </Modal>
   )
 }

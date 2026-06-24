@@ -1,5 +1,8 @@
 import { useMemo, useState } from 'react'
-import { Plus, Pencil, Trash2, Upload, Download, CalendarDays, CheckCircle2, AlertTriangle, UploadCloud, FileText, FileType, Mail } from 'lucide-react'
+import {
+  Plus, Pencil, Trash2, Upload, Download, CheckCircle2, AlertTriangle, UploadCloud, FileText, FileType, Mail,
+  Clock, Users, Bus, Check, Minus, ArrowRightLeft,
+} from 'lucide-react'
 import { useAuth } from '@/auth/AuthContext'
 import { ROLES, BRANCHES, type BranchCode } from '@/lib/roles'
 import { canEdit } from '@/lib/permissions'
@@ -7,8 +10,8 @@ import Modal from '@/components/ui/Modal'
 import Button from '@/components/ui/Button'
 import { useVehicles } from '@/lib/fleet/store'
 import { useDrivers } from '@/lib/drivers/store'
-import { useAllocations, allocationsStore } from '@/lib/operations/store'
-import { type Allocation, type AllocationInput, type TripType } from '@/lib/operations/types'
+import { useAllocations, allocationsStore, useDailyPlan } from '@/lib/operations/store'
+import { type Allocation, type AllocationInput, type DailyPlanTrip, type TripType, TRIP_LABEL } from '@/lib/operations/types'
 import { useMileageRoutes } from '@/lib/mileage/store'
 import { routeTotal } from '@/lib/mileage/types'
 import { downloadAllocTemplate, parseAllocations, exportAllocations, type AllocImportResult } from '@/lib/operations/excel'
@@ -16,37 +19,33 @@ import { exportReportWord, esc, type ReportInput } from '@/lib/reports/exporter'
 import { downloadTablePdf, type PdfTable } from '@/lib/reports/pdfDoc'
 import { useRecipients, recipientsStore, isValidEmail } from '@/lib/reports/recipients'
 
-// Routes are owned by the Mileage page (the single place they're added). Bus
-// Allocation reads that catalogue; a run's planned km is the route's total km.
 const routeLabel = (r: any) => `${r.name} · ${r.project} (${routeTotal(r)} km)`
+const inputCls = 'w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand'
+const today = () => new Date().toISOString().slice(0, 10)
+const nowHM = () => { const d = new Date(); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` }
 
-// Build a printable / editable daily allocation report (PDF + Word).
+// ── Reports (PDF + Word + email) — built from the actuals ─────────────────────
 function allocReport(date: string, branchLabel: string, pickups: Allocation[], knockoffs: Allocation[]): ReportInput {
   const group = (label: string, runs: Allocation[]) => {
-    const km = runs.reduce((s, r) => s + r.planned_km, 0)
     const pax = runs.reduce((s, r) => s + (r.passengers ?? 0), 0)
-    const rows = runs.map((r) => `<tr><td>${esc(r.driver_name || '—')}</td><td>${esc(r.fleet_no)}</td><td>${esc(r.reg_no)}</td><td>${esc(r.location)}</td><td class="num">${r.planned_km ? r.planned_km + ' km' : '—'}</td><td>${esc(r.departure_time || '—')}</td><td class="num">${r.passengers ?? '—'}</td></tr>`).join('')
-    const head = '<tr><th>Driver</th><th>Fleet No</th><th>Reg No</th><th>Route</th><th class="num">Mileage</th><th>Time</th><th class="num">Pax</th></tr>'
-    const empty = '<tr><td colspan="7" style="text-align:center;color:#6B7280">None</td></tr>'
-    const total = runs.length ? `<tr class="tot"><td colspan="4">Total</td><td class="num">${km} km</td><td></td><td class="num">${pax}</td></tr>` : ''
+    const rows = runs.map((r) => `<tr><td>${esc(r.driver_name || '—')}</td><td>${esc(r.fleet_no)}</td><td>${esc(r.reg_no)}</td><td>${esc(r.location)}</td><td>${esc(r.departure_time || '—')}</td><td class="num">${r.passengers ?? '—'}</td></tr>`).join('')
+    const head = '<tr><th>Driver</th><th>Fleet No</th><th>Reg No</th><th>Route</th><th>Time</th><th class="num">Pax</th></tr>'
+    const empty = '<tr><td colspan="6" style="text-align:center;color:#6B7280">None</td></tr>'
+    const total = runs.length ? `<tr class="tot"><td colspan="5">Total passengers</td><td class="num">${pax}</td></tr>` : ''
     return `<h2>${label} — ${runs.length} run${runs.length === 1 ? '' : 's'}</h2><table><thead>${head}</thead><tbody>${rows || empty}${total}</tbody></table>`
   }
-  const totalKm = pickups.concat(knockoffs).reduce((s, r) => s + r.planned_km, 0)
   const totalPax = pickups.concat(knockoffs).reduce((s, r) => s + (r.passengers ?? 0), 0)
   return {
     title: `Daily Bus Allocation — ${branchLabel}`,
-    subtitle: `${date} · ${pickups.length + knockoffs.length} runs · ${totalKm} km · ${totalPax} passengers`,
+    subtitle: `${date} · ${pickups.length + knockoffs.length} runs · ${totalPax} passengers`,
     body: group('Pickups', pickups) + group('Knock-offs', knockoffs),
     landscape: true,
     filenameBase: `Bus Allocation - ${branchLabel} - ${date}`,
   }
 }
-
-// Allocation as a real PDF file (for download / email attachment).
 function allocPdf(date: string, branchLabel: string, pickups: Allocation[], knockoffs: Allocation[]) {
-  const head = ['Driver', 'Fleet No', 'Reg No', 'Route', 'Mileage', 'Time', 'Pax']
-  const rowsOf = (runs: Allocation[]) => runs.map((r) => [r.driver_name || '-', r.fleet_no, r.reg_no, r.location, r.planned_km ? `${r.planned_km} km` : '-', r.departure_time || '-', r.passengers ?? '-'])
-  const totalKm = pickups.concat(knockoffs).reduce((s, r) => s + r.planned_km, 0)
+  const head = ['Driver', 'Fleet No', 'Reg No', 'Route', 'Time', 'Pax']
+  const rowsOf = (runs: Allocation[]) => runs.map((r) => [r.driver_name || '-', r.fleet_no, r.reg_no, r.location, r.departure_time || '-', r.passengers ?? '-'])
   const totalPax = pickups.concat(knockoffs).reduce((s, r) => s + (r.passengers ?? 0), 0)
   const tables: PdfTable[] = [
     { heading: `Pickups (${pickups.length})`, head, rows: rowsOf(pickups) },
@@ -54,13 +53,11 @@ function allocPdf(date: string, branchLabel: string, pickups: Allocation[], knoc
   ]
   return {
     title: `Daily Bus Allocation — ${branchLabel}`,
-    subtitle: `${date} · ${pickups.length + knockoffs.length} runs · ${totalKm} km · ${totalPax} passengers`,
+    subtitle: `${date} · ${pickups.length + knockoffs.length} runs · ${totalPax} passengers`,
     tables, landscape: true,
     filename: `Bus Allocation - ${branchLabel} - ${date}.pdf`,
   }
 }
-
-const inputCls = 'w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand'
 
 export default function BusAllocation() {
   const { user } = useAuth()
@@ -71,62 +68,104 @@ export default function BusAllocation() {
 
   const routes = useMileageRoutes().filter((r) => r.branch === branch)
   const allocations = useAllocations()
+  const dailyPlan = useDailyPlan()
   const vehicles = useVehicles().filter((v) => v.branch === branch)
   const drivers = useDrivers().filter((d) => d.branch === branch)
 
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10))
+  const [date, setDate] = useState(today)
   const [multiOpen, setMultiOpen] = useState(false)
   const [runModal, setRunModal] = useState<{ open: boolean; editing: Allocation | null }>({ open: false, editing: null })
   const [importOpen, setImportOpen] = useState(false)
   const [emailOpen, setEmailOpen] = useState(false)
 
   const dayRuns = useMemo(
-    () => allocations.filter((a) => a.branch === branch && a.date === date).sort((a, b) => a.departure_time.localeCompare(b.departure_time)),
+    () => allocations.filter((a) => a.branch === branch && a.date === date).sort((a, b) => (a.departure_time || '').localeCompare(b.departure_time || '')),
     [allocations, branch, date],
   )
-  const totalPax = dayRuns.reduce((s, r) => s + (r.passengers ?? 0), 0)
+  const dayPlan = useMemo(
+    () => dailyPlan.filter((t) => t.branch === branch && t.date === date).sort((a, b) => (a.departure_time || '').localeCompare(b.departure_time || '')),
+    [dailyPlan, branch, date],
+  )
+  const actualByPlan = useMemo(() => {
+    const m = new Map<string, Allocation>()
+    for (const a of dayRuns) if (a.plan_trip_id) m.set(a.plan_trip_id, a)
+    return m
+  }, [dayRuns])
+  const planIds = new Set(dayPlan.map((t) => t.id))
+  const unplanned = dayRuns.filter((a) => !a.plan_trip_id || !planIds.has(a.plan_trip_id))
   const pickups = dayRuns.filter((r) => r.trip_type === 'pickup')
   const knockoffs = dayRuns.filter((r) => r.trip_type === 'knockoff')
+  const totalPax = dayRuns.reduce((s, r) => s + (r.passengers ?? 0), 0)
+  const loggedCount = dayPlan.filter((t) => actualByPlan.has(t.id)).length
+  const missingCount = dayPlan.length - loggedCount
+
+  const stat = (label: string, value: number | string, tone: 'neutral' | 'good' | 'warning' = 'neutral') => (
+    <div className={`rounded-xl border px-3 py-2 ${tone === 'warning' ? 'border-status-warning/40 bg-status-warning/10' : tone === 'good' ? 'border-status-good/30 bg-status-good/5' : 'border-black/10 bg-white'}`}>
+      <div className={`text-lg font-bold leading-none ${tone === 'warning' ? 'text-[#8a6d10]' : tone === 'good' ? 'text-status-good' : 'text-navy'}`}>{value}</div>
+      <div className="mt-0.5 text-[11px] text-status-neutral">{label}</div>
+    </div>
+  )
 
   return (
-    <div className="page space-y-6">
+    <div className="page space-y-4">
       <p className="max-w-2xl text-sm text-status-neutral">
-        The actuals report of how buses moved — one row per departure: driver, bus, location, time and <span className="font-medium text-navy">passengers carried</span>.
-        (The intended movements are set in <span className="font-medium text-navy">Operations → Daily Plan</span>.)
+        Log each run <span className="font-medium text-navy">as it happens</span> — tap a planned trip and enter the passenger count.
+        It's the live result of <span className="font-medium text-navy">Daily Plan</span>, so you can see at a glance what ran, what didn't, and any changes.
       </p>
 
-      {/* Daily allocation */}
-      <div className="card overflow-hidden">
-        <div className="flex flex-wrap items-center gap-2 border-b border-black/5 px-5 py-3.5">
-          <CalendarDays size={16} className="text-brand" />
-          <h3 className="font-display text-sm font-bold text-navy">Daily allocation</h3>
-          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="ml-2 rounded-lg border border-black/15 bg-white px-2.5 py-1.5 text-sm text-navy outline-none focus:border-brand" />
-          <span className="text-xs text-status-neutral">{dayRuns.length} runs · {totalPax} passengers</span>
-          <div className="ml-auto flex flex-wrap gap-2">
-            <Button variant="secondary" onClick={() => exportAllocations(dayRuns, branchLabel)}><Download size={15} /> Excel</Button>
-            <Button variant="secondary" onClick={() => downloadTablePdf(allocPdf(date, branchLabel, pickups, knockoffs))}><FileText size={15} /> PDF</Button>
-            <Button variant="secondary" onClick={() => exportReportWord(allocReport(date, branchLabel, pickups, knockoffs))}><FileType size={15} /> Word</Button>
-            <Button variant="secondary" onClick={() => setEmailOpen(true)}><Mail size={15} /> Email</Button>
-            {canPlan && <Button variant="secondary" onClick={() => setImportOpen(true)}><Upload size={15} /> Bulk upload</Button>}
-            {canPlan && <Button onClick={() => setMultiOpen(true)}><Plus size={15} /> Add runs</Button>}
-          </div>
-        </div>
-        {dayRuns.length === 0 ? (
-          <p className="px-5 py-10 text-center text-sm text-status-neutral">No runs logged for {date}. {canPlan && 'Add one or bulk-upload the day sheet.'}</p>
-        ) : (
-          <div>
-            <RunGroup title="Pickups" runs={pickups} canPlan={canPlan} onEdit={(a) => setRunModal({ open: true, editing: a })} />
-            <RunGroup title="Knock-offs" runs={knockoffs} canPlan={canPlan} onEdit={(a) => setRunModal({ open: true, editing: a })} />
-          </div>
-        )}
+      {/* Date + summary */}
+      <div className="flex flex-wrap items-center gap-2">
+        <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand" />
+        {date === today() && <span className="rounded-full bg-status-good/10 px-2 py-0.5 text-xs font-medium text-status-good">Today</span>}
+      </div>
+      <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
+        {stat('Planned', dayPlan.length)}
+        {stat('Logged', loggedCount, loggedCount > 0 ? 'good' : 'neutral')}
+        {stat('Not yet run', missingCount, missingCount > 0 ? 'warning' : 'neutral')}
+        {stat('Unplanned', unplanned.length, unplanned.length > 0 ? 'warning' : 'neutral')}
+        {stat('Passengers', totalPax, 'good')}
       </div>
 
-      {/* Routes come from the Mileage page now */}
-      <p className="text-xs text-status-neutral">
-        Routes &amp; distances are managed in <span className="font-medium text-navy">Mileage → Setup → Route catalogue</span> — the single place routes are added. They appear automatically in the run editor here.
-      </p>
+      {/* Actions */}
+      <div className="flex flex-wrap gap-2">
+        {canPlan && <Button onClick={() => setRunModal({ open: true, editing: null })}><Plus size={15} /> Add run</Button>}
+        {canPlan && <Button variant="secondary" onClick={() => setMultiOpen(true)}><Plus size={15} /> Add many</Button>}
+        {canPlan && <Button variant="secondary" onClick={() => setImportOpen(true)}><Upload size={15} /> Upload</Button>}
+        <Button variant="secondary" onClick={() => exportAllocations(dayRuns, branchLabel)}><Download size={15} /> Excel</Button>
+        <Button variant="secondary" onClick={() => downloadTablePdf(allocPdf(date, branchLabel, pickups, knockoffs))}><FileText size={15} /> PDF</Button>
+        <Button variant="secondary" onClick={() => exportReportWord(allocReport(date, branchLabel, pickups, knockoffs))}><FileType size={15} /> Word</Button>
+        <Button variant="secondary" onClick={() => setEmailOpen(true)}><Mail size={15} /> Email</Button>
+      </div>
 
-      {/* datalists for quick entry */}
+      {/* Plan-driven live board */}
+      {dayPlan.length === 0 && unplanned.length === 0 ? (
+        <div className="card flex flex-col items-center gap-2 py-12 text-center text-sm text-status-neutral">
+          <Bus size={26} className="text-status-neutral/60" />
+          No plan for {date}. Set the day's intended trips in <span className="font-medium text-navy">Operations → Daily Plan</span>, then log them here as buses move
+          {canPlan && ' — or just "Add run" for ad-hoc trips'}.
+        </div>
+      ) : (
+        <div className="space-y-5">
+          {dayPlan.length > 0 && (
+            <Section title="Planned runs" hint={`${loggedCount}/${dayPlan.length} logged`}>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {dayPlan.map((t) => <PlanCard key={t.id} trip={t} actual={actualByPlan.get(t.id)} canPlan={canPlan} branch={branch} date={date} />)}
+              </div>
+            </Section>
+          )}
+
+          <Section title="Unplanned runs" hint={unplanned.length ? `${unplanned.length} extra` : 'none'}>
+            {unplanned.length === 0 ? (
+              <p className="text-sm text-status-neutral">Every logged run matched the plan. {canPlan && 'Use "Add run" if a bus runs that wasn\'t planned.'}</p>
+            ) : (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {unplanned.map((a) => <ActualCard key={a.id} run={a} canPlan={canPlan} onEdit={() => setRunModal({ open: true, editing: a })} />)}
+              </div>
+            )}
+          </Section>
+        </div>
+      )}
+
       <datalist id="dl-drivers">{drivers.map((d) => <option key={d.id} value={d.full_name} />)}</datalist>
       <datalist id="dl-fleet">{vehicles.map((v) => <option key={v.id} value={v.fleet_no} />)}</datalist>
 
@@ -140,54 +179,132 @@ export default function BusAllocation() {
   )
 }
 
-function RunGroup({ title, runs, canPlan, onEdit }: { title: string; runs: Allocation[]; canPlan: boolean; onEdit: (a: Allocation) => void }) {
-  const km = runs.reduce((s, r) => s + r.planned_km, 0)
-  const pax = runs.reduce((s, r) => s + (r.passengers ?? 0), 0)
+function Section({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
   return (
-    <div className="border-t border-black/5 first:border-0">
-      <div className="flex items-center gap-2 bg-canvas/60 px-5 py-2">
-        <span className="text-xs font-bold uppercase tracking-wide text-navy">{title}</span>
-        <span className="text-[11px] text-status-neutral">{runs.length} runs · {km} km · {pax} pax</span>
+    <div>
+      <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold text-navy">{title}{hint && <span className="text-xs font-normal text-status-neutral">· {hint}</span>}</h3>
+      {children}
+    </div>
+  )
+}
+
+function TypePill({ type }: { type: TripType }) {
+  return <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${type === 'pickup' ? 'bg-brand-tint text-brand' : 'bg-status-warning/15 text-[#8a6d10]'}`}>{TRIP_LABEL[type]}</span>
+}
+
+// A planned trip with inline passenger logging — the core mobile action.
+function PlanCard({ trip, actual, canPlan, branch, date }: { trip: DailyPlanTrip; actual?: Allocation; canPlan: boolean; branch: BranchCode; date: string }) {
+  const [open, setOpen] = useState(false)
+  const [pax, setPax] = useState('')
+  const [time, setTime] = useState('')
+  const [fleet, setFleet] = useState('')
+  const [driver, setDriver] = useState('')
+  const [showChange, setShowChange] = useState(false)
+
+  function begin() {
+    setPax(actual?.passengers != null ? String(actual.passengers) : '')
+    setTime(actual?.departure_time || nowHM())
+    setFleet(actual?.fleet_no || trip.fleet_no)
+    setDriver(actual?.driver_name || trip.driver_name)
+    setShowChange(false)
+    setOpen(true)
+  }
+  function save() {
+    const payload = {
+      branch, date, trip_type: trip.trip_type, driver_name: driver.trim(), fleet_no: fleet.trim(), reg_no: trip.reg_no,
+      route_id: '', location: trip.from_location || trip.to_location || '', planned_km: 0,
+      departure_time: time, passengers: pax === '' ? null : Number(pax), notes: '', plan_trip_id: trip.id,
+    }
+    if (actual) allocationsStore.update(actual.id, payload)
+    else allocationsStore.add(payload)
+    setOpen(false)
+  }
+
+  const busChanged = actual && actual.fleet_no && actual.fleet_no !== trip.fleet_no
+  const driverChanged = actual && actual.driver_name && trip.driver_name && actual.driver_name !== trip.driver_name
+
+  return (
+    <div className={`rounded-xl border p-3 ${actual ? 'border-status-good/40 bg-status-good/[0.04]' : 'border-black/10 bg-white'}`}>
+      <div className="flex items-center gap-2">
+        <TypePill type={trip.trip_type} />
+        <span className="inline-flex items-center gap-1 text-xs text-status-neutral"><Clock size={12} /> {trip.departure_time || '—'}</span>
+        {actual && <span className="ml-auto inline-flex items-center gap-1 text-xs font-medium text-status-good"><CheckCircle2 size={13} /> Logged</span>}
       </div>
-      {runs.length === 0 ? (
-        <p className="px-5 py-4 text-xs text-status-neutral">None.</p>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead className="text-status-neutral">
-              <tr>
-                <th className="px-5 py-1.5 text-xs font-medium">Driver</th><th className="px-4 py-1.5 text-xs font-medium">Fleet No</th>
-                <th className="px-4 py-1.5 text-xs font-medium">Reg No</th><th className="px-4 py-1.5 text-xs font-medium">Route</th>
-                <th className="px-4 py-1.5 text-xs font-medium">Mileage</th><th className="px-4 py-1.5 text-xs font-medium">Time</th>
-                <th className="px-4 py-1.5 text-xs font-medium">Pax</th>{canPlan && <th className="px-4 py-1.5 text-right text-xs font-medium">Actions</th>}
-              </tr>
-            </thead>
-            <tbody>
-              {runs.map((a) => (
-                <tr key={a.id} className="border-t border-black/5 hover:bg-canvas">
-                  <td className="px-5 py-2 font-medium text-navy">{a.driver_name || '—'}</td>
-                  <td className="px-4 py-2 text-navy">{a.fleet_no}</td>
-                  <td className="px-4 py-2 text-status-neutral">{a.reg_no}</td>
-                  <td className="px-4 py-2 text-navy">{a.location}</td>
-                  <td className="px-4 py-2 text-status-neutral">{a.planned_km ? `${a.planned_km} km` : '—'}</td>
-                  <td className="px-4 py-2 text-status-neutral">{a.departure_time}</td>
-                  <td className="px-4 py-2 text-status-neutral">{a.passengers ?? '—'}</td>
-                  {canPlan && (
-                    <td className="px-4 py-2"><div className="flex justify-end gap-1">
-                      <button onClick={() => onEdit(a)} className="rounded-md p-1.5 text-status-neutral hover:bg-canvas hover:text-navy"><Pencil size={14} /></button>
-                      <button onClick={() => confirm('Remove this run?') && allocationsStore.remove(a.id)} className="rounded-md p-1.5 text-status-neutral hover:bg-status-critical/10 hover:text-status-critical"><Trash2 size={14} /></button>
-                    </div></td>
-                  )}
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      <div className="mt-2 flex items-center gap-2">
+        <span className="inline-flex items-center gap-1 font-semibold text-navy"><Bus size={14} className="text-status-neutral" /> {trip.fleet_no || '—'}</span>
+        <span className="truncate text-sm text-status-neutral">{trip.driver_name || 'No driver'}</span>
+      </div>
+      <div className="mt-0.5 text-xs text-status-neutral">{trip.from_location || '—'} → {trip.to_location || '—'}</div>
+
+      {actual && !open && (
+        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-black/5 pt-2 text-sm">
+          <span className="inline-flex items-center gap-1 font-semibold text-navy"><Users size={14} className="text-status-neutral" /> {actual.passengers ?? '—'} pax</span>
+          <span className="inline-flex items-center gap-1 text-status-neutral"><Clock size={12} /> {actual.departure_time || '—'}</span>
+          {busChanged && <span className="inline-flex items-center gap-1 rounded bg-status-warning/15 px-1.5 py-0.5 text-[11px] text-[#8a6d10]"><ArrowRightLeft size={11} /> bus {actual.fleet_no} (planned {trip.fleet_no})</span>}
+          {driverChanged && <span className="rounded bg-status-warning/15 px-1.5 py-0.5 text-[11px] text-[#8a6d10]">driver changed</span>}
+          {canPlan && <button onClick={begin} className="ml-auto text-xs font-medium text-brand hover:underline">Edit</button>}
+        </div>
+      )}
+
+      {!actual && !open && canPlan && (
+        <button onClick={begin} className="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-lg bg-navy py-2.5 text-sm font-semibold text-white hover:bg-navy-secondary">
+          <Users size={15} /> Log run
+        </button>
+      )}
+
+      {open && (
+        <div className="mt-2.5 space-y-2 border-t border-black/5 pt-2.5">
+          <div>
+            <span className="mb-1 block text-xs font-medium text-navy">Passengers</span>
+            <div className="flex items-stretch gap-2">
+              <button onClick={() => setPax((p) => String(Math.max(0, (Number(p) || 0) - 1)))} className="flex h-11 w-11 items-center justify-center rounded-lg border border-black/15 text-navy hover:bg-canvas"><Minus size={18} /></button>
+              <input type="number" inputMode="numeric" value={pax} onChange={(e) => setPax(e.target.value)} placeholder="0" className="h-11 flex-1 rounded-lg border border-black/15 bg-white text-center text-lg font-bold text-navy outline-none focus:border-brand" autoFocus />
+              <button onClick={() => setPax((p) => String((Number(p) || 0) + 1))} className="flex h-11 w-11 items-center justify-center rounded-lg border border-black/15 text-navy hover:bg-canvas"><Plus size={18} /></button>
+            </div>
+          </div>
+          <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Departure time</span><input type="time" value={time} onChange={(e) => setTime(e.target.value)} className={inputCls} /></label>
+          {!showChange ? (
+            <button onClick={() => setShowChange(true)} className="text-xs font-medium text-brand hover:underline">Different bus or driver?</button>
+          ) : (
+            <div className="grid grid-cols-2 gap-2">
+              <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Bus</span><input list="dl-fleet" value={fleet} onChange={(e) => setFleet(e.target.value)} className={inputCls} /></label>
+              <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Driver</span><input list="dl-drivers" value={driver} onChange={(e) => setDriver(e.target.value)} className={inputCls} /></label>
+            </div>
+          )}
+          <div className="flex gap-2 pt-0.5">
+            <Button variant="secondary" className="flex-1" onClick={() => setOpen(false)}>Cancel</Button>
+            <Button className="flex-1" onClick={save}><Check size={15} /> Save</Button>
+          </div>
         </div>
       )}
     </div>
   )
 }
 
+// An unplanned (ad-hoc) actual run.
+function ActualCard({ run, canPlan, onEdit }: { run: Allocation; canPlan: boolean; onEdit: () => void }) {
+  return (
+    <div className="rounded-xl border border-status-warning/30 bg-status-warning/[0.04] p-3">
+      <div className="flex items-center gap-2">
+        <TypePill type={run.trip_type} />
+        <span className="inline-flex items-center gap-1 text-xs text-status-neutral"><Clock size={12} /> {run.departure_time || '—'}</span>
+        <span className="ml-auto rounded bg-status-warning/15 px-1.5 py-0.5 text-[11px] font-medium text-[#8a6d10]">Unplanned</span>
+      </div>
+      <div className="mt-2 flex items-center gap-2">
+        <span className="inline-flex items-center gap-1 font-semibold text-navy"><Bus size={14} className="text-status-neutral" /> {run.fleet_no || '—'}</span>
+        <span className="truncate text-sm text-status-neutral">{run.driver_name || 'No driver'}</span>
+      </div>
+      <div className="mt-0.5 text-xs text-status-neutral">{run.location || '—'}</div>
+      <div className="mt-2 flex items-center gap-3 border-t border-black/5 pt-2 text-sm">
+        <span className="inline-flex items-center gap-1 font-semibold text-navy"><Users size={14} className="text-status-neutral" /> {run.passengers ?? '—'} pax</span>
+        {canPlan && <button onClick={onEdit} className="text-xs font-medium text-brand hover:underline"><Pencil size={12} className="mr-1 inline" />Edit</button>}
+        {canPlan && <button onClick={() => confirm('Remove this run?') && allocationsStore.remove(run.id)} className="ml-auto text-xs font-medium text-status-critical hover:underline"><Trash2 size={12} className="mr-1 inline" />Remove</button>}
+      </div>
+    </div>
+  )
+}
+
+// ── Power-user bulk entry (kept for the office) ───────────────────────────────
 interface DraftRow { trip_type: TripType; driver_name: string; fleet_no: string; reg_no: string; route_id: string; departure_time: string; passengers: string }
 const emptyRow = (): DraftRow => ({ trip_type: 'pickup', driver_name: '', fleet_no: '', reg_no: '', route_id: '', departure_time: '', passengers: '' })
 const cellCls = 'w-full rounded-md border border-black/15 bg-white px-2 py-1 text-xs text-navy outline-none focus:border-brand'
@@ -221,14 +338,12 @@ function MultiRunModal({ open, onClose, branch, date, routes, vehicles }: { open
   }
 
   return (
-    <Modal open={open} onClose={onClose} size="xl" title="Add runs" subtitle="Enter the day's runs like a sheet — add as many rows as you need, then save once."
+    <Modal open={open} onClose={onClose} size="xl" title="Add many runs" subtitle="Enter the day's runs like a sheet — add as many rows as you need, then save once."
       footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={save} disabled={readyCount === 0}>Save {readyCount} run{readyCount === 1 ? '' : 's'}</Button></>}>
       <div className="mb-3 flex items-center gap-2">
         <span className="text-xs font-medium text-navy">Date</span>
         <input type="date" value={d} onChange={(e) => setD(e.target.value)} className="rounded-lg border border-black/15 bg-white px-2.5 py-1.5 text-sm text-navy outline-none focus:border-brand" />
-        <span className="text-[11px] text-status-neutral">applies to all rows</span>
       </div>
-
       <div className="overflow-x-auto rounded-lg border border-black/10">
         <table className="w-full text-left">
           <thead className="bg-canvas text-[10px] uppercase tracking-wide text-status-neutral">
@@ -256,11 +371,10 @@ function MultiRunModal({ open, onClose, branch, date, routes, vehicles }: { open
           </tbody>
         </table>
       </div>
-
       <button onClick={() => setRows((rs) => [...rs, emptyRow()])} className="mt-2 inline-flex items-center gap-1 rounded-lg border border-dashed border-navy/25 px-3 py-1.5 text-xs font-medium text-brand hover:border-brand">
         <Plus size={14} /> Add row
       </button>
-      {routes.length === 0 && <p className="mt-2 rounded-lg bg-brand-tint/40 px-3 py-2 text-xs text-[#8a4513]">No routes yet — add them in Mileage → Setup → Route catalogue so they're selectable here.</p>}
+      {routes.length === 0 && <p className="mt-2 rounded-lg bg-brand-tint/40 px-3 py-2 text-xs text-[#8a4513]">No routes yet — add them in Mileage → Setup → Route catalogue.</p>}
     </Modal>
   )
 }
@@ -278,35 +392,32 @@ function RunModal({ state, onClose, branch, date, routes, vehicles }: { state: {
   }
   function onRoute(id: string) {
     const r = routes.find((x) => x.id === id)
-    setF((p) => ({ ...p, route_id: id, location: r?.name ?? '', planned_km: r ? routeTotal(r) : 0 }))
+    setF((p) => ({ ...p, route_id: id, location: r?.name ?? p.location, planned_km: r ? routeTotal(r) : 0 }))
   }
   function save() {
-    if (!f.fleet_no.trim() || !f.route_id) return
+    if (!f.fleet_no.trim()) return
     if (e) allocationsStore.update(e.id, f); else allocationsStore.add(f)
     onClose()
   }
   return (
-    <Modal open={state.open} onClose={onClose} title={e ? 'Edit run' : 'Add run'} subtitle="One departure — pickup or knock-off. Pick the route and the mileage fills in." footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={save}>Save</Button></>}>
+    <Modal open={state.open} onClose={onClose} title={e ? 'Edit run' : 'Add run'} subtitle="A run that isn't on the plan (or a correction)." footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={save}>Save</Button></>}>
       <div className="grid grid-cols-2 gap-3">
-        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Date</span><input type="date" className={inputCls} value={f.date} onChange={(ev) => set('date', ev.target.value)} /></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Trip type</span>
           <select className={inputCls} value={f.trip_type} onChange={(ev) => set('trip_type', ev.target.value as TripType)}>
             <option value="pickup">Pickup</option><option value="knockoff">Knock-off</option>
           </select></label>
-        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Driver</span><input list="dl-drivers" className={inputCls} value={f.driver_name} onChange={(ev) => set('driver_name', ev.target.value)} /></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Departure time</span><input type="time" className={inputCls} value={f.departure_time} onChange={(ev) => set('departure_time', ev.target.value)} /></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Fleet No</span><input list="dl-fleet" className={inputCls} placeholder="INZ 226" value={f.fleet_no} onChange={(ev) => onFleet(ev.target.value)} /></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Reg No</span><input className={inputCls} placeholder="BCG 4666" value={f.reg_no} onChange={(ev) => set('reg_no', ev.target.value)} /></label>
-        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Route</span>
+        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Driver</span><input list="dl-drivers" className={inputCls} value={f.driver_name} onChange={(ev) => set('driver_name', ev.target.value)} /></label>
+        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Passengers</span><input type="number" className={inputCls} value={f.passengers ?? ''} onChange={(ev) => set('passengers', ev.target.value ? Number(ev.target.value) : null)} /></label>
+        <label className="col-span-2 block"><span className="mb-1 block text-xs font-medium text-navy">Route {routes.length > 0 && <span className="text-status-neutral">(optional — for mileage)</span>}</span>
           <select className={inputCls} value={f.route_id} onChange={(ev) => onRoute(ev.target.value)}>
-            <option value="">Select route…</option>
+            <option value="">{routes.length ? 'Select route…' : 'No routes — type a location below'}</option>
             {routes.map((r) => <option key={r.id} value={r.id}>{routeLabel(r)}</option>)}
           </select></label>
-        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Mileage</span>
-          <div className="flex h-[38px] items-center rounded-lg border border-black/10 bg-canvas px-3 text-sm font-medium text-navy">{f.planned_km ? `${f.planned_km} km` : '—'}</div></label>
-        <label className="col-span-2 block"><span className="mb-1 block text-xs font-medium text-navy">Passengers</span><input type="number" className={inputCls} value={f.passengers ?? ''} onChange={(ev) => set('passengers', ev.target.value ? Number(ev.target.value) : null)} /></label>
+        <label className="col-span-2 block"><span className="mb-1 block text-xs font-medium text-navy">Location / route name</span><input className={inputCls} placeholder="e.g. Kisasa" value={f.location} onChange={(ev) => set('location', ev.target.value)} /></label>
       </div>
-      {routes.length === 0 && <p className="mt-3 rounded-lg bg-brand-tint/40 px-3 py-2 text-xs text-[#8a4513]">No routes yet — add them in Mileage → Setup → Route catalogue so they're available here.</p>}
     </Modal>
   )
 }
@@ -332,12 +443,10 @@ function AllocEmailModal({ open, onClose, date, branchLabel, pickups, knockoffs 
   function send() {
     const chosen = recipients.filter((r) => sel.has(r.id))
     if (!chosen.length) return
-    // 1) Download the allocation PDF so it can be attached.
     downloadTablePdf(allocPdf(date, branchLabel, pickups, knockoffs))
-    // 2) Open the pre-addressed email draft with a text summary.
     const to = chosen.map((r) => r.email).join(',')
     const subject = `Bus Allocation — ${branchLabel} — ${date}`
-    const body = `Good day,\n\nPlease find attached the route allocation for ${date} (${branchLabel}).\n\nKind regards,`
+    const body = `Good day,\n\nPlease find attached the bus allocation for ${date} (${branchLabel}).\n\nKind regards,`
     const a = document.createElement('a')
     a.href = `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
     a.click()
@@ -364,14 +473,12 @@ function AllocEmailModal({ open, onClose, date, branchLabel, pickups, knockoffs 
             </div>
           )}
         </div>
-
         <div className="flex flex-wrap items-end gap-2">
           <label className="block flex-1"><span className="mb-1 block text-xs font-medium text-navy">Name (optional)</span><input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} /></label>
           <label className="block flex-1"><span className="mb-1 block text-xs font-medium text-navy">Email</span><input type="email" className={inputCls} placeholder="name@company.com" value={email} onChange={(e) => setEmail(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && add()} /></label>
           <Button variant="secondary" onClick={add} disabled={!isValidEmail(email)}><Plus size={15} /> Add</Button>
         </div>
-
-        <p className="rounded-lg bg-canvas px-3 py-2 text-[11px] text-status-neutral">This downloads the allocation <b>PDF</b> and opens your email app with the recipients and a summary prefilled — then attach the downloaded PDF to the message. (Browsers can't attach files to an email automatically.)</p>
+        <p className="rounded-lg bg-canvas px-3 py-2 text-[11px] text-status-neutral">This downloads the allocation <b>PDF</b> and opens your email app with the recipients and a summary prefilled — then attach the downloaded PDF.</p>
       </div>
     </Modal>
   )
@@ -415,14 +522,6 @@ function AllocImportModal({ open, onClose, branch }: { open: boolean; onClose: (
             <div className="rounded-lg border border-status-critical/30 bg-status-critical/5 px-3 py-2 text-sm text-status-critical">
               <div className="mb-1 flex items-center gap-2 font-medium"><AlertTriangle size={16} /> {parsed.errors.length} row(s) skipped</div>
               <ul className="ml-6 list-disc space-y-0.5 text-xs">{parsed.errors.slice(0, 6).map((e, i) => <li key={i}>Row {e.row}: {e.reason}</li>)}</ul>
-            </div>
-          )}
-          {parsed.valid.length > 0 && (
-            <div className="max-h-40 overflow-auto rounded-lg border border-black/10">
-              <table className="w-full text-left text-xs">
-                <thead className="sticky top-0 bg-navy text-white"><tr><th className="px-3 py-1.5">Date</th><th className="px-3 py-1.5">Driver</th><th className="px-3 py-1.5">Fleet</th><th className="px-3 py-1.5">Location</th><th className="px-3 py-1.5">Time</th></tr></thead>
-                <tbody>{parsed.valid.slice(0, 40).map((v, i) => <tr key={i} className="border-t border-black/5"><td className="px-3 py-1.5">{v.date}</td><td className="px-3 py-1.5">{v.driver_name}</td><td className="px-3 py-1.5 font-medium text-navy">{v.fleet_no}</td><td className="px-3 py-1.5">{v.location}</td><td className="px-3 py-1.5">{v.departure_time}</td></tr>)}</tbody>
-              </table>
             </div>
           )}
         </div>
