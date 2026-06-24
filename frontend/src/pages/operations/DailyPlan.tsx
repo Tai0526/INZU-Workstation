@@ -2,8 +2,9 @@ import { useMemo, useState } from 'react'
 import { Plus, Pencil, Trash2, Download, FileText, ArrowRight, Bus, Clock, Check } from 'lucide-react'
 import clsx from 'clsx'
 import { useAuth } from '@/auth/AuthContext'
-import { ROLES, BRANCHES } from '@/lib/roles'
+import { ROLES, BRANCHES, type BranchCode } from '@/lib/roles'
 import { canEdit } from '@/lib/permissions'
+import Modal from '@/components/ui/Modal'
 import Button from '@/components/ui/Button'
 import { useVehicles } from '@/lib/fleet/store'
 import { useDrivers } from '@/lib/drivers/store'
@@ -12,14 +13,27 @@ import { DEFAULT_TO_LOCATION, TRIP_LABEL, type DailyPlanInput, type DailyPlanTri
 import { exportDailyPlan } from '@/lib/operations/excel'
 import { downloadTablePdf, type PdfTable } from '@/lib/reports/pdfDoc'
 
-const todayISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` }
+const GATE = DEFAULT_TO_LOCATION
+const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+const todayISO = () => iso(new Date())
+const tomorrowISO = () => { const d = new Date(); d.setDate(d.getDate() + 1); return iso(d) }
+const prettyDate = (s: string) => { const d = new Date(`${s}T00:00:00`); return isNaN(d.getTime()) ? s : d.toLocaleDateString('en', { weekday: 'short', day: 'numeric', month: 'short' }) }
 const inputCls = 'w-full rounded-lg border border-black/15 bg-white px-3 py-2.5 text-sm text-navy outline-none focus:border-brand'
-type FormState = { driver_name: string; fleet_no: string; reg_no: string; from_location: string; to_location: string; departure_time: string }
-const blankForm = (t: TripType): FormState => ({
-  driver_name: '', fleet_no: '', reg_no: '', departure_time: '',
-  from_location: t === 'knockoff' ? DEFAULT_TO_LOCATION : '',
-  to_location: t === 'pickup' ? DEFAULT_TO_LOCATION : '',
-})
+const cellCls = 'w-full rounded-md border border-black/15 bg-white px-2 py-1.5 text-sm text-navy outline-none focus:border-brand'
+
+// Make a row's two ends consistent with its type (the Main Mine Gate end auto-fills).
+function withGate(row: DraftRow, t: TripType): DraftRow {
+  return t === 'pickup'
+    ? { ...row, trip_type: t, to_location: GATE, from_location: row.from_location === GATE ? '' : row.from_location }
+    : { ...row, trip_type: t, from_location: GATE, to_location: row.to_location === GATE ? '' : row.to_location }
+}
+
+interface DraftRow { trip_type: TripType; fleet_no: string; reg_no: string; from_location: string; to_location: string; departure_time: string; driver_name: string }
+const blankRow = (t: TripType): DraftRow => withGate({ trip_type: t, fleet_no: '', reg_no: '', from_location: '', to_location: '', departure_time: '', driver_name: '' }, t)
+
+function TypePill({ type }: { type: TripType }) {
+  return <span className={clsx('rounded-full px-2 py-0.5 text-[11px] font-semibold', type === 'pickup' ? 'bg-brand-tint text-brand' : 'bg-status-warning/15 text-[#8a6d10]')}>{TRIP_LABEL[type]}</span>
+}
 
 export default function DailyPlan() {
   const { user } = useAuth()
@@ -28,69 +42,51 @@ export default function DailyPlan() {
   const branchLabel = BRANCHES.find((b) => b.code === branch)!.short
   const canPlan = canEdit(role, 'operations') || role === 'route_supervisor'
 
-  // Only active (in-service) buses can be planned.
   const vehicles = useVehicles().filter((v) => v.branch === branch && v.status === 'active')
   const drivers = useDrivers().filter((d) => d.branch === branch)
   const routes = useRoutes().filter((r) => r.branch === branch)
   const plan = useDailyPlan()
 
-  const [date, setDate] = useState(todayISO())
-  const [tripType, setTripType] = useState<TripType>('pickup')
-  const [form, setForm] = useState<FormState>(() => blankForm('pickup'))
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [gateOverride, setGateOverride] = useState(false)
+  // Planning is for the NEXT day by default (done the evening before / in the office).
+  const [date, setDate] = useState(tomorrowISO())
+  const [defaultType, setDefaultType] = useState<TripType>('pickup')
+  const [rows, setRows] = useState<DraftRow[]>([blankRow('pickup'), blankRow('pickup'), blankRow('pickup')])
+  const [editing, setEditing] = useState<DailyPlanTrip | null>(null)
   const [error, setError] = useState('')
 
   const trips = useMemo(
-    () => plan.filter((t) => t.branch === branch && t.date === date).sort((a, b) => a.departure_time.localeCompare(b.departure_time)),
+    () => plan.filter((t) => t.branch === branch && t.date === date).sort((a, b) => (a.departure_time || '').localeCompare(b.departure_time || '')),
     [plan, branch, date],
   )
   const pickups = trips.filter((t) => t.trip_type !== 'knockoff')
   const knockoffs = trips.filter((t) => t.trip_type === 'knockoff')
 
-  const locationOptions = useMemo(() => {
-    const names = new Set<string>([DEFAULT_TO_LOCATION, ...routes.map((r) => r.name)])
-    return [...names].filter(Boolean)
-  }, [routes])
+  const locationOptions = useMemo(() => [...new Set<string>([GATE, ...routes.map((r) => r.name)])].filter(Boolean), [routes])
 
-  // The non-gate end is the one you actually enter; the gate end auto-fills.
-  const primaryField: keyof FormState = tripType === 'pickup' ? 'from_location' : 'to_location'
-  const gateField: keyof FormState = tripType === 'pickup' ? 'to_location' : 'from_location'
-
-  function set<K extends keyof FormState>(k: K, v: FormState[K]) { setForm((p) => ({ ...p, [k]: v })); setError('') }
-  function onFleet(v: string) {
+  function setRow(i: number, patch: Partial<DraftRow>) { setRows((rs) => rs.map((r, idx) => (idx === i ? { ...r, ...patch } : r))); setError('') }
+  function setRowType(i: number, t: TripType) { setRows((rs) => rs.map((r, idx) => (idx === i ? withGate(r, t) : r))) }
+  function onFleet(i: number, v: string) {
     const veh = vehicles.find((x) => x.fleet_no.toLowerCase() === v.trim().toLowerCase())
-    setForm((p) => ({ ...p, fleet_no: v, reg_no: veh ? veh.reg_plate : p.reg_no })); setError('')
-  }
-  function chooseType(t: TripType) {
-    setTripType(t)
-    setGateOverride(false)
-    setForm((p) => t === 'pickup'
-      ? { ...p, to_location: DEFAULT_TO_LOCATION, from_location: p.from_location === DEFAULT_TO_LOCATION ? '' : p.from_location }
-      : { ...p, from_location: DEFAULT_TO_LOCATION, to_location: p.to_location === DEFAULT_TO_LOCATION ? '' : p.to_location })
+    setRows((rs) => rs.map((r, idx) => (idx === i ? { ...r, fleet_no: v, reg_no: veh ? veh.reg_plate : r.reg_no } : r)))
     setError('')
   }
-  function startEdit(id: string) {
-    const t = trips.find((x) => x.id === id); if (!t) return
-    setEditingId(id); setTripType(t.trip_type)
-    const gate = t.trip_type === 'pickup' ? t.to_location : t.from_location
-    setGateOverride(gate !== DEFAULT_TO_LOCATION)
-    setForm({ driver_name: t.driver_name, fleet_no: t.fleet_no, reg_no: t.reg_no, from_location: t.from_location, to_location: t.to_location, departure_time: t.departure_time })
-    window.scrollTo({ top: 0, behavior: 'smooth' })
+  function addRow() { setRows((rs) => [...rs, blankRow(defaultType)]) }
+  function removeRow(i: number) { setRows((rs) => (rs.length > 1 ? rs.filter((_, idx) => idx !== i) : rs)) }
+  function chooseDefault(t: TripType) {
+    setDefaultType(t)
+    // Re-type any still-empty rows so a batch of pickups (or knock-offs) is one click.
+    setRows((rs) => rs.map((r) => (!r.fleet_no.trim() && !r.from_location.replace(GATE, '').trim() && !r.to_location.replace(GATE, '').trim() ? withGate(r, t) : r)))
   }
-  function cancelEdit() { setEditingId(null); setForm(blankForm(tripType)); setGateOverride(false); setError('') }
-  function submit() {
-    if (!form.fleet_no.trim()) return setError('Pick the bus (fleet number).')
-    if (!form.from_location.trim() || !form.to_location.trim()) return setError(`Enter where to ${tripType === 'pickup' ? 'pick up from' : 'drop off'}.`)
-    const payload: DailyPlanInput = {
-      branch, date, trip_type: tripType, driver_name: form.driver_name.trim(), fleet_no: form.fleet_no.trim(), reg_no: form.reg_no.trim(),
-      from_location: form.from_location.trim(), to_location: form.to_location.trim(), departure_time: form.departure_time, notes: '',
-    }
-    if (editingId) dailyPlanStore.update(editingId, payload)
-    else dailyPlanStore.add(payload)
-    setEditingId(null)
-    setForm(blankForm(tripType)) // keep the mode for the next trip
-    setGateOverride(false)
+
+  const readyRows = rows.filter((r) => r.fleet_no.trim() && r.from_location.trim() && r.to_location.trim())
+  function saveAll() {
+    if (readyRows.length === 0) return setError('Fill in at least one row — bus and both locations.')
+    const payloads: DailyPlanInput[] = readyRows.map((r) => ({
+      branch, date, trip_type: r.trip_type, driver_name: r.driver_name.trim(), fleet_no: r.fleet_no.trim(), reg_no: r.reg_no.trim(),
+      from_location: r.from_location.trim(), to_location: r.to_location.trim(), departure_time: r.departure_time, notes: '',
+    }))
+    dailyPlanStore.bulkAdd(payloads)
+    setRows([blankRow(defaultType), blankRow(defaultType), blankRow(defaultType)])
     setError('')
   }
 
@@ -105,111 +101,165 @@ export default function DailyPlan() {
   }
 
   const stat = (label: string, value: number) => (
-    <div className="rounded-xl border border-black/10 bg-white px-3 py-2">
-      <div className="text-lg font-bold leading-none text-navy">{value}</div>
-      <div className="mt-0.5 text-[11px] text-status-neutral">{label}</div>
-    </div>
+    <div className="rounded-xl border border-black/10 bg-white px-3 py-2"><div className="text-lg font-bold leading-none text-navy">{value}</div><div className="mt-0.5 text-[11px] text-status-neutral">{label}</div></div>
   )
 
   return (
     <div className="page space-y-4">
-      <p className="max-w-2xl text-sm text-status-neutral">
-        The day's <span className="font-medium text-navy">intended movements</span>. Pick <span className="font-medium text-navy">Pickup</span> or
-        <span className="font-medium text-navy"> Knock-off</span> once — it sticks and fills in Main Mine Gate — then just add bus, time and the pick-up point. This is what
-        <span className="font-medium text-navy"> Bus Allocation</span> checks the actual runs against.
+      <p className="max-w-3xl text-sm text-status-neutral">
+        Plan the day's <span className="font-medium text-navy">intended movements</span> — usually for <span className="font-medium text-navy">tomorrow</span>, from the office.
+        Set each row's bus, where it goes from → to, the time, and whether it's a pickup or knock-off (the Main Mine Gate end fills in automatically).
+        <span className="font-medium text-navy"> Bus Allocation</span> then records what actually ran against this plan.
       </p>
 
+      {/* Date + summary + export */}
       <div className="flex flex-wrap items-center gap-2">
         <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand" />
-        {date === todayISO() && <span className="rounded-full bg-status-good/10 px-2 py-0.5 text-xs font-medium text-status-good">Today</span>}
+        <button onClick={() => setDate(todayISO())} className={clsx('rounded-full px-2.5 py-1 text-xs font-medium', date === todayISO() ? 'bg-navy text-white' : 'border border-black/15 bg-white text-navy hover:bg-canvas')}>Today</button>
+        <button onClick={() => setDate(tomorrowISO())} className={clsx('rounded-full px-2.5 py-1 text-xs font-medium', date === tomorrowISO() ? 'bg-navy text-white' : 'border border-black/15 bg-white text-navy hover:bg-canvas')}>Tomorrow</button>
+        <span className="text-sm font-medium text-navy">{prettyDate(date)}</span>
         <div className="ml-auto flex gap-2">
           <Button variant="secondary" onClick={() => exportDailyPlan(trips, branchLabel)} disabled={trips.length === 0}><Download size={15} /> Excel</Button>
           <Button variant="secondary" onClick={exportPdf} disabled={trips.length === 0}><FileText size={15} /> PDF</Button>
         </div>
       </div>
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-3 gap-2 sm:max-w-md">
         {stat('Trips', trips.length)}
         {stat('Pickups', pickups.length)}
         {stat('Knock-offs', knockoffs.length)}
       </div>
 
-      {/* Quick add / edit — mobile-first */}
+      {/* Planner grid — desktop-first, fill a sheet of trips and save once */}
       {canPlan && (
-        <div className="card space-y-3 p-4">
-          <div className="flex items-center gap-2">
-            <h3 className="font-display text-sm font-bold text-navy">{editingId ? 'Edit trip' : 'Add trip'}</h3>
-            {editingId && <button onClick={cancelEdit} className="ml-auto text-xs font-medium text-status-neutral hover:text-navy">Cancel edit</button>}
-          </div>
-
-          {/* Pickup / Knock-off — full-width segmented, sticks for the next trip */}
-          <div className="grid grid-cols-2 gap-2">
-            {(['pickup', 'knockoff'] as TripType[]).map((t) => (
-              <button key={t} onClick={() => chooseType(t)}
-                className={clsx('rounded-lg border py-2.5 text-sm font-semibold transition-colors', tripType === t ? 'border-navy bg-navy text-white' : 'border-black/15 bg-white text-navy hover:bg-canvas')}>
-                {TRIP_LABEL[t]}
-              </button>
-            ))}
-          </div>
-
-          {error && <div className="rounded-lg border border-status-critical/30 bg-status-critical/5 px-3 py-2 text-sm text-status-critical">{error}</div>}
-
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <label className="block">
-              <span className="mb-1 block text-xs font-medium text-navy">Bus (fleet no)</span>
-              <input list="dp-fleet" className={inputCls} value={form.fleet_no} onChange={(e) => onFleet(e.target.value)} placeholder="INZ 226" />
-              {form.reg_no && <span className="mt-1 block text-[11px] text-status-neutral">Reg: <span className="font-medium text-navy">{form.reg_no}</span></span>}
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-xs font-medium text-navy">Departure time</span>
-              <input type="time" className={inputCls} value={form.departure_time} onChange={(e) => set('departure_time', e.target.value)} />
-            </label>
-            <label className="block sm:col-span-2">
-              <span className="mb-1 block text-xs font-medium text-navy">{tripType === 'pickup' ? 'Pick up from' : 'Drop off at'}</span>
-              <input list="dp-locations" className={inputCls} value={form[primaryField]} onChange={(e) => set(primaryField, e.target.value)} placeholder={tripType === 'pickup' ? 'Pick-up point' : 'Drop-off point'} />
-            </label>
-            <label className="block sm:col-span-2">
-              <span className="mb-1 block text-xs font-medium text-navy">Driver <span className="text-status-neutral">(optional)</span></span>
-              <input list="dp-drivers" className={inputCls} value={form.driver_name} onChange={(e) => set('driver_name', e.target.value)} placeholder="Driver name" />
-            </label>
-          </div>
-
-          {/* The Main Mine Gate end — auto, with an optional override */}
-          {!gateOverride ? (
-            <div className="flex flex-wrap items-center gap-1.5 text-sm text-status-neutral">
-              {tripType === 'pickup'
-                ? <><span>→</span> <span className="font-medium text-brand">{form.to_location || DEFAULT_TO_LOCATION}</span></>
-                : <><span className="font-medium text-brand">{form.from_location || DEFAULT_TO_LOCATION}</span> <span>→</span></>}
-              <button onClick={() => setGateOverride(true)} className="ml-1 text-xs font-medium text-brand hover:underline">change</button>
+        <div className="card p-4">
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <h3 className="font-display text-sm font-bold text-navy">Plan trips for {prettyDate(date)}</h3>
+            <span className="text-xs text-status-neutral">New rows:</span>
+            <div className="inline-flex overflow-hidden rounded-lg border border-black/15">
+              {(['pickup', 'knockoff'] as TripType[]).map((t) => (
+                <button key={t} onClick={() => chooseDefault(t)} className={clsx('px-3 py-1.5 text-xs font-semibold transition-colors', defaultType === t ? 'bg-navy text-white' : 'bg-white text-navy hover:bg-canvas')}>{TRIP_LABEL[t]}</button>
+              ))}
             </div>
-          ) : (
-            <label className="block">
-              <span className="mb-1 block text-xs font-medium text-navy">{tripType === 'pickup' ? 'To' : 'From'}</span>
-              <input list="dp-locations" className={inputCls} value={form[gateField]} onChange={(e) => set(gateField, e.target.value)} placeholder={DEFAULT_TO_LOCATION} />
-            </label>
-          )}
+            <span className="ml-auto text-xs text-status-neutral">{readyRows.length} ready</span>
+          </div>
 
-          <Button onClick={submit} className="w-full justify-center py-3 text-base">
-            {editingId ? <><Check size={16} /> Save trip</> : <><Plus size={16} /> Add {TRIP_LABEL[tripType].toLowerCase()}</>}
-          </Button>
+          {error && <div className="mb-3 rounded-lg border border-status-critical/30 bg-status-critical/5 px-3 py-2 text-sm text-status-critical">{error}</div>}
+
+          <div className="overflow-x-auto rounded-lg border border-black/10">
+            <table className="w-full min-w-[820px] text-left">
+              <thead className="bg-canvas text-[10px] uppercase tracking-wide text-status-neutral">
+                <tr>
+                  <th className="px-2 py-2 font-medium">Type</th>
+                  <th className="px-2 py-2 font-medium">Bus</th>
+                  <th className="px-2 py-2 font-medium">Reg</th>
+                  <th className="px-2 py-2 font-medium">From</th>
+                  <th className="px-2 py-2 font-medium">To</th>
+                  <th className="px-2 py-2 font-medium">Time</th>
+                  <th className="px-2 py-2 font-medium">Driver</th>
+                  <th className="px-2 py-2" />
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => (
+                  <tr key={i} className="border-t border-black/5">
+                    <td className="px-1.5 py-1 w-28"><select className={cellCls} value={r.trip_type} onChange={(e) => setRowType(i, e.target.value as TripType)}><option value="pickup">Pickup</option><option value="knockoff">Knock-off</option></select></td>
+                    <td className="px-1.5 py-1 w-28"><input list="dp-fleet" className={cellCls} placeholder="INZ 226" value={r.fleet_no} onChange={(e) => onFleet(i, e.target.value)} /></td>
+                    <td className="px-1.5 py-1 w-28"><input className={cellCls} placeholder="reg" value={r.reg_no} onChange={(e) => setRow(i, { reg_no: e.target.value })} /></td>
+                    <td className="px-1.5 py-1"><input list="dp-locations" className={clsx(cellCls, r.from_location === GATE && 'font-medium text-brand')} placeholder="from" value={r.from_location} onChange={(e) => setRow(i, { from_location: e.target.value })} /></td>
+                    <td className="px-1.5 py-1"><input list="dp-locations" className={clsx(cellCls, r.to_location === GATE && 'font-medium text-brand')} placeholder="to" value={r.to_location} onChange={(e) => setRow(i, { to_location: e.target.value })} /></td>
+                    <td className="px-1.5 py-1 w-28"><input type="time" className={cellCls} value={r.departure_time} onChange={(e) => setRow(i, { departure_time: e.target.value })} /></td>
+                    <td className="px-1.5 py-1 w-40"><input list="dp-drivers" className={cellCls} placeholder="driver" value={r.driver_name} onChange={(e) => setRow(i, { driver_name: e.target.value })} /></td>
+                    <td className="px-1.5 py-1"><button onClick={() => removeRow(i)} className="rounded p-1 text-status-neutral hover:bg-status-critical/10 hover:text-status-critical"><Trash2 size={14} /></button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button onClick={addRow} className="inline-flex items-center gap-1 rounded-lg border border-dashed border-navy/25 px-3 py-1.5 text-xs font-medium text-brand hover:border-brand"><Plus size={14} /> Add row</button>
+            <Button className="ml-auto" onClick={saveAll} disabled={readyRows.length === 0}><Check size={15} /> Save {readyRows.length} trip{readyRows.length === 1 ? '' : 's'}</Button>
+          </div>
+          <p className="mt-2 text-[11px] text-status-neutral">Tip: choose <b>Pickup</b> or <b>Knock-off</b> for new rows, fill the bus + where it's coming from / going to, then save the whole sheet at once.</p>
         </div>
       )}
 
-      {/* Trips */}
+      {/* The day's plan — table on desktop, cards on mobile */}
       {trips.length === 0 ? (
         <div className="card flex flex-col items-center gap-2 py-12 text-center text-sm text-status-neutral">
-          <Bus size={26} className="text-status-neutral/60" />
-          No trips planned for {date}.{canPlan && ' Add the first one above.'}
+          <Bus size={26} className="text-status-neutral/60" /> No trips planned for {prettyDate(date)}.{canPlan && ' Build the plan above.'}
         </div>
       ) : (
-        <div className="space-y-4">
-          <TripGroup title="Pickups" trips={pickups} canPlan={canPlan} onEdit={startEdit} editingId={editingId} />
-          <TripGroup title="Knock-offs" trips={knockoffs} canPlan={canPlan} onEdit={startEdit} editingId={editingId} />
-        </div>
+        <>
+          {/* Desktop table */}
+          <div className="card hidden overflow-hidden md:block">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-navy text-white">
+                  <tr>
+                    <th className="px-4 py-2.5 font-medium">Time</th><th className="px-4 py-2.5 font-medium">Type</th>
+                    <th className="px-4 py-2.5 font-medium">Bus</th><th className="px-4 py-2.5 font-medium">Route</th>
+                    <th className="px-4 py-2.5 font-medium">Driver</th>{canPlan && <th className="px-4 py-2.5" />}
+                  </tr>
+                </thead>
+                <tbody>
+                  {trips.map((t, i) => (
+                    <tr key={t.id} className={clsx(i % 2 && 'bg-canvas/40', editing?.id === t.id && 'ring-2 ring-inset ring-brand')}>
+                      <td className="px-4 py-2.5 font-display font-bold text-navy">{t.departure_time || '—'}</td>
+                      <td className="px-4 py-2.5"><TypePill type={t.trip_type} /></td>
+                      <td className="px-4 py-2.5 text-navy">{t.fleet_no}{t.reg_no && <span className="text-status-neutral"> · {t.reg_no}</span>}</td>
+                      <td className="px-4 py-2.5">
+                        <span className="inline-flex items-center gap-1.5">
+                          <span className={clsx('font-medium', t.from_location === GATE ? 'text-brand' : 'text-navy')}>{t.from_location}</span>
+                          <ArrowRight size={13} className="text-status-neutral" />
+                          <span className={clsx('font-medium', t.to_location === GATE ? 'text-brand' : 'text-navy')}>{t.to_location}</span>
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5 text-status-neutral">{t.driver_name || '—'}</td>
+                      {canPlan && (
+                        <td className="px-4 py-2.5"><div className="flex justify-end gap-1">
+                          <button onClick={() => setEditing(t)} className="rounded-md p-1.5 text-status-neutral hover:bg-canvas hover:text-navy" title="Edit"><Pencil size={14} /></button>
+                          <button onClick={() => confirm('Remove this trip?') && dailyPlanStore.remove(t.id)} className="rounded-md p-1.5 text-status-neutral hover:bg-status-critical/10 hover:text-status-critical"><Trash2 size={14} /></button>
+                        </div></td>
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Mobile cards */}
+          <div className="space-y-2 md:hidden">
+            {trips.map((t) => (
+              <div key={t.id} className="card flex flex-wrap items-center gap-x-3 gap-y-1.5 p-3.5">
+                <span className="flex w-14 shrink-0 items-center gap-1 font-display text-base font-bold text-navy"><Clock size={13} className="text-brand" /> {t.departure_time || '—'}</span>
+                <TypePill type={t.trip_type} />
+                <div className="min-w-[140px] flex-1">
+                  <div className="flex items-center gap-1.5 text-sm">
+                    <span className={clsx('font-semibold', t.from_location === GATE ? 'text-brand' : 'text-navy')}>{t.from_location}</span>
+                    <ArrowRight size={13} className="shrink-0 text-status-neutral" />
+                    <span className={clsx('font-semibold', t.to_location === GATE ? 'text-brand' : 'text-navy')}>{t.to_location}</span>
+                  </div>
+                  <div className="mt-0.5 text-xs text-status-neutral"><Bus size={11} className="mr-1 inline" />{t.fleet_no}{t.driver_name ? ` · ${t.driver_name}` : ''}</div>
+                </div>
+                {canPlan && (
+                  <div className="ml-auto flex gap-1">
+                    <button onClick={() => setEditing(t)} className="rounded-md p-2 text-status-neutral hover:bg-canvas hover:text-navy"><Pencil size={15} /></button>
+                    <button onClick={() => confirm('Remove this trip?') && dailyPlanStore.remove(t.id)} className="rounded-md p-2 text-status-neutral hover:bg-status-critical/10 hover:text-status-critical"><Trash2 size={15} /></button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </>
       )}
 
       <datalist id="dp-drivers">{drivers.map((d) => <option key={d.id} value={d.full_name} />)}</datalist>
       <datalist id="dp-fleet">{vehicles.map((v) => <option key={v.id} value={v.fleet_no} />)}</datalist>
       <datalist id="dp-locations">{locationOptions.map((n) => <option key={n} value={n} />)}</datalist>
+
+      <EditTripModal trip={editing} onClose={() => setEditing(null)} vehicles={vehicles} />
 
       {!ROLES[role].canToggleBranch && <p className="text-xs text-status-neutral">Showing {branchLabel} only.</p>}
       {!canPlan && <p className="text-xs text-status-neutral">View only — Bus Controllers, Route Supervisors and Operations can edit the plan.</p>}
@@ -217,40 +267,34 @@ export default function DailyPlan() {
   )
 }
 
-function TripGroup({ title, trips, canPlan, onEdit, editingId }: { title: string; trips: DailyPlanTrip[]; canPlan: boolean; onEdit: (id: string) => void; editingId: string | null }) {
-  if (trips.length === 0) return null
+function EditTripModal({ trip, onClose, vehicles }: { trip: DailyPlanTrip | null; onClose: () => void; vehicles: any[] }) {
+  const [f, setF] = useState<DraftRow | null>(null)
+  const [key, setKey] = useState('')
+  const k = trip?.id ?? ''
+  if (k !== key) { setKey(k); setF(trip ? { trip_type: trip.trip_type, fleet_no: trip.fleet_no, reg_no: trip.reg_no, from_location: trip.from_location, to_location: trip.to_location, departure_time: trip.departure_time, driver_name: trip.driver_name } : null) }
+  if (!trip || !f) return null
+
+  const set = (patch: Partial<DraftRow>) => setF((p) => (p ? { ...p, ...patch } : p))
+  function onFleet(v: string) { const veh = vehicles.find((x) => x.fleet_no.toLowerCase() === v.trim().toLowerCase()); setF((p) => (p ? { ...p, fleet_no: v, reg_no: veh ? veh.reg_plate : p.reg_no } : p)) }
+  function save() {
+    if (!f!.fleet_no.trim() || !f!.from_location.trim() || !f!.to_location.trim()) return
+    dailyPlanStore.update(trip!.id, {
+      trip_type: f!.trip_type, fleet_no: f!.fleet_no.trim(), reg_no: f!.reg_no.trim(), driver_name: f!.driver_name.trim(),
+      from_location: f!.from_location.trim(), to_location: f!.to_location.trim(), departure_time: f!.departure_time,
+    })
+    onClose()
+  }
   return (
-    <div>
-      <div className="mb-1.5 flex items-center gap-2">
-        <h3 className="font-display text-sm font-bold text-navy">{title}</h3>
-        <span className="rounded-full bg-navy/5 px-2 py-0.5 text-[11px] font-semibold text-navy">{trips.length}</span>
+    <Modal open={!!trip} onClose={onClose} title="Edit trip" footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={save}>Save</Button></>}>
+      <div className="grid grid-cols-2 gap-3">
+        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Type</span><select className={inputCls} value={f.trip_type} onChange={(e) => set(withGate(f, e.target.value as TripType))}><option value="pickup">Pickup</option><option value="knockoff">Knock-off</option></select></label>
+        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Departure time</span><input type="time" className={inputCls} value={f.departure_time} onChange={(e) => set({ departure_time: e.target.value })} /></label>
+        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Bus (fleet no)</span><input list="dp-fleet" className={inputCls} value={f.fleet_no} onChange={(e) => onFleet(e.target.value)} /></label>
+        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Reg No</span><input className={inputCls} value={f.reg_no} onChange={(e) => set({ reg_no: e.target.value })} /></label>
+        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">From</span><input list="dp-locations" className={inputCls} value={f.from_location} onChange={(e) => set({ from_location: e.target.value })} /></label>
+        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">To</span><input list="dp-locations" className={inputCls} value={f.to_location} onChange={(e) => set({ to_location: e.target.value })} /></label>
+        <label className="col-span-2 block"><span className="mb-1 block text-xs font-medium text-navy">Driver</span><input list="dp-drivers" className={inputCls} value={f.driver_name} onChange={(e) => set({ driver_name: e.target.value })} /></label>
       </div>
-      <div className="space-y-2">
-        {trips.map((t) => (
-          <div key={t.id} className={clsx('card flex flex-wrap items-center gap-x-4 gap-y-2 p-3.5', editingId === t.id && 'ring-2 ring-brand')}>
-            <div className="flex w-16 shrink-0 items-center gap-1.5 font-display text-base font-bold text-navy">
-              <Clock size={14} className="text-brand" /> {t.departure_time || '—'}
-            </div>
-            <div className="min-w-[150px] flex-1">
-              <div className="flex items-center gap-1.5 text-sm text-navy">
-                <span className={clsx('font-semibold', t.from_location === DEFAULT_TO_LOCATION ? 'text-brand' : 'text-navy')}>{t.from_location}</span>
-                <ArrowRight size={14} className="shrink-0 text-status-neutral" />
-                <span className={clsx('font-semibold', t.to_location === DEFAULT_TO_LOCATION ? 'text-brand' : 'text-navy')}>{t.to_location}</span>
-              </div>
-              <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-status-neutral">
-                <span className="inline-flex items-center gap-1"><Bus size={12} /> {t.fleet_no}{t.reg_no ? ` · ${t.reg_no}` : ''}</span>
-                {t.driver_name && <span>{t.driver_name}</span>}
-              </div>
-            </div>
-            {canPlan && (
-              <div className="ml-auto flex gap-1">
-                <button onClick={() => onEdit(t.id)} className="rounded-md p-2 text-status-neutral hover:bg-canvas hover:text-navy" title="Edit"><Pencil size={15} /></button>
-                <button onClick={() => confirm('Remove this trip?') && dailyPlanStore.remove(t.id)} className="rounded-md p-2 text-status-neutral hover:bg-status-critical/10 hover:text-status-critical" title="Remove"><Trash2 size={15} /></button>
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-    </div>
+    </Modal>
   )
 }
