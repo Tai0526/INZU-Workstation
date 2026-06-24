@@ -9,8 +9,12 @@ import { createSyncConfig } from '@/lib/supabase/syncTable'
  * engine in `schedule.ts`, so adding e.g. Crew C (Day) works end-to-end.
  */
 
-/** A named shift, optionally timed. Times are 'HH:MM' (24h); blank = label-only. */
-export interface ShiftDef { id: string; label: string; start?: string; end?: string }
+/**
+ * A named shift, optionally timed. Times are 'HH:MM' (24h); blank = label-only.
+ * A second block (start2/end2) makes it a split shift — e.g. a morning and an
+ * afternoon block with a gap in between.
+ */
+export interface ShiftDef { id: string; label: string; start?: string; end?: string; start2?: string; end2?: string }
 /** A crew (e.g. A, B, C). Optionally linked to a shift to give it times. */
 export interface CrewDef { id: string; label: string; shift_id?: string }
 /** A work / rest rotation expressed in days. */
@@ -135,9 +139,13 @@ export function shiftForCrew(c: SchedulingConfig, crewId: string): ShiftDef | un
   const cr = crewById(c, crewId)
   return cr ? shiftById(c, cr.shift_id) : undefined
 }
-/** "06:00–18:00", or '' when the shift has no times. */
+/** "05:00–17:00", or for a split shift "03:00–09:00 · 14:00–20:00"; '' when label-only. */
 export function shiftTime(s?: ShiftDef): string {
-  return s && s.start && s.end ? `${s.start}–${s.end}` : ''
+  if (!s) return ''
+  const parts: string[] = []
+  if (s.start && s.end) parts.push(`${s.start}–${s.end}`)
+  if (s.start2 && s.end2) parts.push(`${s.start2}–${s.end2}`)
+  return parts.join(' · ')
 }
 /** Display label for a crew (falls back to the raw id for a deleted crew). */
 export function crewLabel(c: SchedulingConfig, crewId: string): string {
@@ -179,15 +187,24 @@ export function shiftDefForKind(c: SchedulingConfig, kind: 'day' | 'night'): Shi
 export function windowForKind(c: SchedulingConfig, kind: 'day' | 'night'): string {
   return shiftTime(shiftDefForKind(c, kind))
 }
+/** Numeric [start, end] block(s) of a shift def; `end` may exceed 24 when wrapping past midnight. */
+function defBlocks(s?: ShiftDef): [number, number][] {
+  const out: [number, number][] = []
+  const add = (st?: string, en?: string) => {
+    const a = parseHM(st), b = parseHM(en)
+    if (a != null && b != null) out.push([a, b <= a ? b + 24 : b])
+  }
+  add(s?.start, s?.end)
+  add(s?.start2, s?.end2)
+  return out
+}
 /**
- * Numeric [start, end] block(s) for a kind, used by "on shift now". `end` may
- * exceed 24 to denote a window that wraps past midnight (e.g. 17:00–05:00 → [17, 29]).
+ * Numeric [start, end] block(s) for a kind, used by "on shift now". Includes
+ * both blocks of a split shift. `end` may exceed 24 when a block wraps past
+ * midnight (e.g. 17:00–05:00 → [17, 29]).
  */
 export function blocksForKind(c: SchedulingConfig, kind: 'day' | 'night'): [number, number][] {
-  const s = shiftDefForKind(c, kind)
-  const a = parseHM(s?.start), b = parseHM(s?.end)
-  if (a == null || b == null) return []
-  return [[a, b <= a ? b + 24 : b]]
+  return defBlocks(shiftDefForKind(c, kind))
 }
 /** Is the clock time `now` inside any of these blocks? */
 export function inAnyBlock(blocks: [number, number][], now: Date): boolean {

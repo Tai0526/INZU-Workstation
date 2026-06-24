@@ -544,12 +544,17 @@ function SchedulingTab() {
                   <label className="flex-1 text-[11px] text-status-neutral">Start<input type="time" className={`${inputCls} mt-0.5 py-1.5`} value={s.start ?? ''} onChange={(e) => schedulingStore.updateShift(s.id, { start: e.target.value })} /></label>
                   <label className="flex-1 text-[11px] text-status-neutral">End<input type="time" className={`${inputCls} mt-0.5 py-1.5`} value={s.end ?? ''} onChange={(e) => schedulingStore.updateShift(s.id, { end: e.target.value })} /></label>
                 </div>
+                <div className="mt-1.5 flex items-end gap-2">
+                  <label className="flex-1 text-[11px] text-status-neutral">2nd block start<input type="time" className={`${inputCls} mt-0.5 py-1.5`} value={s.start2 ?? ''} onChange={(e) => schedulingStore.updateShift(s.id, { start2: e.target.value })} /></label>
+                  <label className="flex-1 text-[11px] text-status-neutral">2nd block end<input type="time" className={`${inputCls} mt-0.5 py-1.5`} value={s.end2 ?? ''} onChange={(e) => schedulingStore.updateShift(s.id, { end2: e.target.value })} /></label>
+                  <button onClick={() => schedulingStore.updateShift(s.id, { start2: '', end2: '' })} disabled={!s.start2 && !s.end2} className="mb-0.5 rounded p-1.5 text-status-neutral hover:bg-status-critical/10 hover:text-status-critical disabled:opacity-30" title="Clear second block"><X size={14} /></button>
+                </div>
               </div>
             ))}
             {sched.shifts.length === 0 && <p className="rounded-lg border border-dashed border-black/15 px-3 py-4 text-center text-xs text-status-neutral">No shifts yet.</p>}
           </div>
           <button onClick={() => schedulingStore.addShift()} className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-brand hover:underline"><Plus size={13} /> Add shift</button>
-          <p className="mt-2 text-[11px] text-status-neutral">Leave both times blank for a label-only shift (no times).</p>
+          <p className="mt-2 text-[11px] text-status-neutral">Fill the 2nd block for a split shift (e.g. morning + afternoon with a gap). Leave all times blank for a label-only shift.</p>
         </div>
 
         {/* Crews */}
