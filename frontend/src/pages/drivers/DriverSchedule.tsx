@@ -114,15 +114,15 @@ export default function DriverSchedule() {
         <span className="inline-flex items-center gap-1.5"><span className="flex h-3.5 w-3.5 items-center justify-center rounded bg-status-warning/30 text-[7px] font-bold text-[#8a6d10]">OT</span> <span className="text-status-neutral">Overtime (covering off-day)</span></span>
       </div>
 
-      {/* Calendar grid */}
+      {/* Calendar grid — header row (days/dates) and the Driver column stay put while scrolling */}
       <div className="card overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="max-h-[calc(100vh-12rem)] overflow-auto">
           <table className="border-collapse text-sm">
             <thead>
-              <tr className="border-b border-black/10 bg-canvas/60">
-                <th className="sticky left-0 z-10 bg-canvas/60 px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wide text-status-neutral">Driver</th>
+              <tr className="border-b border-black/10">
+                <th className="sticky left-0 top-0 z-30 bg-canvas px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wide text-status-neutral">Driver</th>
                 {days.map((d) => (
-                  <th key={d.day} className={clsx('w-7 px-0 py-1 text-center text-[10px] font-medium', d.weekend ? 'bg-black/[0.03] text-status-neutral' : 'text-status-neutral', d.dateISO === todayISO && 'bg-brand/15 text-brand')}>
+                  <th key={d.day} className={clsx('sticky top-0 z-20 w-7 px-0 py-1 text-center text-[10px] font-medium', d.dateISO === todayISO ? 'bg-[#FCEAD3] text-brand' : d.weekend ? 'bg-[#E9ECEF] text-status-neutral' : 'bg-canvas text-status-neutral')}>
                     <div>{d.label}</div><div className="text-[11px] font-bold text-navy">{d.day}</div>
                   </th>
                 ))}
