@@ -13,9 +13,10 @@ import DriverImportModal from '@/components/drivers/DriverImportModal'
 import { useDrivers } from '@/lib/drivers/store'
 import { exportDrivers } from '@/lib/drivers/excel'
 import {
-  type Driver, type Crew, CREW_SHIFT, SHIFT_LABEL, SHIFT_STATE_META,
+  type Driver, type Crew, SHIFT_STATE_META,
   driverShiftState, worstExpiry, EXPIRY_TONE,
 } from '@/lib/drivers/types'
+import { useScheduling, crewLabel, crewShiftLabel, shiftForCrew } from '@/lib/drivers/scheduling'
 
 export default function DriverProfiles() {
   const { user } = useAuth()
@@ -26,6 +27,7 @@ export default function DriverProfiles() {
   const canToggle = ROLES[role].canToggleBranch
 
   const all = useDrivers()
+  const sched = useScheduling()
   const [q, setQ] = useState('')
   const [section, setSection] = useState('all')
   const [crew, setCrew] = useState<'all' | Crew>('all')
@@ -72,8 +74,10 @@ export default function DriverProfiles() {
         </select>
         <select value={crew} onChange={(e) => setCrew(e.target.value as any)} className="rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand">
           <option value="all">All crews</option>
-          <option value="A">Crew A (Day)</option>
-          <option value="B">Crew B (Night)</option>
+          {sched.crews.map((c) => {
+            const s = shiftForCrew(sched, c.id)
+            return <option key={c.id} value={c.id}>Crew {c.label}{s ? ` (${s.label})` : ''}</option>
+          })}
         </select>
       </div>
 
@@ -94,7 +98,7 @@ export default function DriverProfiles() {
                 <StatusBadge tone={SHIFT_STATE_META[state].tone}>{SHIFT_STATE_META[state].label}</StatusBadge>
               </div>
               <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[11px]">
-                <span className="rounded-full bg-navy/5 px-2 py-0.5 text-navy">Crew {d.crew} · {SHIFT_LABEL[CREW_SHIFT[d.crew]]}</span>
+                <span className="rounded-full bg-navy/5 px-2 py-0.5 text-navy">Crew {crewLabel(sched, d.crew)}{crewShiftLabel(sched, d.crew) ? ` · ${crewShiftLabel(sched, d.crew)}` : ''}</span>
                 <span className="rounded-full bg-navy/5 px-2 py-0.5 text-navy">{d.section}</span>
                 {worst !== 'current' && worst !== 'none' && (
                   <span className={`rounded-full px-2 py-0.5 font-medium ${worst === 'expired' ? 'bg-status-critical/10 text-status-critical' : 'bg-status-warning/10 text-[#8a6d10]'}`}>

@@ -4,13 +4,15 @@ import Modal from '@/components/ui/Modal'
 import Button from '@/components/ui/Button'
 import { SECTIONS } from '@/lib/org/sections'
 import { driversStore } from '@/lib/drivers/store'
-import { type Driver, type Crew, CREW_SHIFT, SHIFT_LABEL, patternFor, shiftWindow } from '@/lib/drivers/types'
+import { type Driver, type Crew, SHIFT_LABEL, patternFor, shiftWindow } from '@/lib/drivers/types'
+import { useScheduling, crewShiftKind, crewShiftLabel } from '@/lib/drivers/scheduling'
 
 const selCls = 'w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand'
 
 /** Roster reassignment — change a driver's crew (shift) and section only. */
 export default function ReassignModal({ driver, open, onClose }: { driver: Driver | null; open: boolean; onClose: () => void }) {
-  const [crew, setCrew] = useState<Crew>(driver?.crew ?? 'A')
+  const sched = useScheduling()
+  const [crew, setCrew] = useState<Crew>(driver?.crew ?? sched.crews[0]?.id ?? 'A')
   const [section, setSection] = useState(driver?.section ?? '')
 
   const [seen, setSeen] = useState('')
@@ -20,7 +22,7 @@ export default function ReassignModal({ driver, open, onClose }: { driver: Drive
   if (!open && seen) setSeen('')
   if (!driver) return null
 
-  const shiftKey = CREW_SHIFT[crew]
+  const shiftKey = crewShiftKind(sched, crew)
   const ShiftIcon = shiftKey === 'day' ? Sun : Moon
   const window = shiftWindow(patternFor(driver.branch, section || driver.section), shiftKey)
 
@@ -36,8 +38,9 @@ export default function ReassignModal({ driver, open, onClose }: { driver: Drive
         <label className="block">
           <span className="mb-1 block text-xs font-medium text-navy">Crew (shift)</span>
           <select className={selCls} value={crew} onChange={(e) => setCrew(e.target.value as Crew)}>
-            <option value="A">Crew A · {SHIFT_LABEL.day} shift</option>
-            <option value="B">Crew B · {SHIFT_LABEL.night} shift</option>
+            {sched.crews.map((c) => (
+              <option key={c.id} value={c.id}>Crew {c.label} · {crewShiftLabel(sched, c.id) || `${SHIFT_LABEL[crewShiftKind(sched, c.id)]} shift`}</option>
+            ))}
           </select>
         </label>
         <label className="block">

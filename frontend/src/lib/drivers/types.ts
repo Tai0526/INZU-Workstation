@@ -4,15 +4,18 @@ import { daysUntil, EXPIRY_WARNING_DAYS } from '@/lib/documents/types'
 import { scheduledShift, isWithinShift } from '@/lib/drivers/schedule'
 
 // ── Crews & shifts (spec §4.3.2) ───────────────────────────────────────
-// Two fixed crews; Crew A works the Day shift, Crew B the Night shift.
+// Crews are admin-configurable (Admin → Scheduling) — A, B, C… each optionally
+// linked to a shift. `crew` therefore stores a crew id (string). By default
+// Crew A works Day and Crew B works Night; see lib/drivers/scheduling.ts.
 // The actual hours depend on the section's shift PATTERN:
 //   • split   — most Trident sections: two blocks with a break between
 //   • straight — Pit & Security (and Kansanshi): one continuous 12-hour block
-export type Crew = 'A' | 'B'
+export type Crew = string
 export type ShiftKey = 'day' | 'night'
 export type PatternKey = 'split' | 'straight'
 
-export const CREW_SHIFT: Record<Crew, ShiftKey> = { A: 'day', B: 'night' }
+/** Legacy default crew→shift map. Live mapping comes from scheduling config. */
+export const CREW_SHIFT: Record<string, ShiftKey> = { A: 'day', B: 'night' }
 export const SHIFT_LABEL: Record<ShiftKey, string> = { day: 'Day', night: 'Night' }
 
 // Block hours; `end` may exceed 24 to denote wrapping past midnight (e.g. 26 = 02:00).

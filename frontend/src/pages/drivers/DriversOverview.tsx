@@ -13,6 +13,7 @@ import { useDrivers } from '@/lib/drivers/store'
 import {
   type Driver, driverShiftState, complianceItems, worstExpiry, EXPIRY_TONE,
 } from '@/lib/drivers/types'
+import { useScheduling, crewShiftLabel } from '@/lib/drivers/scheduling'
 
 const SHIFT_COLORS: Record<string, string> = {
   on_shift: '#2E7D4F', overtime: '#C9A227', off: '#6B7280', leave: '#1B2A4A', suspended: '#B3261E',
@@ -27,6 +28,7 @@ export default function DriversOverview() {
   const canToggle = ROLES[role].canToggleBranch
 
   const all = useDrivers()
+  const sched = useScheduling()
   const drivers = useMemo(() => all.filter((d) => d.branch === branch), [all, branch])
 
   const [detail, setDetail] = useState<Driver | null>(null)
@@ -37,10 +39,9 @@ export default function DriversOverview() {
     const by = { on_shift: 0, overtime: 0, off: 0, leave: 0, suspended: 0 }
     for (const d of drivers) by[driverShiftState(d)]++
     const active = drivers.filter((d) => d.status === 'active').length
-    const crewA = drivers.filter((d) => d.crew === 'A').length
-    const crewB = drivers.filter((d) => d.crew === 'B').length
-    return { ...by, active, crewA, crewB, total: drivers.length }
-  }, [drivers])
+    const crewCounts = sched.crews.map((c) => ({ id: c.id, label: c.label, n: drivers.filter((d) => d.crew === c.id).length }))
+    return { ...by, active, crewCounts, total: drivers.length }
+  }, [drivers, sched])
 
   const attention = useMemo(() => {
     return drivers
@@ -78,8 +79,9 @@ export default function DriversOverview() {
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <KpiCard label="Total drivers" value={stats.total} />
         <KpiCard label="Active" value={stats.active} tone="good" />
-        <KpiCard label="Crew A (Day)" value={stats.crewA} />
-        <KpiCard label="Crew B (Night)" value={stats.crewB} />
+        {stats.crewCounts.map((c) => (
+          <KpiCard key={c.id} label={`Crew ${c.label}`} value={c.n} sub={crewShiftLabel(sched, c.id) || undefined} />
+        ))}
       </div>
 
       {/* Visuals */}

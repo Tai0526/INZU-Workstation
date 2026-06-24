@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import {
   Users as UsersIcon, ShieldCheck, Activity, GitBranch, Database, Trash2, RotateCcw, AlertTriangle,
-  ShieldAlert, Plus, Search, Pencil, ArrowUp, ArrowDown, X, CheckCircle2, Clock, MapPin,
+  ShieldAlert, Plus, Search, Pencil, ArrowUp, ArrowDown, X, CheckCircle2, Clock, MapPin, CalendarClock,
 } from 'lucide-react'
 import { useAuth } from '@/auth/AuthContext'
 import {
@@ -14,6 +14,7 @@ import { useUsers, usersStore, useSessions, allowedBranches, type AppUser, type 
 import { isSupabaseConfigured } from '@/lib/supabase/client'
 import { supaUsersStore } from '@/lib/auth/profiles'
 import { useApprovals, approvalsStore } from '@/lib/auth/approvals'
+import { useScheduling, schedulingStore } from '@/lib/drivers/scheduling'
 import { employeesStore } from '@/lib/hr/store'
 import type { JobRole } from '@/lib/hr/types'
 import { clearAllData, restoreDemoData } from '@/lib/demo/reset'
@@ -43,7 +44,7 @@ function roleToJob(role: RoleKey): JobRole {
 export default function Admin() {
   const { user } = useAuth()
   const canManage = canEdit(user!.role, 'admin')
-  const [tab, setTab] = useState<'users' | 'roles' | 'sessions' | 'approvals' | 'branches' | 'data'>('users')
+  const [tab, setTab] = useState<'users' | 'roles' | 'sessions' | 'approvals' | 'branches' | 'scheduling' | 'data'>('users')
 
   if (!canManage) {
     return <div className="page"><div className="card flex items-center gap-2 px-5 py-4 text-sm text-status-neutral"><ShieldAlert size={16} /> Administration is limited to administrators.</div></div>
@@ -55,6 +56,7 @@ export default function Admin() {
     { key: 'sessions', label: 'Sessions', icon: Activity },
     { key: 'approvals', label: 'Approval order', icon: GitBranch },
     { key: 'branches', label: 'Branches', icon: MapPin },
+    { key: 'scheduling', label: 'Scheduling', icon: CalendarClock },
     { key: 'data', label: 'Data', icon: Database },
   ] as const
 
@@ -74,6 +76,7 @@ export default function Admin() {
       {tab === 'sessions' && <SessionsTab currentId={user!.id} />}
       {tab === 'approvals' && <ApprovalsTab />}
       {tab === 'branches' && <BranchesTab />}
+      {tab === 'scheduling' && <SchedulingTab />}
       {tab === 'data' && <DataTab />}
     </div>
   )
@@ -509,6 +512,86 @@ function BranchesTab() {
             <p className="mt-2 text-[11px] text-status-neutral">Used in headers, exports and the branch switcher.</p>
           </div>
         ))}
+      </div>
+    </div>
+  )
+}
+
+// ════════════════════════════════════════════════════════════ Scheduling
+function SchedulingTab() {
+  const sched = useScheduling()
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2">
+        <p className="flex-1 text-sm text-status-neutral">
+          Define the <span className="font-medium text-navy">shifts</span>, <span className="font-medium text-navy">crews</span> and <span className="font-medium text-navy">work-day rotations</span> used across Drivers. A shift can be label-only or carry times; a crew can be A, B, C… and may be linked to a shift or left as a plain grouping.
+        </p>
+        <Button variant="secondary" onClick={() => { if (window.confirm('Reset shifts, crews and schedules to the built-in defaults?')) schedulingStore.reset() }}><RotateCcw size={14} /> Reset</Button>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-3">
+        {/* Shifts */}
+        <div className="card p-4">
+          <div className="mb-3 flex items-center gap-2"><Clock size={15} className="text-brand" /><h3 className="font-display text-sm font-bold text-navy">Shift patterns</h3><span className="ml-auto text-[11px] text-status-neutral">{sched.shifts.length}</span></div>
+          <div className="space-y-2">
+            {sched.shifts.map((s) => (
+              <div key={s.id} className="rounded-lg border border-black/10 bg-white p-2.5">
+                <div className="flex items-center gap-2">
+                  <input className={`${inputCls} py-1.5`} value={s.label} onChange={(e) => schedulingStore.updateShift(s.id, { label: e.target.value })} placeholder="Shift name (e.g. Day)" />
+                  <button onClick={() => schedulingStore.removeShift(s.id)} className="rounded p-1.5 text-status-neutral hover:bg-status-critical/10 hover:text-status-critical" title="Remove shift"><X size={15} /></button>
+                </div>
+                <div className="mt-2 flex items-end gap-2">
+                  <label className="flex-1 text-[11px] text-status-neutral">Start<input type="time" className={`${inputCls} mt-0.5 py-1.5`} value={s.start ?? ''} onChange={(e) => schedulingStore.updateShift(s.id, { start: e.target.value })} /></label>
+                  <label className="flex-1 text-[11px] text-status-neutral">End<input type="time" className={`${inputCls} mt-0.5 py-1.5`} value={s.end ?? ''} onChange={(e) => schedulingStore.updateShift(s.id, { end: e.target.value })} /></label>
+                </div>
+              </div>
+            ))}
+            {sched.shifts.length === 0 && <p className="rounded-lg border border-dashed border-black/15 px-3 py-4 text-center text-xs text-status-neutral">No shifts yet.</p>}
+          </div>
+          <button onClick={() => schedulingStore.addShift()} className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-brand hover:underline"><Plus size={13} /> Add shift</button>
+          <p className="mt-2 text-[11px] text-status-neutral">Leave both times blank for a label-only shift (no times).</p>
+        </div>
+
+        {/* Crews */}
+        <div className="card p-4">
+          <div className="mb-3 flex items-center gap-2"><UsersIcon size={15} className="text-brand" /><h3 className="font-display text-sm font-bold text-navy">Crews</h3><span className="ml-auto text-[11px] text-status-neutral">{sched.crews.length}</span></div>
+          <div className="space-y-2">
+            {sched.crews.map((c) => (
+              <div key={c.id} className="flex items-center gap-2 rounded-lg border border-black/10 bg-white p-2.5">
+                <input className={`${inputCls} w-16 py-1.5`} value={c.label} onChange={(e) => schedulingStore.updateCrew(c.id, { label: e.target.value })} placeholder="A" />
+                <select className={`${inputCls} py-1.5`} value={c.shift_id ?? ''} onChange={(e) => schedulingStore.updateCrew(c.id, { shift_id: e.target.value || undefined })}>
+                  <option value="">No shift (label only)</option>
+                  {sched.shifts.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
+                </select>
+                <button onClick={() => schedulingStore.removeCrew(c.id)} disabled={sched.crews.length <= 1} className="rounded p-1.5 text-status-neutral hover:bg-status-critical/10 hover:text-status-critical disabled:opacity-30" title="Remove crew"><X size={15} /></button>
+              </div>
+            ))}
+          </div>
+          <button onClick={() => schedulingStore.addCrew()} className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-brand hover:underline"><Plus size={13} /> Add crew</button>
+          <p className="mt-2 text-[11px] text-status-neutral">Link a crew to a shift to give it times, or leave it as a plain grouping. Renaming a crew keeps drivers assigned to it.</p>
+        </div>
+
+        {/* Work schedules */}
+        <div className="card p-4">
+          <div className="mb-3 flex items-center gap-2"><CalendarClock size={15} className="text-brand" /><h3 className="font-display text-sm font-bold text-navy">Work schedules</h3><span className="ml-auto text-[11px] text-status-neutral">{sched.schedules.length}</span></div>
+          <div className="space-y-2">
+            {sched.schedules.map((w) => (
+              <div key={w.id} className="rounded-lg border border-black/10 bg-white p-2.5">
+                <div className="flex items-center gap-2">
+                  <input className={`${inputCls} py-1.5`} value={w.label} onChange={(e) => schedulingStore.updateSchedule(w.id, { label: e.target.value })} placeholder="7 on / 7 off" />
+                  <button onClick={() => schedulingStore.removeSchedule(w.id)} className="rounded p-1.5 text-status-neutral hover:bg-status-critical/10 hover:text-status-critical" title="Remove schedule"><X size={15} /></button>
+                </div>
+                <div className="mt-2 flex items-end gap-2">
+                  <label className="flex-1 text-[11px] text-status-neutral">Days on<input type="number" min={0} className={`${inputCls} mt-0.5 py-1.5`} value={w.on_days} onChange={(e) => schedulingStore.updateSchedule(w.id, { on_days: Math.max(0, Number(e.target.value) || 0) })} /></label>
+                  <label className="flex-1 text-[11px] text-status-neutral">Days off<input type="number" min={0} className={`${inputCls} mt-0.5 py-1.5`} value={w.off_days} onChange={(e) => schedulingStore.updateSchedule(w.id, { off_days: Math.max(0, Number(e.target.value) || 0) })} /></label>
+                </div>
+                <label className="mt-2 inline-flex items-center gap-2 text-[11px] text-navy"><input type="checkbox" checked={w.continuous} onChange={(e) => schedulingStore.updateSchedule(w.id, { continuous: e.target.checked })} /> Continuous (rotates day → night)</label>
+              </div>
+            ))}
+            {sched.schedules.length === 0 && <p className="rounded-lg border border-dashed border-black/15 px-3 py-4 text-center text-xs text-status-neutral">No schedules yet.</p>}
+          </div>
+          <button onClick={() => schedulingStore.addSchedule()} className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-brand hover:underline"><Plus size={13} /> Add schedule</button>
+        </div>
       </div>
     </div>
   )

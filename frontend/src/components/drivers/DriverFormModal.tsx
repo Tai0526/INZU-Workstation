@@ -1,10 +1,12 @@
 import { useState } from 'react'
 import Modal from '@/components/ui/Modal'
 import Button from '@/components/ui/Button'
+import { useAuth } from '@/auth/AuthContext'
 import { BRANCHES, type BranchCode } from '@/lib/roles'
 import { SECTIONS } from '@/lib/org/sections'
 import { driversStore } from '@/lib/drivers/store'
-import { type Driver, type DriverInput, type Crew, type DriverStatus, CREW_SHIFT, SHIFT_LABEL, patternFor, shiftWindow } from '@/lib/drivers/types'
+import { type Driver, type DriverInput, type Crew, type DriverStatus, patternFor, shiftWindow } from '@/lib/drivers/types'
+import { schedulingStore, useScheduling, crewLabel, crewShiftLabel, crewShiftKind } from '@/lib/drivers/scheduling'
 
 function Field({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) {
   return (
@@ -23,7 +25,7 @@ const STATUS_LABEL: Record<DriverStatus, string> = { active: 'Active', on_leave:
 const empty = (branch: BranchCode): DriverInput => ({
   employee_no: '', full_name: '', branch, phone: '', licence_no: '', licence_class: 'C1',
   licence_expiry: '', psv_expiry: '', date_hired: '',
-  crew: 'A', section: SECTIONS[branch][0], status: 'active', overtime: false, photo_file_id: '', notes: '',
+  crew: schedulingStore.get().crews[0]?.id ?? 'A', section: SECTIONS[branch][0], status: 'active', overtime: false, photo_file_id: '', notes: '',
 })
 
 export default function DriverFormModal({
@@ -35,6 +37,9 @@ export default function DriverFormModal({
   lockedBranch: BranchCode | null
   activeBranch: BranchCode
 }) {
+  const { user } = useAuth()
+  const isAdmin = user?.role === 'administrator'
+  const sched = useScheduling()
   const [form, setForm] = useState<DriverInput | Driver>(() => (editing ? { ...editing } : empty(lockedBranch ?? activeBranch)))
   const [error, setError] = useState('')
 
@@ -68,6 +73,14 @@ export default function DriverFormModal({
     onClose()
   }
 
+  // Deleting a driver record is restricted to the administrator.
+  function removeDriver() {
+    if (!editing) return
+    if (!window.confirm(`Delete ${editing.full_name}? This permanently removes the driver record and cannot be undone.`)) return
+    driversStore.remove(editing.id)
+    onClose()
+  }
+
   return (
     <Modal
       open={open}
@@ -76,10 +89,15 @@ export default function DriverFormModal({
       title={editing ? `Edit ${editing.full_name}` : 'Add driver'}
       subtitle="Crew sets the shift pattern; section is the area this driver runs."
       footer={
-        <>
-          <Button variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button onClick={save}>{editing ? 'Save changes' : 'Add driver'}</Button>
-        </>
+        <div className="flex w-full items-center justify-between gap-2">
+          {editing && isAdmin
+            ? <Button variant="danger" onClick={removeDriver}>Delete driver</Button>
+            : <span />}
+          <div className="flex gap-2">
+            <Button variant="secondary" onClick={onClose}>Cancel</Button>
+            <Button onClick={save}>{editing ? 'Save changes' : 'Add driver'}</Button>
+          </div>
+        </div>
       }
     >
       {error && (
@@ -103,10 +121,11 @@ export default function DriverFormModal({
           <input className={inputCls} value={form.phone} onChange={(e) => set('phone', e.target.value)} />
         </Field>
 
-        <Field label="Crew" hint={`Crew ${form.crew} → ${SHIFT_LABEL[CREW_SHIFT[form.crew]]} shift · ${shiftWindow(patternFor(form.branch, form.section), CREW_SHIFT[form.crew])}`}>
+        <Field label="Crew" hint={`Crew ${crewLabel(sched, form.crew)} → ${crewShiftLabel(sched, form.crew) || 'no set shift'} · roster ${shiftWindow(patternFor(form.branch, form.section), crewShiftKind(sched, form.crew))}`}>
           <select className={inputCls} value={form.crew} onChange={(e) => set('crew', e.target.value as Crew)}>
-            <option value="A">Crew A</option>
-            <option value="B">Crew B</option>
+            {sched.crews.map((c) => (
+              <option key={c.id} value={c.id}>Crew {c.label}{crewShiftLabel(sched, c.id) ? ` · ${crewShiftLabel(sched, c.id)}` : ''}</option>
+            ))}
           </select>
         </Field>
         <Field label="Section">

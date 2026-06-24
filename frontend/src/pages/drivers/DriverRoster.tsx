@@ -10,6 +10,7 @@ import DriverDetail from '@/components/drivers/DriverDetail'
 import ReassignModal from '@/components/drivers/ReassignModal'
 import { useDrivers, driversStore } from '@/lib/drivers/store'
 import { type Driver, SHIFT_STATE_META, driverShiftState } from '@/lib/drivers/types'
+import { useCrews, useScheduling, crewLabel } from '@/lib/drivers/scheduling'
 import { scheduledShift, SHIFT_META, type ShiftKind } from '@/lib/drivers/schedule'
 import { useWeeklyAssign } from '@/lib/operations/store'
 import { buildAssignmentIndex, dutyOn } from '@/lib/drivers/duty'
@@ -29,6 +30,7 @@ export default function DriverRoster() {
   const canToggle = ROLES[role].canToggleBranch
 
   const all = useDrivers()
+  const crews = useCrews()
   const assigns = useWeeklyAssign()
   const today = new Date().toISOString().slice(0, 10)
   const idx = useMemo(() => buildAssignmentIndex(assigns.filter((a) => a.branch === branch)), [assigns, branch])
@@ -44,9 +46,9 @@ export default function DriverRoster() {
     const list = branchDrivers.filter((d) => d.section === s)
     return {
       section: s, total: list.length, onNow: list.filter(onShift).length,
-      a: list.filter((d) => d.crew === 'A').length, b: list.filter((d) => d.crew === 'B').length,
+      crewCounts: crews.map((c) => ({ label: c.label, n: list.filter((d) => d.crew === c.id).length })),
     }
-  }), [branchDrivers, branch])
+  }), [branchDrivers, branch, crews])
 
   const drivers = useMemo(() => {
     const term = q.trim().toLowerCase()
@@ -81,7 +83,7 @@ export default function DriverRoster() {
                 </div>
                 <div className="mt-0.5 flex items-center gap-1 text-[11px]">
                   <span className={clsx('rounded-full px-1.5 py-0.5 font-medium', s.onNow === 0 ? 'bg-status-critical/10 text-status-critical' : 'bg-status-good/10 text-status-good')}>{s.onNow} on now</span>
-                  <span className="text-status-neutral">A{s.a} · B{s.b}</span>
+                  <span className="text-status-neutral">{s.crewCounts.map((c) => `${c.label}${c.n}`).join(' · ')}</span>
                 </div>
                 {thin && <div className="mt-0.5 text-[10px] font-medium text-status-critical">no cover on shift</div>}
                 {s.total === 0 && <div className="mt-0.5 text-[10px] font-medium text-status-critical">no drivers</div>}
@@ -138,6 +140,7 @@ function ShiftColumn({
   onOpen: (d: Driver) => void
   onReassign: (d: Driver) => void
 }) {
+  const sched = useScheduling()
   const onNow = kind !== 'off' ? drivers.filter(onShift).length : 0
   return (
     <div className="card flex flex-col overflow-hidden">
@@ -152,7 +155,7 @@ function ShiftColumn({
         {drivers.map((d) => {
           const state = driverShiftState(d)
           const meta = SHIFT_STATE_META[state]
-          const sched = SHIFT_META[scheduledShift(d)]
+          const schedShift = SHIFT_META[scheduledShift(d)]
           const duty = dutyOn(d, today, idx)
           const isOT = kind === 'off' && (duty.kind === 'overtime' || d.overtime)
           const showVehicle = duty.vehicle && (kind !== 'off' || isOT)
@@ -162,7 +165,7 @@ function ShiftColumn({
                 <div className="truncate text-sm font-medium text-navy">{d.full_name}</div>
                 <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-status-neutral">
                   <span className={SECTION_CHIP}>{d.section}</span>
-                  {kind === 'off' ? <span>Crew {d.crew}</span> : <span title={sched.hours}>{sched.hours}</span>}
+                  {kind === 'off' ? <span>Crew {crewLabel(sched, d.crew)}</span> : <span title={schedShift.hours}>{schedShift.hours}</span>}
                   {showVehicle && <VehicleChip fleet={duty.vehicle} />}
                 </div>
               </button>

@@ -2,6 +2,7 @@ import * as XLSX from 'xlsx'
 import type { BranchCode } from '@/lib/roles'
 import { SECTIONS } from '@/lib/org/sections'
 import type { Driver, DriverInput, Crew, DriverStatus } from './types'
+import { schedulingStore } from './scheduling'
 
 /** Column order shared by export + the import template. */
 const COLUMNS: { header: string; key: keyof Driver }[] = [
@@ -64,7 +65,7 @@ export function downloadTemplate(branch: BranchCode) {
   const help = XLSX.utils.json_to_sheet([
     { Field: 'Section (Kansanshi)', Allowed: SECTIONS.kansanshi.join(', ') },
     { Field: 'Section (Trident)', Allowed: SECTIONS.trident.join(', ') },
-    { Field: 'Crew', Allowed: 'A (Day) or B (Night)' },
+    { Field: 'Crew', Allowed: schedulingStore.get().crews.map((c) => c.label).join(', ') || 'A, B' },
     { Field: 'Status', Allowed: 'Active, On leave, Suspended' },
   ])
   const wb = XLSX.utils.book_new()
@@ -84,9 +85,12 @@ function normBranch(s: string): BranchCode | null {
   return null
 }
 function normCrew(s: string): Crew {
-  const t = s.trim().toLowerCase()
-  if (t.includes('b') || t.includes('night')) return 'B'
-  return 'A'
+  const crews = schedulingStore.get().crews
+  const raw = String(s).replace(/crew/gi, '').trim().toLowerCase()
+  const hit = crews.find((c) => c.id.toLowerCase() === raw || c.label.toLowerCase() === raw)
+  if (hit) return hit.id
+  if (/night/i.test(s)) { const n = crews.find((c) => /night/i.test(c.label)); if (n) return n.id }
+  return crews[0]?.id ?? 'A'
 }
 function normStatus(s: string): DriverStatus {
   const t = s.trim().toLowerCase()
