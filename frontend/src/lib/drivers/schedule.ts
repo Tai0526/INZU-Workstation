@@ -13,7 +13,7 @@
  * Day/night windows come from Admin → Scheduling; the cycle start is configurable.
  */
 
-import { schedulingStore, windowForKind, blocksForKind, shiftBlocks } from '@/lib/drivers/scheduling'
+import { schedulingStore, windowForKind, blocksForKind, shiftBlocks, type CycleKey } from '@/lib/drivers/scheduling'
 import { effectiveKind, effectiveShort, effectiveWindow, effectiveLabel, effectiveShiftDef } from '@/lib/drivers/driverShifts'
 
 export type ShiftType = 'day_split' | 'night_split' | 'day_cont' | 'night_cont' | 'off'
@@ -133,8 +133,15 @@ function crewIndex(crewId: string): number {
   return i >= 0 ? i : 0
 }
 /** Global rotation cycle start (Admin → Scheduling), falling back to the default Friday. */
-export function cycleAnchor(): string {
-  return schedulingStore.get().cycleAnchor || DEFAULT_ANCHOR
+/** Cycle group for a section: 14/7 (Pit), 10/5 (Security & Dewatering), else 7/7. */
+export function cycleKeyFor(section: string): CycleKey {
+  if (section.startsWith('Pit')) return '14x7'
+  if (section === 'Security' || section === 'Dewatering') return '10x5'
+  return '7x7'
+}
+/** Cycle start date for a section's rotation type (each type began on its own date). */
+export function cycleAnchorFor(section: string): string {
+  return schedulingStore.get().cycleAnchors[cycleKeyFor(section)] || DEFAULT_ANCHOR
 }
 
 /** Shift type for a driver on a date, given a cycle anchor, with crews staggered by phase. */
@@ -144,7 +151,7 @@ export function previewShiftOnDate(d: { id?: string; section: string; crew: stri
 }
 /** Shift type for a driver on a date using the live global cycle anchor. */
 export function driverShiftOnDate(d: { id?: string; section: string; crew: string }, dateISO: string): ShiftType {
-  return previewShiftOnDate(d, cycleAnchor(), dateISO)
+  return previewShiftOnDate(d, cycleAnchorFor(d.section), dateISO)
 }
 
 const localISO = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`

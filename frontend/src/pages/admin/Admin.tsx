@@ -529,12 +529,21 @@ function SchedulingTab() {
         <Button variant="secondary" onClick={() => { if (window.confirm('Reset shifts, crews and schedules to the built-in defaults?')) schedulingStore.reset() }}><RotateCcw size={14} /> Reset</Button>
       </div>
 
-      <div className="card flex flex-wrap items-end gap-3 p-4">
-        <label className="block">
-          <span className="mb-1 block text-xs font-medium text-navy">Rotation cycle start</span>
-          <input type="date" className={`${inputCls} max-w-[200px]`} value={sched.cycleAnchor} onChange={(e) => schedulingStore.setCycleAnchor(e.target.value)} />
-        </label>
-        <p className="flex-1 text-[11px] text-status-neutral">When the Day→Night→Off cycle began. For continuous sections (10/5 &amp; 14/7) the crews stagger from here — at the start crew A is on Day, B on Night, C resting, then each rotates every block.</p>
+      <div className="card p-4">
+        <div className="mb-2 flex items-center gap-2"><CalendarClock size={15} className="text-brand" /><h3 className="font-display text-sm font-bold text-navy">Rotation cycle starts</h3></div>
+        <p className="mb-3 text-[11px] text-status-neutral">When each rotation began — crews stagger from these dates (at the start A on Day, B on Night, C resting, then each rotates every block). The 10/5 and 14/7 cycles started on different dates, so set each one.</p>
+        <div className="grid gap-3 sm:grid-cols-3">
+          {([
+            ['14x7', '14 on / 7 off — Pit (Enterprise & Sentinel)'],
+            ['10x5', '10 on / 5 off — Security & Dewatering'],
+            ['7x7', '7 on / 7 off — Sentinel, Enterprise, Omega'],
+          ] as const).map(([key, label]) => (
+            <label key={key} className="block">
+              <span className="mb-1 block text-xs font-medium text-navy">{label}</span>
+              <input type="date" className={inputCls} value={sched.cycleAnchors[key]} onChange={(e) => schedulingStore.setCycleAnchor(key, e.target.value)} />
+            </label>
+          ))}
+        </div>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-3">

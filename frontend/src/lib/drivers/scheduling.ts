@@ -20,12 +20,16 @@ export interface CrewDef { id: string; label: string; shift_id?: string }
 /** A work / rest rotation expressed in days. */
 export interface WorkScheduleDef { id: string; label: string; on_days: number; off_days: number; continuous: boolean }
 
+/** Rotation cycle types — each began on its own date. */
+export type CycleKey = '14x7' | '10x5' | '7x7'
+
 export interface SchedulingConfig {
   shifts: ShiftDef[]
   crews: CrewDef[]
   schedules: WorkScheduleDef[]
-  /** Date the Day→Night→Off rotation cycle starts (crews are staggered from here). */
-  cycleAnchor: string
+  /** Cycle start date per rotation type — 14/7 (Pit), 10/5 (Security & Dewatering),
+   *  7/7 (split). Crews stagger from each one; the cycles began on different dates. */
+  cycleAnchors: Record<CycleKey, string>
 }
 
 export const DEFAULT_SCHEDULING: SchedulingConfig = {
@@ -43,7 +47,7 @@ export const DEFAULT_SCHEDULING: SchedulingConfig = {
     { id: '14x7', label: '14 on / 7 off', on_days: 14, off_days: 7, continuous: true },
     { id: '10x5', label: '10 on / 5 off', on_days: 10, off_days: 5, continuous: true },
   ],
-  cycleAnchor: '2026-01-02', // a Friday — shift change is Friday 10:00
+  cycleAnchors: { '14x7': '2026-01-02', '10x5': '2026-01-02', '7x7': '2026-01-02' }, // Fridays; shift change is Friday 10:00
 }
 
 const cfg = createSyncConfig<SchedulingConfig>({
@@ -55,11 +59,19 @@ const cfg = createSyncConfig<SchedulingConfig>({
     // exist — continuous 14/7 & 10/5 sections need a rest crew to rotate through.
     const crews = saved?.crews ? [...saved.crews] : [...DEFAULT_SCHEDULING.crews]
     for (const dc of DEFAULT_SCHEDULING.crews) if (!crews.some((c) => c.id === dc.id)) crews.push(dc)
+    // Migrate the old single anchor (if present) into the per-cycle anchors.
+    const legacy = (saved as { cycleAnchor?: string } | null | undefined)?.cycleAnchor
+    const sa = saved?.cycleAnchors
+    const d = DEFAULT_SCHEDULING.cycleAnchors
     return {
       shifts: saved?.shifts ?? DEFAULT_SCHEDULING.shifts,
       crews,
       schedules: saved?.schedules ?? DEFAULT_SCHEDULING.schedules,
-      cycleAnchor: saved?.cycleAnchor ?? DEFAULT_SCHEDULING.cycleAnchor,
+      cycleAnchors: {
+        '14x7': sa?.['14x7'] ?? legacy ?? d['14x7'],
+        '10x5': sa?.['10x5'] ?? legacy ?? d['10x5'],
+        '7x7': sa?.['7x7'] ?? legacy ?? d['7x7'],
+      },
     }
   },
 })
@@ -138,9 +150,10 @@ export const schedulingStore = {
     cfg.set({ ...c, schedules: c.schedules.filter((s) => s.id !== id) })
   },
 
-  // ── Rotation cycle start ──
-  setCycleAnchor(dateISO: string) {
-    cfg.set({ ...cfg.get(), cycleAnchor: dateISO })
+  // ── Rotation cycle start (per cycle type) ──
+  setCycleAnchor(key: CycleKey, dateISO: string) {
+    const c = cfg.get()
+    cfg.set({ ...c, cycleAnchors: { ...c.cycleAnchors, [key]: dateISO } })
   },
 }
 

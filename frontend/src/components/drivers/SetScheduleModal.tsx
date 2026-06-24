@@ -2,7 +2,7 @@ import { useState } from 'react'
 import Modal from '@/components/ui/Modal'
 import Button from '@/components/ui/Button'
 import type { Driver } from '@/lib/drivers/types'
-import { ROTATIONS, SHIFT_META, previewShiftOnDate, dutyShort, dutyLabel, dutyHours, patternKeyFor } from '@/lib/drivers/schedule'
+import { ROTATIONS, SHIFT_META, previewShiftOnDate, dutyShort, dutyLabel, dutyHours, patternKeyFor, cycleKeyFor } from '@/lib/drivers/schedule'
 import { useScheduling, schedulingStore } from '@/lib/drivers/scheduling'
 import { useDriverShifts } from '@/lib/drivers/driverShifts'
 
@@ -24,7 +24,7 @@ export default function SetScheduleModal({ driver, open, onClose }: { driver: Dr
 
   if (open && driver && seen !== driver.id) {
     setSeen(driver.id)
-    setAnchor(schedulingStore.get().cycleAnchor)
+    setAnchor(schedulingStore.get().cycleAnchors[cycleKeyFor(driver.section)])
   }
   if (!open && seen) setSeen('')
   if (!driver) return null
@@ -37,7 +37,7 @@ export default function SetScheduleModal({ driver, open, onClose }: { driver: Dr
   })
 
   function save() {
-    schedulingStore.setCycleAnchor(anchor)
+    schedulingStore.setCycleAnchor(cycleKeyFor(driver!.section), anchor)
     onClose()
   }
 
@@ -52,9 +52,9 @@ export default function SetScheduleModal({ driver, open, onClose }: { driver: Dr
       </div>
 
       <label className="mt-4 block">
-        <span className="mb-1 block text-xs font-medium text-navy">Cycle start date (all crews)</span>
+        <span className="mb-1 block text-xs font-medium text-navy">Cycle start date — {ROTATIONS[pattern]?.label.split(' — ')[0]} rotation</span>
         <input type="date" className={selCls} value={anchor} onChange={(e) => setAnchor(e.target.value)} />
-        <span className="mt-1 block text-[11px] text-status-neutral">When the Day→Night→Off cycle began. This applies to every crew; they offset from here automatically.</span>
+        <span className="mt-1 block text-[11px] text-status-neutral">When this rotation began. Applies to every crew on the {ROTATIONS[pattern]?.label.split(' — ')[0]} cycle (each cycle type — 14/7, 10/5, 7/7 — has its own start). Crews offset automatically.</span>
       </label>
 
       <div className="mt-5">
