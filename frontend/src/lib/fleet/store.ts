@@ -4,7 +4,7 @@ import { getActor } from '@/lib/audit/actor'
 import { type Vehicle, type VehicleInput, isAvailable } from './types'
 import { TRIDENT_BUSES } from '@/lib/demo/buses'
 import { documentsStore } from '@/lib/documents/store'
-import { registerCrossTabSync } from '@/lib/storage/sync'
+import { createSyncTable } from '@/lib/supabase/syncTable'
 
 /**
  * Mock data layer for vehicles — localStorage-backed, reactive via
@@ -42,27 +42,7 @@ function mk(
   }
 }
 
-let cache: Vehicle[] | null = null
-const listeners = new Set<() => void>()
-
-function load(): Vehicle[] {
-  if (cache) return cache
-  try {
-    const raw = localStorage.getItem(KEY)
-    cache = raw ? (JSON.parse(raw) as Vehicle[]) : SEED
-  } catch {
-    cache = SEED
-  }
-  if (!localStorage.getItem(KEY)) localStorage.setItem(KEY, JSON.stringify(cache))
-  return cache!
-}
-
-function commit(next: Vehicle[]) {
-  cache = next
-  localStorage.setItem(KEY, JSON.stringify(next))
-  listeners.forEach((l) => l())
-}
-registerCrossTabSync(KEY, () => { cache = null; load(); listeners.forEach((l) => l()) })
+const { load, commit, subscribe } = createSyncTable<Vehicle>({ table: 'vehicles', lsKey: KEY, seed: SEED })
 
 function newId(): string {
   return typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `v_${Date.now()}_${Math.round(Math.random() * 1e6)}`
@@ -119,11 +99,6 @@ export const vehiclesStore = {
 }
 
 // ── React bindings ─────────────────────────────────────────────────────
-function subscribe(cb: () => void) {
-  listeners.add(cb)
-  return () => listeners.delete(cb)
-}
-
 export function useVehicles(): Vehicle[] {
   return useSyncExternalStore(subscribe, load, load)
 }

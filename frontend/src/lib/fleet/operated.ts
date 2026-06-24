@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import type { BranchCode } from '@/lib/roles'
 import { getActor } from '@/lib/audit/actor'
-import { registerCrossTabSync } from '@/lib/storage/sync'
+import { createSyncTable } from '@/lib/supabase/syncTable'
 
 /**
  * Operated (not owned) vehicles — contract assets we only PROVIDE DRIVERS for
@@ -48,26 +48,7 @@ const SEED: OperatedVehicle[] = [
   op('OV6', 'trident', 'SEC-7', 'BCK 3110 ZM', 'FQM Trident', 'Security', 'active'),
 ]
 
-let cache: OperatedVehicle[] | null = null
-const listeners = new Set<() => void>()
-
-function load(): OperatedVehicle[] {
-  if (cache) return cache
-  try {
-    const raw = localStorage.getItem(KEY)
-    cache = raw ? (JSON.parse(raw) as OperatedVehicle[]) : SEED
-  } catch {
-    cache = SEED
-  }
-  if (!localStorage.getItem(KEY)) localStorage.setItem(KEY, JSON.stringify(cache))
-  return cache!
-}
-function commit(next: OperatedVehicle[]) {
-  cache = next
-  localStorage.setItem(KEY, JSON.stringify(next))
-  listeners.forEach((l) => l())
-}
-registerCrossTabSync(KEY, () => { cache = null; load(); listeners.forEach((l) => l()) })
+const { load, commit, subscribe } = createSyncTable<OperatedVehicle>({ table: 'operated_vehicles', lsKey: KEY, seed: SEED })
 
 function newId(): string {
   return typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `ov_${Date.now()}_${Math.round(Math.random() * 1e6)}`
@@ -93,7 +74,6 @@ export const operatedVehiclesStore = {
   },
 }
 
-function subscribe(cb: () => void) { listeners.add(cb); return () => listeners.delete(cb) }
 export function useOperatedVehicles(): OperatedVehicle[] {
   return useSyncExternalStore(subscribe, load, load)
 }

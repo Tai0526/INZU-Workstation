@@ -5,7 +5,7 @@ import {
   type DocumentRecord, type DocCategory, type DocType, type ApprovalStatus, type AuditEvent, type AuditAction,
   type DocVisibility, type ShareGrant,
 } from './types'
-import { registerCrossTabSync } from '@/lib/storage/sync'
+import { createSyncTable } from '@/lib/supabase/syncTable'
 
 /**
  * Mock document library — localStorage-backed metadata, reactive. The actual
@@ -78,58 +78,7 @@ function gseed(
   }
 }
 
-let cache: DocumentRecord[] | null = null
-const listeners = new Set<() => void>()
-
-/**
- * Back-fill records saved before the library workflow existed: every document
- * gets an approval status (legacy rows are treated as already approved) and an
- * audit trail seeded from its original upload, so nothing is left untracked.
- */
-function coerce(d: DocumentRecord): DocumentRecord {
-  const needs = d.approval_status === undefined || d.audit === undefined || d.tags === undefined
-    || (d.entity_type === 'general' && d.doc_type === undefined)
-  if (!needs) return d
-  const approval_status: ApprovalStatus = d.approval_status ?? 'approved'
-  const audit: AuditEvent[] = d.audit ?? [{ action: 'uploaded', by: d.uploaded_by, role: d.uploaded_by_role, at: d.uploaded_at }]
-  const doc_type: DocType | undefined = d.entity_type === 'general' ? (d.doc_type ?? 'other') : d.doc_type
-  return { ...d, approval_status, audit, doc_type, tags: d.tags ?? [] }
-}
-
-function load(): DocumentRecord[] {
-  if (cache) return cache
-  let parsed: DocumentRecord[] | null = null
-  try {
-    const raw = localStorage.getItem(KEY)
-    parsed = raw ? (JSON.parse(raw) as DocumentRecord[]) : null
-  } catch {
-    parsed = null
-  }
-  let next = (parsed ?? SEED).map(coerce)
-
-  // One-time: bring the general-library examples to existing demo installs that
-  // predate them. Only do so while the data still looks like the seeded demo
-  // (original vehicle seeds present, no general seeds yet) so we never inject
-  // sample documents into a database the user has populated with real data.
-  if (parsed && localStorage.getItem(GEN_SEED_FLAG) !== '1') {
-    const hasGeneralSeed = next.some((d) => d.id.startsWith('seed_doc_'))
-    const stillDemo = next.some((d) => d.id.startsWith('seed_INZ'))
-    if (!hasGeneralSeed && stillDemo) next = [...next, ...GENERAL_SEED]
-    localStorage.setItem(GEN_SEED_FLAG, '1')
-  }
-
-  cache = next
-  // Persist on first run (key absent) or when migration changed something.
-  if (!parsed || JSON.stringify(next) !== JSON.stringify(parsed)) localStorage.setItem(KEY, JSON.stringify(next))
-  return cache!
-}
-
-function commit(next: DocumentRecord[]) {
-  cache = next
-  localStorage.setItem(KEY, JSON.stringify(next))
-  listeners.forEach((l) => l())
-}
-registerCrossTabSync(KEY, () => { cache = null; load(); listeners.forEach((l) => l()) })
+const { load, commit, subscribe } = createSyncTable<DocumentRecord>({ table: 'documents', lsKey: KEY, seed: SEED })
 
 function newId(): string {
   return typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `d_${Date.now()}_${Math.round(Math.random() * 1e6)}`
@@ -301,11 +250,6 @@ export const documentsStore = {
       .filter((d) => d.entity_id === entityId && d.category === category)
       .sort((a, b) => b.version - a.version)
   },
-}
-
-function subscribe(cb: () => void) {
-  listeners.add(cb)
-  return () => listeners.delete(cb)
 }
 
 export function useDocuments(): DocumentRecord[] {

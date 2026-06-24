@@ -2,7 +2,7 @@ import { useSyncExternalStore } from 'react'
 import type { BranchCode } from '@/lib/roles'
 import { getActor } from '@/lib/audit/actor'
 import { type Driver, type DriverInput, type Crew, type DriverStatus } from './types'
-import { registerCrossTabSync } from '@/lib/storage/sync'
+import { createSyncTable } from '@/lib/supabase/syncTable'
 
 /**
  * Mock data layer for drivers — localStorage-backed, reactive. Mirrors the
@@ -49,38 +49,7 @@ const SEED: Driver[] = [
   mk('INZ-D210', 'Esther Banda', 'trident', 'B', 'Omega', 'active', '2026-12-12', '2027-01-01'),
 ]
 
-let cache: Driver[] | null = null
-const listeners = new Set<() => void>()
-
-/** Backfill the split of the old single "Pit" section → Pit (Enterprise Mine). */
-function migrate(d: Driver): Driver {
-  return d.section === 'Pit' ? { ...d, section: 'Pit (Enterprise Mine)' } : d
-}
-function load(): Driver[] {
-  if (cache) return cache
-  try {
-    const raw = localStorage.getItem(KEY)
-    if (raw) {
-      const arr = JSON.parse(raw) as Driver[]
-      const migrated = arr.map(migrate)
-      cache = migrated
-      if (migrated.some((d, i) => d !== arr[i])) localStorage.setItem(KEY, JSON.stringify(migrated)) // persist migration once
-    } else {
-      cache = SEED
-      localStorage.setItem(KEY, JSON.stringify(SEED))
-    }
-  } catch {
-    cache = SEED
-  }
-  return cache!
-}
-
-function commit(next: Driver[]) {
-  cache = next
-  localStorage.setItem(KEY, JSON.stringify(next))
-  listeners.forEach((l) => l())
-}
-registerCrossTabSync(KEY, () => { cache = null; load(); listeners.forEach((l) => l()) })
+const { load, commit, subscribe } = createSyncTable<Driver>({ table: 'drivers', lsKey: KEY, seed: SEED })
 
 function newId(): string {
   return typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `d_${Date.now()}_${Math.round(Math.random() * 1e6)}`
@@ -120,11 +89,6 @@ export const driversStore = {
     commit([...load(), ...created])
     return created
   },
-}
-
-function subscribe(cb: () => void) {
-  listeners.add(cb)
-  return () => listeners.delete(cb)
 }
 
 export function useDrivers(): Driver[] {

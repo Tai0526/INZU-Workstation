@@ -2,7 +2,7 @@ import { useSyncExternalStore } from 'react'
 import { getActor } from '@/lib/audit/actor'
 import type { BranchCode } from '@/lib/roles'
 import { type Employee, type EmployeeInput, type JobRole } from './types'
-import { registerCrossTabSync } from '@/lib/storage/sync'
+import { createSyncTable } from '@/lib/supabase/syncTable'
 
 const KEY = 'inzu_employees'
 
@@ -23,16 +23,7 @@ const SEED: Employee[] = [
   emp('E-K03', 'kansanshi', 'INZ-E103', 'Patrick Lungu', 'Mechanic', 'Workshop Supervisor'),
 ]
 
-let cache: Employee[] | null = null
-const listeners = new Set<() => void>()
-function load(): Employee[] {
-  if (cache) return cache
-  try { const raw = localStorage.getItem(KEY); cache = raw ? (JSON.parse(raw) as Employee[]) : SEED } catch { cache = SEED }
-  if (!localStorage.getItem(KEY)) localStorage.setItem(KEY, JSON.stringify(cache))
-  return cache!
-}
-function commit(next: Employee[]) { cache = next; localStorage.setItem(KEY, JSON.stringify(next)); listeners.forEach((l) => l()) }
-registerCrossTabSync(KEY, () => { cache = null; load(); listeners.forEach((l) => l()) })
+const { load, commit, subscribe } = createSyncTable<Employee>({ table: 'employees', lsKey: KEY, seed: SEED })
 function newId() { return typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `e_${Date.now()}_${Math.round(Math.random() * 1e6)}` }
 const stamp = () => new Date().toISOString()
 
@@ -51,7 +42,6 @@ export const employeesStore = {
   },
 }
 
-function subscribe(cb: () => void) { listeners.add(cb); return () => listeners.delete(cb) }
 export function useEmployees(): Employee[] {
   return useSyncExternalStore(subscribe, load, load)
 }

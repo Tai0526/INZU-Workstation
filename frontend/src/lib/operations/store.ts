@@ -4,7 +4,7 @@ import {
   type Audited, type OpRoute, type Allocation, type MileageEntry,
   type DailyPlanTrip, type WeeklyAssignment, DEFAULT_TO_LOCATION,
 } from './types'
-import { registerCrossTabSync } from '@/lib/storage/sync'
+import { createSyncTable } from '@/lib/supabase/syncTable'
 
 function newId() {
   return typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `o_${Date.now()}_${Math.round(Math.random() * 1e6)}`
@@ -15,25 +15,8 @@ const who = () => getActor().name
 type Input<T extends Audited> = Omit<T, keyof Audited> & Partial<Pick<T, 'id'>>
 
 function makeStore<T extends Audited>(key: string, seed: T[]) {
-  let cache: T[] | null = null
-  const listeners = new Set<() => void>()
-  function load(): T[] {
-    if (cache) return cache
-    try {
-      const raw = localStorage.getItem(key)
-      cache = raw ? (JSON.parse(raw) as T[]) : seed
-    } catch {
-      cache = seed
-    }
-    if (!localStorage.getItem(key)) localStorage.setItem(key, JSON.stringify(cache))
-    return cache!
-  }
-  function commit(next: T[]) {
-    cache = next
-    localStorage.setItem(key, JSON.stringify(next))
-    listeners.forEach((l) => l())
-  }
-  registerCrossTabSync(key, () => { cache = null; load(); listeners.forEach((l) => l()) })
+  // Supabase table name = the localStorage key without the inzu_ prefix.
+  const { load, commit, subscribe } = createSyncTable<T>({ table: key.replace(/^inzu_/, ''), lsKey: key, seed })
   return {
     list: () => load(),
     add(data: Input<T>): T {
@@ -54,10 +37,7 @@ function makeStore<T extends Audited>(key: string, seed: T[]) {
     remove(id: string) {
       commit(load().filter((x) => x.id !== id))
     },
-    subscribe(cb: () => void) {
-      listeners.add(cb)
-      return () => listeners.delete(cb)
-    },
+    subscribe,
     snapshot: () => load(),
   }
 }
