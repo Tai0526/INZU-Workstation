@@ -36,6 +36,7 @@ export const DEFAULT_SCHEDULING: SchedulingConfig = {
   crews: [
     { id: 'A', label: 'A', shift_id: 'day' },
     { id: 'B', label: 'B', shift_id: 'night' },
+    { id: 'C', label: 'C' }, // rest crew at the cycle start; rotates Day→Night→Off for 14/7 & 10/5
   ],
   schedules: [
     { id: '7x7', label: '7 on / 7 off', on_days: 7, off_days: 7, continuous: false },
@@ -49,12 +50,18 @@ const cfg = createSyncConfig<SchedulingConfig>({
   key: 'scheduling',
   lsKey: 'inzu_scheduling',
   default: DEFAULT_SCHEDULING,
-  merge: (saved) => ({
-    shifts: saved?.shifts ?? DEFAULT_SCHEDULING.shifts,
-    crews: saved?.crews ?? DEFAULT_SCHEDULING.crews,
-    schedules: saved?.schedules ?? DEFAULT_SCHEDULING.schedules,
-    cycleAnchor: saved?.cycleAnchor ?? DEFAULT_SCHEDULING.cycleAnchor,
-  }),
+  merge: (saved) => {
+    // Keep the user's crews but make sure the three rotation crews (A/B/C) all
+    // exist — continuous 14/7 & 10/5 sections need a rest crew to rotate through.
+    const crews = saved?.crews ? [...saved.crews] : [...DEFAULT_SCHEDULING.crews]
+    for (const dc of DEFAULT_SCHEDULING.crews) if (!crews.some((c) => c.id === dc.id)) crews.push(dc)
+    return {
+      shifts: saved?.shifts ?? DEFAULT_SCHEDULING.shifts,
+      crews,
+      schedules: saved?.schedules ?? DEFAULT_SCHEDULING.schedules,
+      cycleAnchor: saved?.cycleAnchor ?? DEFAULT_SCHEDULING.cycleAnchor,
+    }
+  },
 })
 
 const clone = (c: SchedulingConfig): SchedulingConfig => JSON.parse(JSON.stringify(c))

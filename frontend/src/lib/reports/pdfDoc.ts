@@ -6,10 +6,17 @@ import autoTable from 'jspdf-autotable'
  * attachable document (e.g. emailing the daily bus allocation). For on-screen
  * "print to PDF" reports we still use the print window in exporter.ts.
  */
+export interface PdfColStyle {
+  halign?: 'left' | 'center' | 'right'
+  cellWidth?: number
+  fontStyle?: 'normal' | 'bold'
+}
 export interface PdfTable {
   heading?: string
   head: string[]
   rows: (string | number)[][]
+  /** Optional per-column styling (keyed by column index). */
+  columnStyles?: Record<number, PdfColStyle>
 }
 
 export function buildTablePdf(opts: { title: string; subtitle?: string; tables: PdfTable[]; landscape?: boolean }): jsPDF {
@@ -27,6 +34,7 @@ export function buildTablePdf(opts: { title: string; subtitle?: string; tables: 
       styles: { fontSize: 9, cellPadding: 4, textColor: [15, 27, 51] },
       headStyles: { fillColor: [15, 27, 51], textColor: 255, fontStyle: 'bold' },
       alternateRowStyles: { fillColor: [246, 247, 249] },
+      columnStyles: t.columnStyles as never,
       margin: { left: M, right: M },
     })
     // @ts-expect-error lastAutoTable is added by the plugin

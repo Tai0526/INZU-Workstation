@@ -17,9 +17,9 @@ import { useWeeklyAssign, weeklyAssignStore } from '@/lib/operations/store'
 import type { Driver } from '@/lib/drivers/types'
 import { driverShiftOnDate, dutyLabel, dutyHours, SHIFT_META, type ShiftType } from '@/lib/drivers/schedule'
 import { useScheduling } from '@/lib/drivers/scheduling'
-import { useDriverShifts } from '@/lib/drivers/driverShifts'
+import { useDriverShifts, effectiveKind } from '@/lib/drivers/driverShifts'
 import { WORKSHOP, fridayOf, datesInRange } from '@/lib/drivers/duty'
-import { downloadTablePdf, buildTablePdf } from '@/lib/reports/pdfDoc'
+import { downloadTablePdf, buildTablePdf, type PdfTable } from '@/lib/reports/pdfDoc'
 
 const cleanName = (s: string) => s.replace(/\s*\(demo\)$/, '')
 const inputCls = 'rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand'
@@ -172,12 +172,44 @@ export default function WeeklyPlan() {
       })
   }
   const periodLabel = `${period.start} → ${period.end}`
+  // Vehicle-centric layout: day/morning driver (left) · vehicle (centre) ·
+  // night/afternoon driver (right) — so a two-shift vehicle reads at a glance.
+  function planPdfTables(): PdfTable[] {
+    const regBy = new Map<string, string>()
+    ownedBuses.forEach((v) => regBy.set(v.fleet_no, v.reg_plate))
+    operatedAll.forEach((v) => regBy.set(v.fleet_no, v.reg_plate))
+    const vehicles = new Map<string, { day: string[]; night: string[] }>()
+    const workshop: string[] = []
+    for (const a of weekAssigns) {
+      const drv = driverById.get(a.driver_id)
+      const st = drv ? firstWorkingShift(drv, periodDates) : null
+      const isNight = st ? SHIFT_META[st].kind === 'night' : (drv ? effectiveKind(drv) === 'night' : false)
+      const detail = drv && st ? [dutyLabel(drv, st), dutyHours(drv, st)].filter(Boolean).join(' ') : ''
+      const cover = a.overtime ? ` (OT ${datesInRange(a.cover_start || a.week_start, a.cover_end || a.week_end).length}d)` : ''
+      const line = `${cleanName(a.driver_name)}${cover}${detail ? ` · ${detail}` : ''}`
+      if (a.fleet_no === WORKSHOP) { workshop.push(line); continue }
+      const v = vehicles.get(a.fleet_no) ?? { day: [], night: [] }
+      ;(isNight ? v.night : v.day).push(line)
+      vehicles.set(a.fleet_no, v)
+    }
+    const rows = [...vehicles.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([fleet, v]) => [v.day.join('\n') || '—', `${fleet}\n${regBy.get(fleet) ?? '—'}`, v.night.join('\n') || '—'])
+    const tables: PdfTable[] = [{
+      heading: 'Day / Morning  ·  Vehicle  ·  Night / Afternoon',
+      head: ['Day / Morning', 'Vehicle', 'Night / Afternoon'],
+      rows,
+      columnStyles: { 0: { halign: 'left' }, 1: { halign: 'center', fontStyle: 'bold' }, 2: { halign: 'right' } },
+    }]
+    if (workshop.length) tables.push({ heading: 'Workshop duty', head: ['Driver'], rows: workshop.map((w) => [w]) })
+    return tables
+  }
+  const pdfSubtitle = () => `${periodLabel} · ${weekAssigns.length} assignments · ${weekAssigns.filter((a) => a.overtime).length} overtime`
   function exportPdf() {
-    const rows = planRows().map((r) => [r.vehicle, r.reg, r.driver, r.duty])
     downloadTablePdf({
       title: `Weekly Plan — ${branchLabel}`,
-      subtitle: `${periodLabel} · ${weekAssigns.length} assignments · ${weekAssigns.filter((a) => a.overtime).length} overtime`,
-      tables: [{ heading: 'Vehicle assignments', head: ['Vehicle', 'Reg', 'Driver', 'Duty'], rows }],
+      subtitle: pdfSubtitle(),
+      tables: planPdfTables(),
       landscape: true,
       filename: `Weekly Plan - ${branchLabel} - ${period.start}.pdf`,
     })
@@ -195,8 +227,7 @@ export default function WeeklyPlan() {
   }
   function saveToDocs() {
     if (weekAssigns.length === 0) return
-    const rows = planRows().map((r) => [r.vehicle, r.reg, r.driver, r.duty])
-    const doc = buildTablePdf({ title: `Weekly Plan — ${branchLabel}`, subtitle: `${periodLabel} · ${weekAssigns.length} assignments · ${weekAssigns.filter((a) => a.overtime).length} overtime`, tables: [{ heading: 'Vehicle assignments', head: ['Vehicle', 'Reg', 'Driver', 'Duty'], rows }], landscape: true })
+    const doc = buildTablePdf({ title: `Weekly Plan — ${branchLabel}`, subtitle: pdfSubtitle(), tables: planPdfTables(), landscape: true })
     const blob = doc.output('blob')
     const fileName = `Weekly Plan - ${branchLabel} - ${period.start}.pdf`
     const fileId = `wplan_${branch}_${period.start}_${Date.now()}`
