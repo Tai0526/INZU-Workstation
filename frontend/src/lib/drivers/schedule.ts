@@ -11,7 +11,8 @@
  *  • 10 on / 5 off — CONTINUOUS 12-hour: 5 days Day, 5 days Night, 5 days off.
  */
 
-import { schedulingStore, crewShiftKind, windowForKind, blocksForKind, inAnyBlock } from '@/lib/drivers/scheduling'
+import { schedulingStore, windowForKind, blocksForKind, inAnyBlock } from '@/lib/drivers/scheduling'
+import { effectiveKind } from '@/lib/drivers/driverShifts'
 
 export type ShiftType = 'day_split' | 'night_split' | 'day_cont' | 'night_cont' | 'off'
 export type ShiftKind = 'day' | 'night' | 'off'
@@ -90,19 +91,14 @@ export function shiftOnDate(patternKey: string, anchorISO: string, dateISO: stri
 }
 
 /**
- * Rotation a section runs — assignment is automatic from the driver's section:
- *   Pit → 14/7 · Security & Dewatering → 10/5 · all other sections → 7/7 split.
- * For the split sections the day/night variant follows the crew's configured
- * shift (Admin → Scheduling); by default A = Day, B = Night.
+ * A driver's rotation pattern key — from their section, and for the 7/7 split
+ * sections the day/night of their EFFECTIVE shift (per-driver override → crew
+ * default). Pit → 14/7 · Security & Dewatering → 10/5 · all others → 7/7.
  */
-export function sectionPattern(section: string, crew: string): string {
-  if (section.startsWith('Pit')) return '14x7' // both Pit (Enterprise Mine) and Pit (Sentinel Mine)
-  if (section === 'Security' || section === 'Dewatering') return '10x5'
-  return crewShiftKind(schedulingStore.get(), crew) === 'night' ? '7x7_night' : '7x7_day'
-}
-/** A driver's rotation pattern key — derived from their section + crew. */
-export function patternKeyFor(d: { section: string; crew: string }): string {
-  return sectionPattern(d.section, d.crew)
+export function patternKeyFor(d: { id?: string; section: string; crew: string }): string {
+  if (d.section.startsWith('Pit')) return '14x7' // both Pit (Enterprise Mine) and Pit (Sentinel Mine)
+  if (d.section === 'Security' || d.section === 'Dewatering') return '10x5'
+  return effectiveKind(d) === 'night' ? '7x7_night' : '7x7_day'
 }
 export function anchorFor(d: { schedule_anchor?: string }): string {
   return d.schedule_anchor || DEFAULT_ANCHOR
@@ -118,6 +114,6 @@ export function isWithinShift(t: ShiftType, now: Date = new Date()): boolean {
 
 const localISO = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 /** The shift a driver's rotation puts them on today (local date). */
-export function scheduledShift(d: { section: string; schedule_anchor?: string; crew: string }, now: Date = new Date()): ShiftType {
+export function scheduledShift(d: { id?: string; section: string; schedule_anchor?: string; crew: string }, now: Date = new Date()): ShiftType {
   return shiftOnDate(patternKeyFor(d), anchorFor(d), localISO(now))
 }

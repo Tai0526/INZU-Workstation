@@ -1,8 +1,9 @@
 import type { BranchCode } from '@/lib/roles'
 import type { StatusTone } from '@/components/ui/StatusBadge'
 import { daysUntil, EXPIRY_WARNING_DAYS } from '@/lib/documents/types'
-import { scheduledShift, isWithinShift } from '@/lib/drivers/schedule'
-import { schedulingStore, windowForKind, blocksForKind, inAnyBlock } from '@/lib/drivers/scheduling'
+import { scheduledShift } from '@/lib/drivers/schedule'
+import { schedulingStore, windowForKind, blocksForKind, inAnyBlock, shiftBlocks } from '@/lib/drivers/scheduling'
+import { effectiveShiftDef } from '@/lib/drivers/driverShifts'
 
 // ── Crews & shifts (spec §4.3.2) ───────────────────────────────────────
 // Crews are admin-configurable (Admin → Scheduling) — A, B, C… each optionally
@@ -86,7 +87,9 @@ export function driverShiftState(d: Driver, now = new Date()): ShiftState {
   const sched = scheduledShift(d, now)
   // Working a scheduled rest day = overtime (covering). Otherwise the rotation rules.
   if (sched === 'off') return d.overtime ? 'overtime' : 'off'
-  return isWithinShift(sched, now) ? 'on_shift' : 'off'
+  // On a work day, "on shift now" uses the driver's own shift window (morning,
+  // afternoon, etc.) rather than the generic day/night window.
+  return inAnyBlock(shiftBlocks(effectiveShiftDef(d)), now) ? 'on_shift' : 'off'
 }
 
 // ── Compliance expiry (licence / PSV). Medical & site classes live in

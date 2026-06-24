@@ -159,13 +159,30 @@ export function crewShiftLabel(c: SchedulingConfig, crewId: string): string {
   return t ? `${s.label} (${t})` : s.label
 }
 /**
+ * day/night kind of a shift. Night when the name reads night/afternoon/evening,
+ * OR the (first) block wraps past midnight — so an Afternoon shift that ends at
+ * 02:00 counts as night. Morning / Day shifts read as day.
+ */
+export function shiftKindOf(s?: ShiftDef): 'day' | 'night' {
+  if (!s) return 'day'
+  if (/night|afternoon|evening/i.test(s.label) || /night/i.test(s.id)) return 'night'
+  const a = parseHM(s.start), b = parseHM(s.end)
+  if (a != null && b != null && b <= a) return 'night' // wraps past midnight
+  return 'day'
+}
+/** Short code for a shift — first letter of its label (Morning→M, Afternoon→A, Day→D, Night→N). */
+export function shiftShort(s?: ShiftDef): string {
+  if (!s) return '·'
+  const m = s.label.trim().match(/[A-Za-z0-9]/)
+  return m ? m[0].toUpperCase() : (shiftKindOf(s) === 'night' ? 'N' : 'D')
+}
+/**
  * day/night kind for the rotation engine — inferred from the crew's linked
- * shift (name contains "night" → night). Legacy fallback: a crew called "B"
- * with no shift is treated as night, anything else as day.
+ * shift. Legacy fallback: a crew called "B" with no shift is treated as night.
  */
 export function crewShiftKind(c: SchedulingConfig, crewId: string): 'day' | 'night' {
   const s = shiftForCrew(c, crewId)
-  if (s) return /night/i.test(`${s.id} ${s.label}`) ? 'night' : 'day'
+  if (s) return shiftKindOf(s)
   return crewId.trim().toUpperCase() === 'B' ? 'night' : 'day'
 }
 
@@ -188,7 +205,7 @@ export function windowForKind(c: SchedulingConfig, kind: 'day' | 'night'): strin
   return shiftTime(shiftDefForKind(c, kind))
 }
 /** Numeric [start, end] block(s) of a shift def; `end` may exceed 24 when wrapping past midnight. */
-function defBlocks(s?: ShiftDef): [number, number][] {
+export function shiftBlocks(s?: ShiftDef): [number, number][] {
   const out: [number, number][] = []
   const add = (st?: string, en?: string) => {
     const a = parseHM(st), b = parseHM(en)
@@ -204,7 +221,7 @@ function defBlocks(s?: ShiftDef): [number, number][] {
  * midnight (e.g. 17:00–05:00 → [17, 29]).
  */
 export function blocksForKind(c: SchedulingConfig, kind: 'day' | 'night'): [number, number][] {
-  return defBlocks(shiftDefForKind(c, kind))
+  return shiftBlocks(shiftDefForKind(c, kind))
 }
 /** Is the clock time `now` inside any of these blocks? */
 export function inAnyBlock(blocks: [number, number][], now: Date): boolean {

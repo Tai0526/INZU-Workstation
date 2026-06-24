@@ -11,6 +11,7 @@ import ReassignModal from '@/components/drivers/ReassignModal'
 import { useDrivers, driversStore } from '@/lib/drivers/store'
 import { type Driver, SHIFT_STATE_META, driverShiftState } from '@/lib/drivers/types'
 import { useCrews, useScheduling, crewLabel } from '@/lib/drivers/scheduling'
+import { effectiveShort, effectiveWindow, useDriverShifts } from '@/lib/drivers/driverShifts'
 import { scheduledShift, SHIFT_META, shiftHours, type ShiftKind } from '@/lib/drivers/schedule'
 import { useWeeklyAssign } from '@/lib/operations/store'
 import { buildAssignmentIndex, dutyOn } from '@/lib/drivers/duty'
@@ -31,6 +32,7 @@ export default function DriverRoster() {
 
   const all = useDrivers()
   const crews = useCrews()
+  useDriverShifts() // regroup/relabel when shift assignments change
   const assigns = useWeeklyAssign()
   const today = new Date().toISOString().slice(0, 10)
   const idx = useMemo(() => buildAssignmentIndex(assigns.filter((a) => a.branch === branch)), [assigns, branch])
@@ -155,7 +157,7 @@ function ShiftColumn({
         {drivers.map((d) => {
           const state = driverShiftState(d)
           const meta = SHIFT_STATE_META[state]
-          const schedHours = shiftHours(scheduledShift(d))
+          const schedHours = effectiveWindow(d) || shiftHours(scheduledShift(d))
           const duty = dutyOn(d, today, idx)
           const isOT = kind === 'off' && (duty.kind === 'overtime' || d.overtime)
           const showVehicle = duty.vehicle && (kind !== 'off' || isOT)
@@ -164,6 +166,7 @@ function ShiftColumn({
               <button onClick={() => onOpen(d)} className="min-w-0 flex-1 text-left">
                 <div className="truncate text-sm font-medium text-navy">{d.full_name}</div>
                 <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-status-neutral">
+                  <span className="rounded-full bg-navy/10 px-1.5 py-0.5 text-[10px] font-bold text-navy" title="Shift">{effectiveShort(d)}</span>
                   <span className={SECTION_CHIP}>{d.section}</span>
                   {kind === 'off' ? <span>Crew {crewLabel(sched, d.crew)}</span> : <span title={schedHours}>{schedHours}</span>}
                   {showVehicle && <VehicleChip fleet={duty.vehicle} />}

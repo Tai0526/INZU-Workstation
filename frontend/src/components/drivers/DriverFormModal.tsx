@@ -6,7 +6,8 @@ import { BRANCHES, type BranchCode } from '@/lib/roles'
 import { SECTIONS } from '@/lib/org/sections'
 import { driversStore } from '@/lib/drivers/store'
 import { type Driver, type DriverInput, type Crew, type DriverStatus, patternFor, shiftWindow } from '@/lib/drivers/types'
-import { schedulingStore, useScheduling, crewLabel, crewShiftLabel, crewShiftKind } from '@/lib/drivers/scheduling'
+import { schedulingStore, useScheduling, crewLabel, crewShiftLabel, crewShiftKind, shiftTime, shiftKindOf } from '@/lib/drivers/scheduling'
+import { driverShiftsStore } from '@/lib/drivers/driverShifts'
 
 function Field({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) {
   return (
@@ -42,14 +43,17 @@ export default function DriverFormModal({
   const sched = useScheduling()
   const [form, setForm] = useState<DriverInput | Driver>(() => (editing ? { ...editing } : empty(lockedBranch ?? activeBranch)))
   const [error, setError] = useState('')
+  const [shiftId, setShiftId] = useState<string>(() => (editing ? driverShiftsStore.shiftFor(editing.id) : ''))
 
   const key = (editing?.id ?? 'new') + String(open)
   const [lastKey, setLastKey] = useState('')
   if (open && key !== lastKey) {
     setForm(editing ? { ...editing } : empty(lockedBranch ?? activeBranch))
+    setShiftId(editing ? driverShiftsStore.shiftFor(editing.id) : '')
     setError('')
     setLastKey(key)
   }
+  const selShift = sched.shifts.find((s) => s.id === shiftId)
 
   function set<K extends keyof Driver>(k: K, v: Driver[K]) {
     setForm((f) => {
@@ -68,8 +72,8 @@ export default function DriverFormModal({
     if (driversStore.conflict(employee_no, editing?.id)) return setError(`Employee number "${employee_no}" already exists.`)
 
     const payload = { ...form, full_name, employee_no }
-    if (editing) driversStore.update(editing.id, payload)
-    else driversStore.add(payload)
+    if (editing) { driversStore.update(editing.id, payload); driverShiftsStore.set(editing.id, shiftId || undefined) }
+    else { const created = driversStore.add(payload); driverShiftsStore.set(created.id, shiftId || undefined) }
     onClose()
   }
 
@@ -126,6 +130,12 @@ export default function DriverFormModal({
             {sched.crews.map((c) => (
               <option key={c.id} value={c.id}>Crew {c.label}{crewShiftLabel(sched, c.id) ? ` · ${crewShiftLabel(sched, c.id)}` : ''}</option>
             ))}
+          </select>
+        </Field>
+        <Field label="Shift / block" hint={selShift ? `${shiftKindOf(selShift) === 'night' ? 'Counts as night' : 'Counts as day'}${shiftTime(selShift) ? ` · ${shiftTime(selShift)}` : ''}` : 'Follows the crew’s shift'}>
+          <select className={inputCls} value={shiftId} onChange={(e) => setShiftId(e.target.value)}>
+            <option value="">Use crew default</option>
+            {sched.shifts.map((s) => <option key={s.id} value={s.id}>{s.label}{shiftTime(s) ? ` · ${shiftTime(s)}` : ''}</option>)}
           </select>
         </Field>
         <Field label="Section">

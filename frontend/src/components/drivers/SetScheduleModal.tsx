@@ -5,6 +5,7 @@ import { driversStore } from '@/lib/drivers/store'
 import type { Driver } from '@/lib/drivers/types'
 import { ROTATIONS, SHIFT_META, shiftHours, shiftOnDate, patternKeyFor, anchorFor } from '@/lib/drivers/schedule'
 import { useScheduling } from '@/lib/drivers/scheduling'
+import { effectiveShort, effectiveWindow, effectiveLabel, useDriverShifts } from '@/lib/drivers/driverShifts'
 
 const selCls = 'w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand'
 const iso = (d: Date) => d.toISOString().slice(0, 10)
@@ -18,6 +19,7 @@ export default function SetScheduleModal({ driver, open, onClose }: { driver: Dr
   const [anchor, setAnchor] = useState('')
   const [seen, setSeen] = useState('')
   useScheduling() // re-render when shift times change so the preview hours stay live
+  useDriverShifts() // and when this driver's shift assignment changes
 
   if (open && driver && seen !== driver.id) {
     setSeen(driver.id)
@@ -60,11 +62,14 @@ export default function SetScheduleModal({ driver, open, onClose }: { driver: Dr
           {preview.map(({ date, shift }) => {
             const meta = SHIFT_META[shift]
             const tone = meta.kind === 'day' ? 'bg-[#FCEAD3] text-[#8a4513]' : meta.kind === 'night' ? 'bg-[#DDE4F3] text-[#283a66]' : 'bg-canvas text-status-neutral'
+            const wLabel = meta.kind === 'off' ? meta.label : (effectiveLabel(driver) || meta.label)
+            const wHours = meta.kind === 'off' ? '' : (effectiveWindow(driver) || shiftHours(shift))
+            const cellShort = meta.kind === 'off' ? meta.short : effectiveShort(driver)
             return (
-              <div key={iso(date)} className={`flex w-12 flex-col items-center rounded-lg px-1 py-1.5 ${tone}`} title={`${date.toDateString()} — ${meta.label}${meta.kind !== 'off' && shiftHours(shift) ? ` (${shiftHours(shift)})` : ''}`}>
+              <div key={iso(date)} className={`flex w-12 flex-col items-center rounded-lg px-1 py-1.5 ${tone}`} title={`${date.toDateString()} — ${wLabel}${wHours ? ` (${wHours})` : ''}`}>
                 <span className="text-[9px] uppercase opacity-70">{date.toLocaleDateString('en', { weekday: 'short' }).slice(0, 2)}</span>
                 <span className="text-sm font-bold leading-tight">{date.getDate()}</span>
-                <span className="text-[10px] font-semibold">{meta.short}</span>
+                <span className="text-[10px] font-semibold">{cellShort}</span>
               </div>
             )
           })}

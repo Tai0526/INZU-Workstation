@@ -10,10 +10,11 @@ import { BRANCHES } from '@/lib/roles'
 import { putFile } from '@/lib/storage/fileStore'
 import { useDrivers, driversStore } from '@/lib/drivers/store'
 import {
-  type Driver, SHIFT_LABEL, patternFor, shiftWindow, SHIFT_STATE_META, driverShiftState,
+  type Driver, SHIFT_LABEL, SHIFT_STATE_META, driverShiftState,
   complianceItems, EXPIRY_TONE,
 } from '@/lib/drivers/types'
-import { useScheduling, crewLabel, crewShiftKind } from '@/lib/drivers/scheduling'
+import { useScheduling, crewLabel, shiftTime, windowForKind } from '@/lib/drivers/scheduling'
+import { effectiveShiftDef, effectiveKind, useDriverShifts } from '@/lib/drivers/driverShifts'
 import { useSpeedEvents } from '@/lib/speed/store'
 import { overBy, STATUS_META } from '@/lib/speed/types'
 import { useCases, INCIDENT_TYPE_META, CASE_STAGE_META } from '@/lib/safety/cases'
@@ -42,15 +43,17 @@ export default function DriverDetail({
 }) {
   const all = useDrivers()
   const sched = useScheduling()
+  useDriverShifts() // re-render when this driver's shift assignment changes
   const photoInput = useRef<HTMLInputElement>(null)
   // Resolve the live record so photo/doc changes reflect without reopening.
   const d = all.find((x) => x.id === driver?.id) ?? driver
   if (!d) return null
 
   const branch = BRANCHES.find((b) => b.code === d.branch)!
-  const shiftKey = crewShiftKind(sched, d.crew)
-  const shiftLabel = SHIFT_LABEL[shiftKey]
-  const windowStr = shiftWindow(patternFor(d.branch, d.section), shiftKey)
+  const eShift = effectiveShiftDef(d)
+  const shiftKey = effectiveKind(d)
+  const shiftLabel = eShift?.label ?? SHIFT_LABEL[shiftKey]
+  const windowStr = shiftTime(eShift) || windowForKind(sched, shiftKey)
   const state = driverShiftState(d)
   const stateMeta = SHIFT_STATE_META[state]
   const comp = complianceItems(d)
@@ -92,7 +95,7 @@ export default function DriverDetail({
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <StatusBadge tone={stateMeta.tone}>{stateMeta.label}</StatusBadge>
-          <span className="rounded-full bg-navy/5 px-2.5 py-0.5 text-xs font-medium text-navy">Crew {crewLabel(sched, d.crew)} · {shiftLabel} ({windowStr})</span>
+          <span className="rounded-full bg-navy/5 px-2.5 py-0.5 text-xs font-medium text-navy">Crew {crewLabel(sched, d.crew)} · {shiftLabel}{windowStr ? ` (${windowStr})` : ''}</span>
           <span className="rounded-full bg-navy/5 px-2.5 py-0.5 text-xs font-medium text-navy">{d.section}</span>
         </div>
       </div>

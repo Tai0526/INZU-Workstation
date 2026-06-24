@@ -17,6 +17,7 @@ import { useWeeklyAssign, weeklyAssignStore } from '@/lib/operations/store'
 import type { Driver } from '@/lib/drivers/types'
 import { shiftOnDate, patternKeyFor, anchorFor, SHIFT_META, shiftHours, type ShiftType } from '@/lib/drivers/schedule'
 import { useScheduling } from '@/lib/drivers/scheduling'
+import { effectiveLabel, effectiveWindow, useDriverShifts } from '@/lib/drivers/driverShifts'
 import { WORKSHOP, fridayOf, datesInRange } from '@/lib/drivers/duty'
 import { downloadTablePdf, buildTablePdf } from '@/lib/reports/pdfDoc'
 
@@ -59,6 +60,7 @@ export default function WeeklyPlan() {
   const operatedAll = useOperatedVehicles().filter((v) => v.branch === branch && v.status !== 'grounded').sort((a, b) => a.fleet_no.localeCompare(b.fleet_no))
   const assigns = useWeeklyAssign()
   useScheduling() // re-render when shift times / crews change so duty windows stay live
+  useDriverShifts() // …and when a driver's morning/afternoon assignment changes
 
   // The week runs Friday → Friday (shift change Friday 10:00); the period is customizable.
   const [period, setPeriod] = useState(() => { const start = fridayOf(isoOf(new Date())); return { start, end: addDaysISO(start, 6) } })
@@ -163,7 +165,9 @@ export default function WeeklyPlan() {
         const drv = driverById.get(a.driver_id)
         const st = drv ? firstWorkingShift(drv, periodDates) : null
         const coverDays = datesInRange(a.cover_start || a.week_start, a.cover_end || a.week_end).length
-        const duty = a.overtime ? `Overtime — ${coverDays} day${coverDays === 1 ? '' : 's'}` : a.fleet_no === WORKSHOP ? 'Workshop duty' : st ? `${SHIFT_META[st].kind === 'day' ? 'Day' : 'Night'}${shiftHours(st) ? ` · ${shiftHours(st)}` : ''}` : 'On shift'
+        const win = (drv && effectiveWindow(drv)) || (st ? shiftHours(st) : '')
+        const shiftName = (drv && effectiveLabel(drv)) || (st ? (SHIFT_META[st].kind === 'day' ? 'Day' : 'Night') : '')
+        const duty = a.overtime ? `Overtime — ${coverDays} day${coverDays === 1 ? '' : 's'}` : a.fleet_no === WORKSHOP ? 'Workshop duty' : st ? `${shiftName}${win ? ` · ${win}` : ''}` : 'On shift'
         return { vehicle: a.fleet_no === WORKSHOP ? 'Workshop' : a.fleet_no, reg: a.fleet_no === WORKSHOP ? '—' : (regBy.get(a.fleet_no) ?? '—'), driver: cleanName(a.driver_name), duty }
       })
   }
@@ -349,10 +353,12 @@ export default function WeeklyPlan() {
                           const cs = a.cover_start || a.week_start
                           const ce = a.cover_end || a.week_end
                           const coverDays = datesInRange(cs, ce).length
+                          const win = (drv && effectiveWindow(drv)) || (st ? shiftHours(st) : '')
+                          const shiftName = (drv && effectiveLabel(drv)) || (st ? (SHIFT_META[st].kind === 'day' ? 'Day' : 'Night') : '')
                           const label = a.overtime
                             ? `Overtime · ${coverDays}d`
                             : slot.workshop ? 'Workshop duty'
-                              : st ? `${SHIFT_META[st].kind === 'day' ? 'Day' : 'Night'}${shiftHours(st) ? ` · ${shiftHours(st)}` : ''}`
+                              : st ? `${shiftName}${win ? ` · ${win}` : ''}`
                                 : 'On shift'
                           return (
                             <div key={a.id} className="flex items-start gap-1.5 rounded-lg border border-black/10 bg-white px-2 py-1">

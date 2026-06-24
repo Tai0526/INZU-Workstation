@@ -12,6 +12,7 @@ import { useDrivers } from '@/lib/drivers/store'
 import type { Driver } from '@/lib/drivers/types'
 import { ROTATIONS, SHIFT_META, shiftHours, shiftOnDate, patternKeyFor, anchorFor, type ShiftKind } from '@/lib/drivers/schedule'
 import { useScheduling, windowForKind } from '@/lib/drivers/scheduling'
+import { effectiveShort, effectiveWindow, effectiveLabel, useDriverShifts } from '@/lib/drivers/driverShifts'
 import { useWeeklyAssign } from '@/lib/operations/store'
 import { buildAssignmentIndex, dutyOn } from '@/lib/drivers/duty'
 
@@ -33,6 +34,7 @@ export default function DriverSchedule() {
 
   const all = useDrivers()
   const sched = useScheduling()
+  useDriverShifts() // relabel cells when shift assignments change
   const dayWin = windowForKind(sched, 'day') || '—'
   const nightWin = windowForKind(sched, 'night') || '—'
   const assigns = useWeeklyAssign()
@@ -141,11 +143,14 @@ export default function DriverSchedule() {
                       const duty = dutyOn(dr, d.dateISO, idx)
                       const meta = SHIFT_META[duty.shift]
                       const isOT = duty.kind === 'overtime'
-                      const tip = `${dr.full_name} · ${d.dateISO} — ${isOT ? `Overtime${duty.vehicle ? ` on ${duty.vehicle}` : ''}` : `${meta.label}${meta.kind !== 'off' && shiftHours(duty.shift) ? ` (${shiftHours(duty.shift)})` : ''}${duty.vehicle ? ` · ${duty.vehicle}` : ''}`}`
+                      const wLabel = meta.kind === 'off' ? meta.label : (effectiveLabel(dr) || meta.label)
+                      const wHours = meta.kind === 'off' ? '' : (effectiveWindow(dr) || shiftHours(duty.shift))
+                      const cellShort = meta.kind === 'off' ? meta.short : effectiveShort(dr)
+                      const tip = `${dr.full_name} · ${d.dateISO} — ${isOT ? `Overtime${duty.vehicle ? ` on ${duty.vehicle}` : ''}` : `${wLabel}${wHours ? ` (${wHours})` : ''}${duty.vehicle ? ` · ${duty.vehicle}` : ''}`}`
                       return (
                         <td key={d.day} className={clsx('h-8 w-7 border-l border-black/5 text-center', d.weekend && meta.kind === 'off' && !isOT && 'bg-black/[0.02]')}>
                           <span className={clsx('mx-auto flex h-7 w-6 items-center justify-center rounded text-[11px] font-bold', isOT ? OT_CELL : KIND_CELL[meta.kind], d.dateISO === todayISO && 'ring-1 ring-brand')} title={tip}>
-                            {isOT ? 'OT' : meta.short}
+                            {isOT ? 'OT' : cellShort}
                           </span>
                         </td>
                       )
