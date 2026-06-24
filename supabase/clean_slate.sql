@@ -1,32 +1,24 @@
 -- ===========================================================================
 -- CLEAN SLATE — wipe all operational data so you can enter real records.
 -- Run this MANUALLY in the Supabase SQL Editor when you want a fresh start.
--- It does NOT touch user accounts (public.profiles) or login history.
--- (Migrated tables already start empty; this just clears any test rows.)
+-- It does NOT touch user accounts (public.profiles), settings (app_config),
+-- or login history. Tables that don't exist yet are skipped, so this is safe to
+-- run no matter which migrations you've applied.
 -- ===========================================================================
-truncate table
-  public.vehicles,
-  public.operated_vehicles,
-  public.drivers,
-  public.employees,
-  public.op_routes,
-  public.op_allocations,
-  public.op_mileage,
-  public.op_daily_plan,
-  public.op_weekly_assign,
-  public.documents,
-  public.speed_events,
-  public.disciplinary_cases,
-  public.safety_compliance,
-  public.safety_training,
-  public.safety_hazards,
-  public.safety_cap,
-  public.safety_loto,
-  public.safety_tools,
-  public.fuel_issuances,
-  public.fuel_receipts,
-  public.fuel_generator,
-  public.mileage_trips,
-  public.mileage_routes,
-  public.payroll_deductions,
-  public.report_recipients;
+do $$
+declare t text;
+begin
+  foreach t in array array[
+    'vehicles', 'operated_vehicles', 'drivers', 'employees',
+    'op_routes', 'op_allocations', 'op_mileage', 'op_daily_plan', 'op_weekly_assign',
+    'documents', 'speed_events', 'disciplinary_cases',
+    'safety_compliance', 'safety_training', 'safety_hazards', 'safety_cap', 'safety_loto', 'safety_tools',
+    'fuel_issuances', 'fuel_receipts', 'fuel_generator',
+    'mileage_trips', 'mileage_routes', 'payroll_deductions', 'report_recipients'
+  ]
+  loop
+    if to_regclass('public.' || t) is not null then
+      execute format('truncate table public.%I', t);
+    end if;
+  end loop;
+end $$;
