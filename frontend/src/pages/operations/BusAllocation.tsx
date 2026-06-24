@@ -12,15 +12,15 @@ import { useVehicles } from '@/lib/fleet/store'
 import { useDrivers } from '@/lib/drivers/store'
 import { useAllocations, allocationsStore, useDailyPlan } from '@/lib/operations/store'
 import { type Allocation, type AllocationInput, type DailyPlanTrip, type TripType, TRIP_LABEL } from '@/lib/operations/types'
-import { useMileageRoutes } from '@/lib/mileage/store'
-import { routeTotal } from '@/lib/mileage/types'
+import { useLocations } from '@/lib/operations/locations'
 import { downloadAllocTemplate, parseAllocations, exportAllocations, type AllocImportResult } from '@/lib/operations/excel'
 import { exportReportWord, esc, type ReportInput } from '@/lib/reports/exporter'
 import { downloadTablePdf, type PdfTable } from '@/lib/reports/pdfDoc'
 import { useRecipients, recipientsStore, isValidEmail } from '@/lib/reports/recipients'
 
-const routeLabel = (r: any) => `${r.name} · ${r.project} (${routeTotal(r)} km)`
 const inputCls = 'w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand'
+// Build <select> options, keeping a current value that's no longer in the list visible.
+const withCurrent = (val: string, opts: string[]) => (val && !opts.includes(val) ? [val, ...opts] : opts)
 const today = () => new Date().toISOString().slice(0, 10)
 const nowHM = () => { const d = new Date(); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` }
 
@@ -66,11 +66,11 @@ export default function BusAllocation() {
   const branchLabel = BRANCHES.find((b) => b.code === branch)!.short
   const canPlan = canEdit(role, 'operations') || role === 'route_supervisor'
 
-  const routes = useMileageRoutes().filter((r) => r.branch === branch)
   const allocations = useAllocations()
   const dailyPlan = useDailyPlan()
   const vehicles = useVehicles().filter((v) => v.branch === branch)
   const drivers = useDrivers().filter((d) => d.branch === branch)
+  const locations = useLocations(branch)
 
   const [date, setDate] = useState(today)
   const [multiOpen, setMultiOpen] = useState(false)
@@ -149,7 +149,7 @@ export default function BusAllocation() {
           {dayPlan.length > 0 && (
             <Section title="Planned runs" hint={`${loggedCount}/${dayPlan.length} logged`}>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {dayPlan.map((t) => <PlanCard key={t.id} trip={t} actual={actualByPlan.get(t.id)} canPlan={canPlan} branch={branch} date={date} />)}
+                {dayPlan.map((t) => <PlanCard key={t.id} trip={t} actual={actualByPlan.get(t.id)} canPlan={canPlan} branch={branch} date={date} vehicles={vehicles} drivers={drivers} />)}
               </div>
             </Section>
           )}
@@ -166,11 +166,8 @@ export default function BusAllocation() {
         </div>
       )}
 
-      <datalist id="dl-drivers">{drivers.map((d) => <option key={d.id} value={d.full_name} />)}</datalist>
-      <datalist id="dl-fleet">{vehicles.map((v) => <option key={v.id} value={v.fleet_no} />)}</datalist>
-
-      <MultiRunModal open={multiOpen} onClose={() => setMultiOpen(false)} branch={branch} date={date} routes={routes} vehicles={vehicles} />
-      <RunModal state={runModal} onClose={() => setRunModal({ open: false, editing: null })} branch={branch} date={date} routes={routes} vehicles={vehicles} />
+      <MultiRunModal open={multiOpen} onClose={() => setMultiOpen(false)} branch={branch} date={date} vehicles={vehicles} drivers={drivers} locations={locations} />
+      <RunModal state={runModal} onClose={() => setRunModal({ open: false, editing: null })} branch={branch} date={date} vehicles={vehicles} drivers={drivers} locations={locations} />
       <AllocImportModal open={importOpen} onClose={() => setImportOpen(false)} branch={branch} />
       <AllocEmailModal open={emailOpen} onClose={() => setEmailOpen(false)} date={date} branchLabel={branchLabel} pickups={pickups} knockoffs={knockoffs} />
 
@@ -193,7 +190,7 @@ function TypePill({ type }: { type: TripType }) {
 }
 
 // A planned trip with inline passenger logging — the core mobile action.
-function PlanCard({ trip, actual, canPlan, branch, date }: { trip: DailyPlanTrip; actual?: Allocation; canPlan: boolean; branch: BranchCode; date: string }) {
+function PlanCard({ trip, actual, canPlan, branch, date, vehicles, drivers }: { trip: DailyPlanTrip; actual?: Allocation; canPlan: boolean; branch: BranchCode; date: string; vehicles: any[]; drivers: any[] }) {
   const [open, setOpen] = useState(false)
   const [pax, setPax] = useState('')
   const [time, setTime] = useState('')
@@ -210,8 +207,9 @@ function PlanCard({ trip, actual, canPlan, branch, date }: { trip: DailyPlanTrip
     setOpen(true)
   }
   function save() {
+    const veh = vehicles.find((v) => v.fleet_no === fleet.trim())
     const payload = {
-      branch, date, trip_type: trip.trip_type, driver_name: driver.trim(), fleet_no: fleet.trim(), reg_no: trip.reg_no,
+      branch, date, trip_type: trip.trip_type, driver_name: driver.trim(), fleet_no: fleet.trim(), reg_no: veh ? veh.reg_plate : trip.reg_no,
       route_id: '', location: trip.from_location || trip.to_location || '', planned_km: 0,
       departure_time: time, passengers: pax === '' ? null : Number(pax), notes: '', plan_trip_id: trip.id,
     }
@@ -267,8 +265,8 @@ function PlanCard({ trip, actual, canPlan, branch, date }: { trip: DailyPlanTrip
             <button onClick={() => setShowChange(true)} className="text-xs font-medium text-brand hover:underline">Different bus or driver?</button>
           ) : (
             <div className="grid grid-cols-2 gap-2">
-              <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Bus</span><input list="dl-fleet" value={fleet} onChange={(e) => setFleet(e.target.value)} className={inputCls} /></label>
-              <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Driver</span><input list="dl-drivers" value={driver} onChange={(e) => setDriver(e.target.value)} className={inputCls} /></label>
+              <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Bus</span><select value={fleet} onChange={(e) => setFleet(e.target.value)} className={inputCls}>{withCurrent(fleet, vehicles.map((v) => v.fleet_no)).map((n) => <option key={n} value={n}>{n}</option>)}</select></label>
+              <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Driver</span><select value={driver} onChange={(e) => setDriver(e.target.value)} className={inputCls}><option value="">—</option>{withCurrent(driver, drivers.map((d) => d.full_name)).map((n) => <option key={n} value={n}>{n}</option>)}</select></label>
             </div>
           )}
           <div className="flex gap-2 pt-0.5">
@@ -305,11 +303,11 @@ function ActualCard({ run, canPlan, onEdit }: { run: Allocation; canPlan: boolea
 }
 
 // ── Power-user bulk entry (kept for the office) ───────────────────────────────
-interface DraftRow { trip_type: TripType; driver_name: string; fleet_no: string; reg_no: string; route_id: string; departure_time: string; passengers: string }
-const emptyRow = (): DraftRow => ({ trip_type: 'pickup', driver_name: '', fleet_no: '', reg_no: '', route_id: '', departure_time: '', passengers: '' })
+interface DraftRow { trip_type: TripType; driver_name: string; fleet_no: string; reg_no: string; location: string; departure_time: string; passengers: string }
+const emptyRow = (): DraftRow => ({ trip_type: 'pickup', driver_name: '', fleet_no: '', reg_no: '', location: '', departure_time: '', passengers: '' })
 const cellCls = 'w-full rounded-md border border-black/15 bg-white px-2 py-1 text-xs text-navy outline-none focus:border-brand'
 
-function MultiRunModal({ open, onClose, branch, date, routes, vehicles }: { open: boolean; onClose: () => void; branch: BranchCode; date: string; routes: any[]; vehicles: any[] }) {
+function MultiRunModal({ open, onClose, branch, date, vehicles, drivers, locations }: { open: boolean; onClose: () => void; branch: BranchCode; date: string; vehicles: any[]; drivers: any[]; locations: string[] }) {
   const [d, setD] = useState(date)
   const [rows, setRows] = useState<DraftRow[]>([emptyRow(), emptyRow(), emptyRow()])
   const [wasOpen, setWasOpen] = useState(false)
@@ -318,51 +316,46 @@ function MultiRunModal({ open, onClose, branch, date, routes, vehicles }: { open
 
   function setRow(i: number, patch: Partial<DraftRow>) { setRows((rs) => rs.map((r, idx) => (idx === i ? { ...r, ...patch } : r))) }
   function onFleet(i: number, v: string) {
-    const veh = vehicles.find((x) => x.fleet_no.toLowerCase() === v.toLowerCase())
-    setRows((rs) => rs.map((r, idx) => (idx === i ? { ...r, fleet_no: v, reg_no: veh ? veh.reg_plate : r.reg_no } : r)))
+    const veh = vehicles.find((x) => x.fleet_no === v)
+    setRows((rs) => rs.map((r, idx) => (idx === i ? { ...r, fleet_no: v, reg_no: veh ? veh.reg_plate : '' } : r)))
   }
-  const km = (id: string) => { const r = routes.find((x) => x.id === id); return r ? routeTotal(r) : 0 }
-  const readyCount = rows.filter((r) => r.fleet_no.trim() && r.route_id).length
+  const readyCount = rows.filter((r) => r.fleet_no.trim() && r.location.trim()).length
 
   function save() {
-    const valid = rows.filter((r) => r.fleet_no.trim() && r.route_id).map((r) => {
-      const route = routes.find((x) => x.id === r.route_id)
-      return {
-        branch, date: d, trip_type: r.trip_type, driver_name: r.driver_name.trim(), fleet_no: r.fleet_no.trim(),
-        reg_no: r.reg_no.trim(), route_id: r.route_id, location: route?.name ?? '', planned_km: route ? routeTotal(route) : 0,
-        departure_time: r.departure_time, passengers: r.passengers ? Number(r.passengers) : null, notes: '',
-      }
-    })
+    const valid = rows.filter((r) => r.fleet_no.trim() && r.location.trim()).map((r) => ({
+      branch, date: d, trip_type: r.trip_type, driver_name: r.driver_name.trim(), fleet_no: r.fleet_no.trim(),
+      reg_no: r.reg_no.trim(), route_id: '', location: r.location.trim(), planned_km: 0,
+      departure_time: r.departure_time, passengers: r.passengers ? Number(r.passengers) : null, notes: '',
+    }))
     if (valid.length) allocationsStore.bulkAdd(valid)
     onClose()
   }
 
   return (
-    <Modal open={open} onClose={onClose} size="xl" title="Add many runs" subtitle="Enter the day's runs like a sheet — add as many rows as you need, then save once."
+    <Modal open={open} onClose={onClose} size="xl" title="Add many runs" subtitle="Enter the day's runs like a sheet — bus, driver and location are picked from your lists. Save once."
       footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={save} disabled={readyCount === 0}>Save {readyCount} run{readyCount === 1 ? '' : 's'}</Button></>}>
       <div className="mb-3 flex items-center gap-2">
         <span className="text-xs font-medium text-navy">Date</span>
         <input type="date" value={d} onChange={(e) => setD(e.target.value)} className="rounded-lg border border-black/15 bg-white px-2.5 py-1.5 text-sm text-navy outline-none focus:border-brand" />
       </div>
       <div className="overflow-x-auto rounded-lg border border-black/10">
-        <table className="w-full text-left">
+        <table className="w-full min-w-[760px] text-left">
           <thead className="bg-canvas text-[10px] uppercase tracking-wide text-status-neutral">
             <tr>
-              <th className="px-2 py-1.5 font-medium">Type</th><th className="px-2 py-1.5 font-medium">Driver</th>
-              <th className="px-2 py-1.5 font-medium">Fleet No</th><th className="px-2 py-1.5 font-medium">Reg No</th>
-              <th className="px-2 py-1.5 font-medium">Route</th><th className="px-2 py-1.5 font-medium">Mileage</th>
-              <th className="px-2 py-1.5 font-medium">Time</th><th className="px-2 py-1.5 font-medium">Pax</th><th className="px-2 py-1.5" />
+              <th className="px-2 py-1.5 font-medium">Type</th><th className="px-2 py-1.5 font-medium">Bus</th>
+              <th className="px-2 py-1.5 font-medium">Reg</th><th className="px-2 py-1.5 font-medium">Driver</th>
+              <th className="px-2 py-1.5 font-medium">Location</th><th className="px-2 py-1.5 font-medium">Time</th>
+              <th className="px-2 py-1.5 font-medium">Pax</th><th className="px-2 py-1.5" />
             </tr>
           </thead>
           <tbody>
             {rows.map((r, i) => (
               <tr key={i} className="border-t border-black/5">
                 <td className="px-1.5 py-1"><select className={cellCls} value={r.trip_type} onChange={(e) => setRow(i, { trip_type: e.target.value as TripType })}><option value="pickup">Pickup</option><option value="knockoff">Knock-off</option></select></td>
-                <td className="px-1.5 py-1"><input list="dl-drivers" className={cellCls} value={r.driver_name} onChange={(e) => setRow(i, { driver_name: e.target.value })} /></td>
-                <td className="px-1.5 py-1"><input list="dl-fleet" className={cellCls} placeholder="INZ 226" value={r.fleet_no} onChange={(e) => onFleet(i, e.target.value)} /></td>
-                <td className="px-1.5 py-1"><input className={cellCls} placeholder="BCG 4666" value={r.reg_no} onChange={(e) => setRow(i, { reg_no: e.target.value })} /></td>
-                <td className="px-1.5 py-1"><select className={cellCls} value={r.route_id} onChange={(e) => setRow(i, { route_id: e.target.value })}><option value="">Route…</option>{routes.map((x) => <option key={x.id} value={x.id}>{routeLabel(x)}</option>)}</select></td>
-                <td className="whitespace-nowrap px-2 py-1 text-xs text-status-neutral">{r.route_id ? `${km(r.route_id)} km` : '—'}</td>
+                <td className="px-1.5 py-1"><select className={cellCls} value={r.fleet_no} onChange={(e) => onFleet(i, e.target.value)}><option value="">Bus…</option>{vehicles.map((v) => <option key={v.id} value={v.fleet_no}>{v.fleet_no}</option>)}</select></td>
+                <td className="whitespace-nowrap px-2 py-1 text-xs text-status-neutral">{r.reg_no || '—'}</td>
+                <td className="px-1.5 py-1"><select className={cellCls} value={r.driver_name} onChange={(e) => setRow(i, { driver_name: e.target.value })}><option value="">Driver…</option>{drivers.map((dr) => <option key={dr.id} value={dr.full_name}>{dr.full_name}</option>)}</select></td>
+                <td className="px-1.5 py-1"><select className={cellCls} value={r.location} onChange={(e) => setRow(i, { location: e.target.value })}><option value="">Location…</option>{locations.map((n) => <option key={n} value={n}>{n}</option>)}</select></td>
                 <td className="px-1.5 py-1"><input type="time" className={cellCls} value={r.departure_time} onChange={(e) => setRow(i, { departure_time: e.target.value })} /></td>
                 <td className="px-1.5 py-1"><input type="number" className={cellCls} value={r.passengers} onChange={(e) => setRow(i, { passengers: e.target.value })} /></td>
                 <td className="px-1.5 py-1"><button onClick={() => setRows((rs) => rs.filter((_, idx) => idx !== i))} className="rounded p-1 text-status-neutral hover:bg-status-critical/10 hover:text-status-critical"><Trash2 size={13} /></button></td>
@@ -374,25 +367,20 @@ function MultiRunModal({ open, onClose, branch, date, routes, vehicles }: { open
       <button onClick={() => setRows((rs) => [...rs, emptyRow()])} className="mt-2 inline-flex items-center gap-1 rounded-lg border border-dashed border-navy/25 px-3 py-1.5 text-xs font-medium text-brand hover:border-brand">
         <Plus size={14} /> Add row
       </button>
-      {routes.length === 0 && <p className="mt-2 rounded-lg bg-brand-tint/40 px-3 py-2 text-xs text-[#8a4513]">No routes yet — add them in Mileage → Setup → Route catalogue.</p>}
     </Modal>
   )
 }
 
-function RunModal({ state, onClose, branch, date, routes, vehicles }: { state: { open: boolean; editing: Allocation | null }; onClose: () => void; branch: BranchCode; date: string; routes: any[]; vehicles: any[] }) {
+function RunModal({ state, onClose, branch, date, vehicles, drivers, locations }: { state: { open: boolean; editing: Allocation | null }; onClose: () => void; branch: BranchCode; date: string; vehicles: any[]; drivers: any[]; locations: string[] }) {
   const e = state.editing
   const [f, setF] = useState<AllocationInput>(blank(branch, date))
   const [key, setKey] = useState('')
   const k = (e?.id ?? 'new') + String(state.open)
   if (state.open && k !== key) { setKey(k); setF(e ? { ...e } : blank(branch, date)) }
   function set<K extends keyof AllocationInput>(kk: K, v: AllocationInput[K]) { setF((p) => ({ ...p, [kk]: v })) }
-  function onFleet(v: string) {
-    const veh = vehicles.find((x) => x.fleet_no.toLowerCase() === v.toLowerCase())
-    setF((p) => ({ ...p, fleet_no: v, reg_no: veh ? veh.reg_plate : p.reg_no }))
-  }
-  function onRoute(id: string) {
-    const r = routes.find((x) => x.id === id)
-    setF((p) => ({ ...p, route_id: id, location: r?.name ?? p.location, planned_km: r ? routeTotal(r) : 0 }))
+  function onVehicle(v: string) {
+    const veh = vehicles.find((x) => x.fleet_no === v)
+    setF((p) => ({ ...p, fleet_no: v, reg_no: veh ? veh.reg_plate : '' }))
   }
   function save() {
     if (!f.fleet_no.trim()) return
@@ -400,23 +388,30 @@ function RunModal({ state, onClose, branch, date, routes, vehicles }: { state: {
     onClose()
   }
   return (
-    <Modal open={state.open} onClose={onClose} title={e ? 'Edit run' : 'Add run'} subtitle="A run that isn't on the plan (or a correction)." footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={save}>Save</Button></>}>
+    <Modal open={state.open} onClose={onClose} title={e ? 'Edit run' : 'Add run'} subtitle="A run that isn't on the plan (or a correction). Bus, driver and place come from your lists." footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={save}>Save</Button></>}>
       <div className="grid grid-cols-2 gap-3">
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Trip type</span>
           <select className={inputCls} value={f.trip_type} onChange={(ev) => set('trip_type', ev.target.value as TripType)}>
             <option value="pickup">Pickup</option><option value="knockoff">Knock-off</option>
           </select></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Departure time</span><input type="time" className={inputCls} value={f.departure_time} onChange={(ev) => set('departure_time', ev.target.value)} /></label>
-        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Fleet No</span><input list="dl-fleet" className={inputCls} placeholder="INZ 226" value={f.fleet_no} onChange={(ev) => onFleet(ev.target.value)} /></label>
-        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Reg No</span><input className={inputCls} placeholder="BCG 4666" value={f.reg_no} onChange={(ev) => set('reg_no', ev.target.value)} /></label>
-        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Driver</span><input list="dl-drivers" className={inputCls} value={f.driver_name} onChange={(ev) => set('driver_name', ev.target.value)} /></label>
-        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Passengers</span><input type="number" className={inputCls} value={f.passengers ?? ''} onChange={(ev) => set('passengers', ev.target.value ? Number(ev.target.value) : null)} /></label>
-        <label className="col-span-2 block"><span className="mb-1 block text-xs font-medium text-navy">Route {routes.length > 0 && <span className="text-status-neutral">(optional — for mileage)</span>}</span>
-          <select className={inputCls} value={f.route_id} onChange={(ev) => onRoute(ev.target.value)}>
-            <option value="">{routes.length ? 'Select route…' : 'No routes — type a location below'}</option>
-            {routes.map((r) => <option key={r.id} value={r.id}>{routeLabel(r)}</option>)}
+        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Bus</span>
+          <select className={inputCls} value={f.fleet_no} onChange={(ev) => onVehicle(ev.target.value)}>
+            <option value="">Select bus…</option>
+            {withCurrent(f.fleet_no, vehicles.map((v) => v.fleet_no)).map((n) => <option key={n} value={n}>{n}</option>)}
           </select></label>
-        <label className="col-span-2 block"><span className="mb-1 block text-xs font-medium text-navy">Location / route name</span><input className={inputCls} placeholder="e.g. Kisasa" value={f.location} onChange={(ev) => set('location', ev.target.value)} /></label>
+        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Reg No</span><div className="flex h-[38px] items-center rounded-lg border border-black/10 bg-canvas px-3 text-sm text-navy">{f.reg_no || '—'}</div></label>
+        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Driver</span>
+          <select className={inputCls} value={f.driver_name} onChange={(ev) => set('driver_name', ev.target.value)}>
+            <option value="">Select driver…</option>
+            {withCurrent(f.driver_name, drivers.map((d) => d.full_name)).map((n) => <option key={n} value={n}>{n}</option>)}
+          </select></label>
+        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Passengers</span><input type="number" className={inputCls} value={f.passengers ?? ''} onChange={(ev) => set('passengers', ev.target.value ? Number(ev.target.value) : null)} /></label>
+        <label className="col-span-2 block"><span className="mb-1 block text-xs font-medium text-navy">Location / route name</span>
+          <select className={inputCls} value={f.location} onChange={(ev) => set('location', ev.target.value)}>
+            <option value="">Select place…</option>
+            {withCurrent(f.location, locations).map((n) => <option key={n} value={n}>{n}</option>)}
+          </select></label>
       </div>
     </Modal>
   )

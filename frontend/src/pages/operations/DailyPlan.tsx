@@ -66,8 +66,8 @@ export default function DailyPlan() {
   function setRow(i: number, patch: Partial<DraftRow>) { setRows((rs) => rs.map((r, idx) => (idx === i ? { ...r, ...patch } : r))); setError('') }
   function setRowType(i: number, t: TripType) { setRows((rs) => rs.map((r, idx) => (idx === i ? withGate(r, t) : r))) }
   function onFleet(i: number, v: string) {
-    const veh = vehicles.find((x) => x.fleet_no.toLowerCase() === v.trim().toLowerCase())
-    setRows((rs) => rs.map((r, idx) => (idx === i ? { ...r, fleet_no: v, reg_no: veh ? veh.reg_plate : r.reg_no } : r)))
+    const veh = vehicles.find((x) => x.fleet_no === v)
+    setRows((rs) => rs.map((r, idx) => (idx === i ? { ...r, fleet_no: v, reg_no: veh ? veh.reg_plate : '' } : r)))
     setError('')
   }
   function addRow() { setRows((rs) => [...rs, blankRow(defaultType)]) }
@@ -164,12 +164,12 @@ export default function DailyPlan() {
                 {rows.map((r, i) => (
                   <tr key={i} className="border-t border-black/5">
                     <td className="px-1.5 py-1 w-28"><select className={cellCls} value={r.trip_type} onChange={(e) => setRowType(i, e.target.value as TripType)}><option value="pickup">Pickup</option><option value="knockoff">Knock-off</option></select></td>
-                    <td className="px-1.5 py-1 w-28"><input list="dp-fleet" className={cellCls} placeholder="INZ 226" value={r.fleet_no} onChange={(e) => onFleet(i, e.target.value)} /></td>
-                    <td className="px-1.5 py-1 w-28"><input className={cellCls} placeholder="reg" value={r.reg_no} onChange={(e) => setRow(i, { reg_no: e.target.value })} /></td>
+                    <td className="px-1.5 py-1 w-28"><select className={cellCls} value={r.fleet_no} onChange={(e) => onFleet(i, e.target.value)}><option value="">Bus…</option>{vehicles.map((v) => <option key={v.id} value={v.fleet_no}>{v.fleet_no}</option>)}</select></td>
+                    <td className="whitespace-nowrap px-2 py-1 text-sm text-status-neutral">{r.reg_no || '—'}</td>
                     <td className="px-1.5 py-1"><select className={clsx(cellCls, r.from_location === GATE && 'font-medium text-brand')} value={r.from_location} onChange={(e) => setRow(i, { from_location: e.target.value })}><option value="">From…</option>{locationOptions.map((n) => <option key={n} value={n}>{n}</option>)}</select></td>
                     <td className="px-1.5 py-1"><select className={clsx(cellCls, r.to_location === GATE && 'font-medium text-brand')} value={r.to_location} onChange={(e) => setRow(i, { to_location: e.target.value })}><option value="">To…</option>{locationOptions.map((n) => <option key={n} value={n}>{n}</option>)}</select></td>
                     <td className="px-1.5 py-1 w-28"><input type="time" className={cellCls} value={r.departure_time} onChange={(e) => setRow(i, { departure_time: e.target.value })} /></td>
-                    <td className="px-1.5 py-1 w-40"><input list="dp-drivers" className={cellCls} placeholder="driver" value={r.driver_name} onChange={(e) => setRow(i, { driver_name: e.target.value })} /></td>
+                    <td className="px-1.5 py-1 w-40"><select className={cellCls} value={r.driver_name} onChange={(e) => setRow(i, { driver_name: e.target.value })}><option value="">Driver…</option>{drivers.map((dr) => <option key={dr.id} value={dr.full_name}>{dr.full_name}</option>)}</select></td>
                     <td className="px-1.5 py-1"><button onClick={() => removeRow(i)} className="rounded p-1 text-status-neutral hover:bg-status-critical/10 hover:text-status-critical"><Trash2 size={14} /></button></td>
                   </tr>
                 ))}
@@ -256,10 +256,7 @@ export default function DailyPlan() {
         </>
       )}
 
-      <datalist id="dp-drivers">{drivers.map((d) => <option key={d.id} value={d.full_name} />)}</datalist>
-      <datalist id="dp-fleet">{vehicles.map((v) => <option key={v.id} value={v.fleet_no} />)}</datalist>
-
-      <EditTripModal trip={editing} onClose={() => setEditing(null)} vehicles={vehicles} locations={locationOptions} />
+      <EditTripModal trip={editing} onClose={() => setEditing(null)} vehicles={vehicles} drivers={drivers} locations={locationOptions} />
       <PlacesModal open={placesOpen} onClose={() => setPlacesOpen(false)} branch={branch} />
 
       {!ROLES[role].canToggleBranch && <p className="text-xs text-status-neutral">Showing {branchLabel} only.</p>}
@@ -268,7 +265,7 @@ export default function DailyPlan() {
   )
 }
 
-function EditTripModal({ trip, onClose, vehicles, locations }: { trip: DailyPlanTrip | null; onClose: () => void; vehicles: any[]; locations: string[] }) {
+function EditTripModal({ trip, onClose, vehicles, drivers, locations }: { trip: DailyPlanTrip | null; onClose: () => void; vehicles: any[]; drivers: any[]; locations: string[] }) {
   const [f, setF] = useState<DraftRow | null>(null)
   const [key, setKey] = useState('')
   const k = trip?.id ?? ''
@@ -277,7 +274,9 @@ function EditTripModal({ trip, onClose, vehicles, locations }: { trip: DailyPlan
 
   const set = (patch: Partial<DraftRow>) => setF((p) => (p ? { ...p, ...patch } : p))
   const optsFor = (val: string) => (val && !locations.includes(val) ? [val, ...locations] : locations)
-  function onFleet(v: string) { const veh = vehicles.find((x) => x.fleet_no.toLowerCase() === v.trim().toLowerCase()); setF((p) => (p ? { ...p, fleet_no: v, reg_no: veh ? veh.reg_plate : p.reg_no } : p)) }
+  const fleetOpts = f.fleet_no && !vehicles.some((v) => v.fleet_no === f.fleet_no) ? [f.fleet_no, ...vehicles.map((v) => v.fleet_no)] : vehicles.map((v) => v.fleet_no)
+  const driverOpts = f.driver_name && !drivers.some((d) => d.full_name === f.driver_name) ? [f.driver_name, ...drivers.map((d) => d.full_name)] : drivers.map((d) => d.full_name)
+  function onFleet(v: string) { const veh = vehicles.find((x) => x.fleet_no === v); setF((p) => (p ? { ...p, fleet_no: v, reg_no: veh ? veh.reg_plate : '' } : p)) }
   function save() {
     if (!f!.fleet_no.trim() || !f!.from_location.trim() || !f!.to_location.trim()) return
     dailyPlanStore.update(trip!.id, {
@@ -291,11 +290,11 @@ function EditTripModal({ trip, onClose, vehicles, locations }: { trip: DailyPlan
       <div className="grid grid-cols-2 gap-3">
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Type</span><select className={inputCls} value={f.trip_type} onChange={(e) => set(withGate(f, e.target.value as TripType))}><option value="pickup">Pickup</option><option value="knockoff">Knock-off</option></select></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Departure time</span><input type="time" className={inputCls} value={f.departure_time} onChange={(e) => set({ departure_time: e.target.value })} /></label>
-        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Bus (fleet no)</span><input list="dp-fleet" className={inputCls} value={f.fleet_no} onChange={(e) => onFleet(e.target.value)} /></label>
-        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Reg No</span><input className={inputCls} value={f.reg_no} onChange={(e) => set({ reg_no: e.target.value })} /></label>
+        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Bus (fleet no)</span><select className={inputCls} value={f.fleet_no} onChange={(e) => onFleet(e.target.value)}><option value="">Select bus…</option>{fleetOpts.map((n) => <option key={n} value={n}>{n}</option>)}</select></label>
+        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Reg No</span><div className="flex h-[42px] items-center rounded-lg border border-black/10 bg-canvas px-3 text-sm text-navy">{f.reg_no || '—'}</div></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">From</span><select className={inputCls} value={f.from_location} onChange={(e) => set({ from_location: e.target.value })}><option value="">Select…</option>{optsFor(f.from_location).map((n) => <option key={n} value={n}>{n}</option>)}</select></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">To</span><select className={inputCls} value={f.to_location} onChange={(e) => set({ to_location: e.target.value })}><option value="">Select…</option>{optsFor(f.to_location).map((n) => <option key={n} value={n}>{n}</option>)}</select></label>
-        <label className="col-span-2 block"><span className="mb-1 block text-xs font-medium text-navy">Driver</span><input list="dp-drivers" className={inputCls} value={f.driver_name} onChange={(e) => set({ driver_name: e.target.value })} /></label>
+        <label className="col-span-2 block"><span className="mb-1 block text-xs font-medium text-navy">Driver</span><select className={inputCls} value={f.driver_name} onChange={(e) => set({ driver_name: e.target.value })}><option value="">Select driver…</option>{driverOpts.map((n) => <option key={n} value={n}>{n}</option>)}</select></label>
       </div>
     </Modal>
   )
