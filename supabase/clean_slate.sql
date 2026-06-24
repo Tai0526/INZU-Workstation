@@ -25,4 +25,8 @@ truncate table
   public.safety_tools,
   public.fuel_issuances,
   public.fuel_receipts,
-  public.fuel_generator;
+  public.fuel_generator,
+  public.mileage_trips,
+  public.mileage_routes,
+  public.payroll_deductions,
+  public.report_recipients;

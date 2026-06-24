@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import type { RoleKey } from './roles'
-import { registerCrossTabSync } from '@/lib/storage/sync'
+import { createSyncConfig } from '@/lib/supabase/syncTable'
 
 // Top-level module keys used for navigation + access gating.
 export type ModuleKey =
@@ -69,38 +69,12 @@ export const DEFAULT_OVERRIDES: Record<RoleKey, PermMap> = {
 
 // ── Editable role-default store (persisted) ─────────────────────────────
 const KEY = 'inzu_role_perms'
-// One-time marker: older builds persisted an Admin-page default for the Ops
-// Manager / MD. Admin is now Administrator-only by default, so we strip that
-// legacy grant once. Guarded by this key so an admin can still re-grant it later.
-const ADMIN_DEFAULT_MIGRATION = 'inzu_role_perms_admin_only_v2'
-let cache: Record<RoleKey, PermMap> | null = null
-const listeners = new Set<() => void>()
-function load(): Record<RoleKey, PermMap> {
-  if (cache) return cache
-  try {
-    const raw = localStorage.getItem(KEY)
-    const saved = raw ? (JSON.parse(raw) as Record<RoleKey, PermMap>) : null
-    if (typeof localStorage !== 'undefined' && localStorage.getItem(ADMIN_DEFAULT_MIGRATION) !== '1') {
-      if (saved) {
-        for (const r of ['operations_manager', 'managing_director'] as RoleKey[]) {
-          if (saved[r] && saved[r]!.admin) { const m = { ...saved[r] }; delete m.admin; saved[r] = m }
-        }
-        localStorage.setItem(KEY, JSON.stringify(saved))
-      }
-      localStorage.setItem(ADMIN_DEFAULT_MIGRATION, '1')
-    }
-    cache = saved ? { ...DEFAULT_OVERRIDES, ...saved } : DEFAULT_OVERRIDES
-  } catch {
-    cache = DEFAULT_OVERRIDES
-  }
-  return cache!
-}
-function commit(next: Record<RoleKey, PermMap>) {
-  cache = next
-  localStorage.setItem(KEY, JSON.stringify(next))
-  listeners.forEach((l) => l())
-}
-registerCrossTabSync(KEY, () => { cache = null; load(); listeners.forEach((l) => l()) })
+const permsCfg = createSyncConfig<Record<RoleKey, PermMap>>({
+  key: 'role_perms', lsKey: KEY, default: DEFAULT_OVERRIDES,
+  merge: (saved) => ({ ...DEFAULT_OVERRIDES, ...saved }),
+})
+function load(): Record<RoleKey, PermMap> { return permsCfg.get() }
+function commit(next: Record<RoleKey, PermMap>) { permsCfg.set(next) }
 export const rolePermsStore = {
   get: (): Record<RoleKey, PermMap> => load(),
   setPerm(role: RoleKey, module: ModuleKey, perm: Permission) {
@@ -113,7 +87,7 @@ export const rolePermsStore = {
     commit(cur)
   },
   resetAll() { commit({ ...DEFAULT_OVERRIDES }) },
-  subscribe(cb: () => void) { listeners.add(cb); return () => listeners.delete(cb) },
+  subscribe: permsCfg.subscribe,
 }
 export function useRolePerms(): Record<RoleKey, PermMap> {
   return useSyncExternalStore(rolePermsStore.subscribe, rolePermsStore.get, rolePermsStore.get)

@@ -3,7 +3,7 @@ import { getActor } from '@/lib/audit/actor'
 import type { Audited } from '@/lib/operations/types'
 import { type FuelIssuance, type IssuanceInput, type FuelReceipt, type FuelConfig, type FuelRate, type GenFuel, isOpen, DEFAULT_FUEL_CONFIG, DEFAULT_FUEL_RATE } from './types'
 import { TRIDENT_BUSES, REFUEL_DATES } from '@/lib/demo/buses'
-import { createSyncTable } from '@/lib/supabase/syncTable'
+import { createSyncTable, createSyncConfig } from '@/lib/supabase/syncTable'
 
 function newId() {
   return typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `f_${Date.now()}_${Math.round(Math.random() * 1e6)}`
@@ -108,70 +108,35 @@ export function editIssuance(id: string, patch: Partial<FuelIssuance>) {
 }
 
 // ── Config (per branch) ────────────────────────────────────────────────
-const CFG_KEY = 'inzu_fuel_config'
-let cfgCache: Record<string, FuelConfig> | null = null
-const cfgListeners = new Set<() => void>()
-function loadCfg(): Record<string, FuelConfig> {
-  if (cfgCache) return cfgCache
-  try { const raw = localStorage.getItem(CFG_KEY); cfgCache = raw ? JSON.parse(raw) : {} } catch { cfgCache = {} }
-  return cfgCache!
-}
+const fuelCfg = createSyncConfig<Record<string, FuelConfig>>({ key: 'fuel_config', lsKey: 'inzu_fuel_config', default: {} })
 export function getFuelConfig(branch: string): FuelConfig {
-  // Return a stable reference (stored object or the shared default) so
-  // useSyncExternalStore doesn't loop.
-  return loadCfg()[branch] ?? DEFAULT_FUEL_CONFIG
+  return fuelCfg.get()[branch] ?? DEFAULT_FUEL_CONFIG
 }
 export function setFuelConfig(branch: string, cfg: FuelConfig) {
-  const next = { ...loadCfg(), [branch]: cfg }
-  cfgCache = next
-  localStorage.setItem(CFG_KEY, JSON.stringify(next))
-  cfgListeners.forEach((l) => l())
+  fuelCfg.set({ ...fuelCfg.get(), [branch]: cfg })
 }
 export function useFuelConfig(branch: string): FuelConfig {
-  return useSyncExternalStore(
-    (cb) => { cfgListeners.add(cb); return () => cfgListeners.delete(cb) },
-    () => getFuelConfig(branch),
-    () => getFuelConfig(branch),
-  )
+  return useSyncExternalStore(fuelCfg.subscribe, () => getFuelConfig(branch), () => getFuelConfig(branch))
 }
 
 // ── Monthly rates (per branch:YYYY-MM) — ERB diesel price + BoZ FX ──────
-const RATES_KEY = 'inzu_fuel_rates'
-let ratesCache: Record<string, FuelRate> | null = null
-const ratesListeners = new Set<() => void>()
 const rateKey = (branch: string, ym: string) => `${branch}:${ym}`
-
-function loadRates(): Record<string, FuelRate> {
-  if (ratesCache) return ratesCache
-  try {
-    const raw = localStorage.getItem(RATES_KEY)
-    ratesCache = raw ? JSON.parse(raw) : { ...RATE_SEED }
-  } catch { ratesCache = { ...RATE_SEED } }
-  if (!localStorage.getItem(RATES_KEY)) localStorage.setItem(RATES_KEY, JSON.stringify(ratesCache))
-  return ratesCache!
-}
 const RATE_SEED: Record<string, FuelRate> = {
   'trident:2026-02': { diesel_zmw: 31.84, fx_zmw_per_usd: 26.6, source: 'ERB + Bank of Zambia', updated_at: '2026-02-01T08:00:00.000Z' },
   'trident:2026-03': { diesel_zmw: 32.13, fx_zmw_per_usd: 27.0, source: 'ERB + Bank of Zambia', updated_at: '2026-03-01T08:00:00.000Z' },
   'trident:2026-04': { diesel_zmw: 33.05, fx_zmw_per_usd: 27.4, source: 'ERB + Bank of Zambia', updated_at: '2026-04-01T08:00:00.000Z' },
   'trident:2026-06': { diesel_zmw: 33.50, fx_zmw_per_usd: 27.5, source: 'ERB + Bank of Zambia', updated_at: '2026-06-01T08:00:00.000Z' },
 }
+const ratesCfg = createSyncConfig<Record<string, FuelRate>>({ key: 'fuel_rates', lsKey: 'inzu_fuel_rates', default: RATE_SEED })
 
 export function getFuelRate(branch: string, ym: string): FuelRate {
-  return loadRates()[rateKey(branch, ym)] ?? DEFAULT_FUEL_RATE
+  return ratesCfg.get()[rateKey(branch, ym)] ?? DEFAULT_FUEL_RATE
 }
 export function setFuelRate(branch: string, ym: string, rate: FuelRate) {
-  const next = { ...loadRates(), [rateKey(branch, ym)]: rate }
-  ratesCache = next
-  localStorage.setItem(RATES_KEY, JSON.stringify(next))
-  ratesListeners.forEach((l) => l())
+  ratesCfg.set({ ...ratesCfg.get(), [rateKey(branch, ym)]: rate })
 }
 export function useFuelRate(branch: string, ym: string): FuelRate {
-  return useSyncExternalStore(
-    (cb) => { ratesListeners.add(cb); return () => ratesListeners.delete(cb) },
-    () => getFuelRate(branch, ym),
-    () => getFuelRate(branch, ym),
-  )
+  return useSyncExternalStore(ratesCfg.subscribe, () => getFuelRate(branch, ym), () => getFuelRate(branch, ym))
 }
 
 /**

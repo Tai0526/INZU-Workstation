@@ -2,7 +2,7 @@ import { useSyncExternalStore } from 'react'
 import type { BranchCode } from '@/lib/roles'
 import { getActor } from '@/lib/audit/actor'
 import type { StatusTone } from '@/components/ui/StatusBadge'
-import { registerCrossTabSync } from '@/lib/storage/sync'
+import { createSyncTable } from '@/lib/supabase/syncTable'
 
 /**
  * Payroll deductions — currently fed by approved incident fines. The payroll
@@ -33,25 +33,7 @@ export interface PayrollDeduction {
 }
 
 const KEY = 'inzu_payroll_deductions'
-let cache: PayrollDeduction[] | null = null
-const listeners = new Set<() => void>()
-
-function load(): PayrollDeduction[] {
-  if (cache) return cache
-  try {
-    const raw = localStorage.getItem(KEY)
-    cache = raw ? (JSON.parse(raw) as PayrollDeduction[]) : []
-  } catch {
-    cache = []
-  }
-  return cache!
-}
-function commit(next: PayrollDeduction[]) {
-  cache = next
-  localStorage.setItem(KEY, JSON.stringify(next))
-  listeners.forEach((l) => l())
-}
-registerCrossTabSync(KEY, () => { cache = null; load(); listeners.forEach((l) => l()) })
+const { load, commit, subscribe } = createSyncTable<PayrollDeduction>({ table: 'payroll_deductions', lsKey: KEY, seed: [] })
 function newId() {
   return typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `ded_${Date.now()}_${Math.round(Math.random() * 1e6)}`
 }
@@ -72,10 +54,7 @@ export const deductionsStore = {
   remove(id: string) {
     commit(load().filter((d) => d.id !== id))
   },
-  subscribe(cb: () => void) {
-    listeners.add(cb)
-    return () => listeners.delete(cb)
-  },
+  subscribe,
   snapshot: () => load(),
 }
 

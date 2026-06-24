@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react'
-import { registerCrossTabSync } from '@/lib/storage/sync'
+import { createSyncConfig } from '@/lib/supabase/syncTable'
 
 // ── Branches (spec §2) ────────────────────────────────────────────────
 // Two fixed branch codes; their display ("client") names are admin-editable.
@@ -14,18 +14,12 @@ const DEFAULT_BRANDING: Record<BranchCode, BranchBrand> = {
 }
 
 const BRAND_KEY = 'inzu_branding'
-let brandCache: Record<BranchCode, BranchBrand> | null = null
+const brandCfg = createSyncConfig<Record<BranchCode, BranchBrand>>({
+  key: 'branding', lsKey: BRAND_KEY, default: DEFAULT_BRANDING,
+  merge: (saved) => ({ ...DEFAULT_BRANDING, ...saved }),
+})
 const brandListeners = new Set<() => void>()
-function loadBrand(): Record<BranchCode, BranchBrand> {
-  if (brandCache) return brandCache
-  try {
-    const raw = localStorage.getItem(BRAND_KEY)
-    brandCache = raw ? { ...DEFAULT_BRANDING, ...(JSON.parse(raw) as Record<BranchCode, BranchBrand>) } : DEFAULT_BRANDING
-  } catch {
-    brandCache = DEFAULT_BRANDING
-  }
-  return brandCache!
-}
+function loadBrand(): Record<BranchCode, BranchBrand> { return brandCfg.get() }
 function buildBranches() {
   const b = loadBrand()
   return BRANCH_CODES.map((code) => ({ code, label: b[code].label, short: b[code].short }))
@@ -34,23 +28,14 @@ function buildBranches() {
 /** Live list of branches with their current display names. Rebuilt when the
  *  admin renames a branch (importers see the updated value via ES live bindings). */
 export let BRANCHES: { code: BranchCode; label: string; short: string }[] = buildBranches()
-// Live-sync branch names across tabs/windows of the same browser when an admin renames a branch.
-registerCrossTabSync(BRAND_KEY, () => { brandCache = null; BRANCHES = buildBranches(); brandListeners.forEach((l) => l()) })
+// Rebuild the live binding whenever branding changes (Supabase hydrate/realtime,
+// a local edit, or a cross-tab update).
+brandCfg.subscribe(() => { BRANCHES = buildBranches(); brandListeners.forEach((l) => l()) })
 
 export const brandingStore = {
   get: (): Record<BranchCode, BranchBrand> => loadBrand(),
-  set(code: BranchCode, brand: BranchBrand) {
-    brandCache = { ...loadBrand(), [code]: brand }
-    localStorage.setItem(BRAND_KEY, JSON.stringify(brandCache))
-    BRANCHES = buildBranches()
-    brandListeners.forEach((l) => l())
-  },
-  reset() {
-    brandCache = { ...DEFAULT_BRANDING }
-    localStorage.setItem(BRAND_KEY, JSON.stringify(brandCache))
-    BRANCHES = buildBranches()
-    brandListeners.forEach((l) => l())
-  },
+  set(code: BranchCode, brand: BranchBrand) { brandCfg.set({ ...loadBrand(), [code]: brand }) },
+  reset() { brandCfg.set({ ...DEFAULT_BRANDING }) },
   subscribe(cb: () => void) { brandListeners.add(cb); return () => brandListeners.delete(cb) },
 }
 export function useBranches() {

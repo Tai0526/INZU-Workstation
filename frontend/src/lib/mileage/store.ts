@@ -7,7 +7,7 @@ import {
   type SeatClass, type Shift, DEFAULT_RATES, DEFAULT_SIGNATORIES,
 } from './types'
 import { TRIDENT_BUSES, JUNE_WEEKDAYS, type DemoBus } from '@/lib/demo/buses'
-import { registerCrossTabSync } from '@/lib/storage/sync'
+import { createSyncTable, createSyncConfig } from '@/lib/supabase/syncTable'
 
 function newId() {
   return typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `mil_${Date.now()}_${Math.round(Math.random() * 1e6)}`
@@ -17,16 +17,7 @@ const who = () => getActor().name
 type Input<T extends Audited> = Omit<T, keyof Audited>
 
 function makeStore<T extends Audited>(key: string, seed: T[]) {
-  let cache: T[] | null = null
-  const listeners = new Set<() => void>()
-  function load(): T[] {
-    if (cache) return cache
-    try { const raw = localStorage.getItem(key); cache = raw ? (JSON.parse(raw) as T[]) : seed } catch { cache = seed }
-    if (!localStorage.getItem(key)) localStorage.setItem(key, JSON.stringify(cache))
-    return cache!
-  }
-  function commit(next: T[]) { cache = next; localStorage.setItem(key, JSON.stringify(next)); listeners.forEach((l) => l()) }
-  registerCrossTabSync(key, () => { cache = null; load(); listeners.forEach((l) => l()) })
+  const { load, commit, subscribe } = createSyncTable<T>({ table: key.replace(/^inzu_/, ''), lsKey: key, seed })
   return {
     list: () => load(),
     add(data: Input<T>): T {
@@ -41,7 +32,7 @@ function makeStore<T extends Audited>(key: string, seed: T[]) {
     },
     update(id: string, patch: Partial<T>) { commit(load().map((x) => (x.id === id ? { ...x, ...patch, id: x.id, updated_by: who(), updated_at: stampNow() } : x))) },
     remove(id: string) { commit(load().filter((x) => x.id !== id)) },
-    subscribe(cb: () => void) { listeners.add(cb); return () => listeners.delete(cb) },
+    subscribe,
     snapshot: () => load(),
   }
 }
@@ -110,61 +101,32 @@ export function editTrip(id: string, patch: Partial<MileageTrip>) {
 }
 
 // ── Billing rates (per branch) ─────────────────────────────────────────
-const RATES_KEY = 'inzu_mileage_rates'
-let ratesCache: Record<string, MileageRates> | null = null
-const ratesListeners = new Set<() => void>()
-function loadRates(): Record<string, MileageRates> {
-  if (ratesCache) return ratesCache
-  try { const raw = localStorage.getItem(RATES_KEY); ratesCache = raw ? JSON.parse(raw) : {} } catch { ratesCache = {} }
-  return ratesCache!
-}
+const ratesCfg = createSyncConfig<Record<string, MileageRates>>({ key: 'mileage_rates', lsKey: 'inzu_mileage_rates', default: {} })
 export function getMileageRates(branch: BranchCode): MileageRates {
-  return loadRates()[branch] ?? DEFAULT_RATES
+  return ratesCfg.get()[branch] ?? DEFAULT_RATES
 }
 export function setMileageRates(branch: BranchCode, rates: MileageRates) {
-  const next = { ...loadRates(), [branch]: rates }
-  ratesCache = next
-  localStorage.setItem(RATES_KEY, JSON.stringify(next))
-  ratesListeners.forEach((l) => l())
+  ratesCfg.set({ ...ratesCfg.get(), [branch]: rates })
 }
 export function useMileageRates(branch: BranchCode): MileageRates {
-  return useSyncExternalStore(
-    (cb) => { ratesListeners.add(cb); return () => ratesListeners.delete(cb) },
-    () => getMileageRates(branch),
-    () => getMileageRates(branch),
-  )
+  return useSyncExternalStore(ratesCfg.subscribe, () => getMileageRates(branch), () => getMileageRates(branch))
 }
 
 // ── Signatories (per branch:project) ───────────────────────────────────
-const SIGN_KEY = 'inzu_mileage_signatories'
-let signCache: Record<string, Signatories> | null = null
-const signListeners = new Set<() => void>()
 const signKey = (branch: string, project: string) => `${branch}:${project}`
 const SIGN_SEED: Record<string, Signatories> = {
   'trident:Enterprise': { inzu_prepared: 'Taizya Kasitu', inzu_checked: 'James Nsalamba', inzu_authorised: 'Chibwe Kasanda', inzu_approved: 'Shaft Mbongu', fqm_checked: 'Anna Banda', fqm_approved: 'Dominica Spivey' },
   'trident:Sentinel': { inzu_prepared: 'Taizya Kasitu', inzu_checked: 'James Nsalamba', inzu_authorised: 'Chibwe Kasanda', inzu_approved: 'Shaft Mbongu', fqm_checked: 'Anna Banda', fqm_approved: 'Dominica Spivey' },
 }
-function loadSign(): Record<string, Signatories> {
-  if (signCache) return signCache
-  try { const raw = localStorage.getItem(SIGN_KEY); signCache = raw ? JSON.parse(raw) : { ...SIGN_SEED } } catch { signCache = { ...SIGN_SEED } }
-  if (!localStorage.getItem(SIGN_KEY)) localStorage.setItem(SIGN_KEY, JSON.stringify(signCache))
-  return signCache!
-}
+const signCfg = createSyncConfig<Record<string, Signatories>>({ key: 'mileage_signatories', lsKey: 'inzu_mileage_signatories', default: SIGN_SEED })
 export function getSignatories(branch: string, project: string): Signatories {
-  return loadSign()[signKey(branch, project)] ?? DEFAULT_SIGNATORIES
+  return signCfg.get()[signKey(branch, project)] ?? DEFAULT_SIGNATORIES
 }
 export function setSignatories(branch: string, project: string, s: Signatories) {
-  const next = { ...loadSign(), [signKey(branch, project)]: s }
-  signCache = next
-  localStorage.setItem(SIGN_KEY, JSON.stringify(next))
-  signListeners.forEach((l) => l())
+  signCfg.set({ ...signCfg.get(), [signKey(branch, project)]: s })
 }
 export function useSignatories(branch: string, project: string): Signatories {
-  return useSyncExternalStore(
-    (cb) => { signListeners.add(cb); return () => signListeners.delete(cb) },
-    () => getSignatories(branch, project),
-    () => getSignatories(branch, project),
-  )
+  return useSyncExternalStore(signCfg.subscribe, () => getSignatories(branch, project), () => getSignatories(branch, project))
 }
 
 export type { MileageTripInput }

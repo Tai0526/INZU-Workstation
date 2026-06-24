@@ -3,7 +3,7 @@ import { getActor } from '@/lib/audit/actor'
 import { daysUntil } from '@/lib/documents/types'
 import type { BranchCode } from '@/lib/roles'
 import type { StatusTone } from '@/components/ui/StatusBadge'
-import { createSyncTable } from '@/lib/supabase/syncTable'
+import { createSyncTable, createSyncConfig } from '@/lib/supabase/syncTable'
 
 /**
  * Safety registers — the data behind every Safety sub-page except Incidents
@@ -95,25 +95,9 @@ export const DEFAULT_COMPLIANCE_CLASSES: ComplianceClass[] = [
 ]
 
 // ── Editable class catalog (persisted) ─────────────────────────────────
-const CLASSES_KEY = 'inzu_safety_classes'
-let classesCache: ComplianceClass[] | null = null
-const classesListeners = new Set<() => void>()
-function loadClasses(): ComplianceClass[] {
-  if (classesCache) return classesCache
-  try {
-    const raw = localStorage.getItem(CLASSES_KEY)
-    classesCache = raw ? (JSON.parse(raw) as ComplianceClass[]) : DEFAULT_COMPLIANCE_CLASSES
-  } catch {
-    classesCache = DEFAULT_COMPLIANCE_CLASSES
-  }
-  if (!localStorage.getItem(CLASSES_KEY)) localStorage.setItem(CLASSES_KEY, JSON.stringify(classesCache))
-  return classesCache!
-}
-function commitClasses(next: ComplianceClass[]) {
-  classesCache = next
-  localStorage.setItem(CLASSES_KEY, JSON.stringify(next))
-  classesListeners.forEach((l) => l())
-}
+const classesCfg = createSyncConfig<ComplianceClass[]>({ key: 'safety_classes', lsKey: 'inzu_safety_classes', default: DEFAULT_COMPLIANCE_CLASSES })
+const loadClasses = (): ComplianceClass[] => classesCfg.get()
+const commitClasses = (next: ComplianceClass[]) => classesCfg.set(next)
 function slug(label: string, taken: string[]): string {
   const base = label.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'class'
   let key = base, i = 2
@@ -133,7 +117,7 @@ export const classesStore = {
   remove(key: string) {
     commitClasses(loadClasses().filter((c) => c.key !== key))
   },
-  subscribe(cb: () => void) { classesListeners.add(cb); return () => classesListeners.delete(cb) },
+  subscribe: classesCfg.subscribe,
   snapshot: () => loadClasses(),
 }
 export const useComplianceClasses = () => useSyncExternalStore(classesStore.subscribe, classesStore.snapshot, classesStore.snapshot)

@@ -88,6 +88,73 @@ function supabaseTable<T extends { id: string }>({ table }: { table: string; lsK
   }
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// Config (settings) sync — for stores that hold a single object/map rather than
+// a list of {id} records (role permissions, branding, rates, messaging, …).
+// Backed by a single jsonb row in the `app_config` table, keyed by `key`.
+// ════════════════════════════════════════════════════════════════════════════
+const CONFIG_TABLE = 'app_config'
+
+export interface SyncConfig<T> {
+  get: () => T
+  set: (value: T) => void
+  subscribe: (cb: () => void) => () => void
+}
+
+export function createSyncConfig<T>(opts: { key: string; lsKey: string; default: T; merge?: (saved: T) => T }): SyncConfig<T> {
+  return isSupabaseConfigured && supabase ? supabaseConfig(opts) : localConfig(opts)
+}
+
+function supabaseConfig<T>({ key, default: def, merge }: { key: string; lsKey: string; default: T; merge?: (saved: T) => T }): SyncConfig<T> {
+  const db = supabase!
+  let cache: T = def
+  let started = false
+  let hydrating = false
+  const listeners = new Set<() => void>()
+  const emit = () => listeners.forEach((l) => l())
+  const apply = (saved: T | null | undefined) => { cache = saved == null ? def : (merge ? merge(saved) : saved); emit() }
+
+  async function hydrate() {
+    hydrating = true
+    const { data, error } = await db.from(CONFIG_TABLE).select('value').eq('key', key).maybeSingle()
+    hydrating = false
+    if (!error) apply((data?.value as T) ?? null)
+    else console.error(`[config:${key}] load failed:`, error.message)
+  }
+  function start() {
+    if (started) return
+    started = true
+    db.auth.onAuthStateChange((_e, session) => { if (session) void hydrate(); else { cache = def; emit() } })
+    db.channel(`rt-config-${key}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: CONFIG_TABLE, filter: `key=eq.${key}` }, (p: any) => apply(p.new?.value ?? null))
+      .subscribe()
+  }
+  return {
+    get: () => { start(); return cache },
+    set: (value) => {
+      cache = value; emit()
+      void db.from(CONFIG_TABLE).upsert({ key, value }).then(({ error }: { error: unknown }) => { if (error) { console.error(`[config:${key}] save failed`); void hydrate() } })
+    },
+    subscribe: (cb) => { start(); if (!hydrating) void hydrate(); listeners.add(cb); return () => listeners.delete(cb) },
+  }
+}
+
+function localConfig<T>({ lsKey, default: def, merge }: { key: string; lsKey: string; default: T; merge?: (saved: T) => T }): SyncConfig<T> {
+  let cache: T | null = null
+  const listeners = new Set<() => void>()
+  function get(): T {
+    if (cache !== null) return cache
+    try {
+      const raw = localStorage.getItem(lsKey)
+      cache = raw ? (merge ? merge(JSON.parse(raw) as T) : (JSON.parse(raw) as T)) : def
+    } catch { cache = def }
+    return cache as T
+  }
+  function set(value: T) { cache = value; localStorage.setItem(lsKey, JSON.stringify(value)); listeners.forEach((l) => l()) }
+  registerCrossTabSync(lsKey, () => { cache = null; get(); listeners.forEach((l) => l()) })
+  return { get, set, subscribe: (cb) => { listeners.add(cb); return () => listeners.delete(cb) } }
+}
+
 // ── localStorage-backed (fallback / no Supabase) ─────────────────────────────
 function localTable<T extends { id: string }>({ lsKey, seed }: { table: string; lsKey: string; seed: T[] }): SyncTable<T> {
   let cache: T[] | null = null

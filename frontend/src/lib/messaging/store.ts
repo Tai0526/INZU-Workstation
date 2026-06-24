@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import { ROLES, type RoleKey } from '@/lib/roles'
-import { registerCrossTabSync } from '@/lib/storage/sync'
+import { createSyncConfig } from '@/lib/supabase/syncTable'
 
 /**
  * In-app messaging between USER ACCOUNTS. The directory lists the real users on
@@ -55,8 +55,11 @@ interface State {
 const KEY = 'inzu_messages'
 const EMPTY: State = { conversations: [], messages: [], lastRead: {} }
 
-let cache: State | null = null
-const listeners = new Set<() => void>()
+// One combined blob (conversations + messages + lastRead). coerce() repairs the
+// shape on load (and drops legacy role-based data), so it doubles as the merge.
+const cfg = createSyncConfig<State>({ key: 'messaging', lsKey: KEY, default: EMPTY, merge: (saved) => coerce(saved) })
+const load = (): State => cfg.get()
+const commit = (next: State) => cfg.set(next)
 
 /**
  * Repair persisted data into the current user-id-based shape. Older builds keyed
@@ -85,30 +88,6 @@ function coerce(parsed: any): State {
   return { conversations, messages, lastRead: parsed.lastRead }
 }
 
-function load(): State {
-  if (cache) return cache
-  let parsed: unknown = null
-  try {
-    const raw = localStorage.getItem(KEY)
-    parsed = raw ? JSON.parse(raw) : null
-  } catch {
-    parsed = null
-  }
-  cache = coerce(parsed)
-  localStorage.setItem(KEY, JSON.stringify(cache)) // persist the repaired/cleaned shape
-  return cache!
-}
-function commit(next: State) {
-  cache = next
-  localStorage.setItem(KEY, JSON.stringify(next))
-  listeners.forEach((l) => l())
-}
-// Hydrate from the storage-event payload (not load(), which writes) so a cross-tab
-// refresh never write-loops; coerce() guarantees the shape the UI relies on.
-registerCrossTabSync(KEY, (val) => {
-  try { cache = coerce(val ? JSON.parse(val) : null) } catch { cache = coerce(null) }
-  listeners.forEach((l) => l())
-})
 function newId(p: string): string {
   return `${p}_${Date.now()}_${Math.round(Math.random() * 1e5)}`
 }
@@ -139,12 +118,8 @@ export const messagingStore = {
   },
 }
 
-function subscribe(cb: () => void) {
-  listeners.add(cb)
-  return () => listeners.delete(cb)
-}
 export function useMessaging(): State {
-  return useSyncExternalStore(subscribe, load, load)
+  return useSyncExternalStore(cfg.subscribe, cfg.get, cfg.get)
 }
 
 export function conversationsFor(s: State, me: string): Conversation[] {

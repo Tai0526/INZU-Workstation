@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import type { RoleKey } from '@/lib/roles'
-import { registerCrossTabSync } from '@/lib/storage/sync'
+import { createSyncConfig } from '@/lib/supabase/syncTable'
 
 /**
  * Approval chains, admin-editable. Each chain is an ordered list of roles that
@@ -23,26 +23,13 @@ const DEFAULTS: ApprovalChain[] = [
 ]
 
 const KEY = 'inzu_approvals'
-let cache: ApprovalChain[] | null = null
-const listeners = new Set<() => void>()
-function load(): ApprovalChain[] {
-  if (cache) return cache
-  try {
-    const raw = localStorage.getItem(KEY)
-    const saved = raw ? (JSON.parse(raw) as ApprovalChain[]) : null
-    // Merge: keep saved order/steps, add any new default chains not yet saved.
-    cache = saved ? [...saved, ...DEFAULTS.filter((d) => !saved.some((s) => s.key === d.key))] : DEFAULTS
-  } catch {
-    cache = DEFAULTS
-  }
-  return cache!
-}
-function commit(next: ApprovalChain[]) {
-  cache = next
-  localStorage.setItem(KEY, JSON.stringify(next))
-  listeners.forEach((l) => l())
-}
-registerCrossTabSync(KEY, () => { cache = null; load(); listeners.forEach((l) => l()) })
+// Merge keeps the admin's saved order/steps and adds any new default chains.
+const cfg = createSyncConfig<ApprovalChain[]>({
+  key: 'approvals', lsKey: KEY, default: DEFAULTS,
+  merge: (saved) => [...saved, ...DEFAULTS.filter((d) => !saved.some((s) => s.key === d.key))],
+})
+const load = (): ApprovalChain[] => cfg.get()
+const commit = (next: ApprovalChain[]) => cfg.set(next)
 
 export const approvalsStore = {
   list: (): ApprovalChain[] => load(),
@@ -60,7 +47,7 @@ export const approvalsStore = {
     approvalsStore.setSteps(key, steps)
   },
   resetAll() { commit(DEFAULTS) },
-  subscribe(cb: () => void) { listeners.add(cb); return () => listeners.delete(cb) },
+  subscribe: cfg.subscribe,
 }
 export function useApprovals(): ApprovalChain[] {
   return useSyncExternalStore(approvalsStore.subscribe, approvalsStore.list, approvalsStore.list)
