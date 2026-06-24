@@ -389,7 +389,7 @@ function RunModal({ state, onClose, branch, date, vehicles, drivers, locations }
   }
   return (
     <Modal open={state.open} onClose={onClose} title={e ? 'Edit run' : 'Add run'} subtitle="A run that isn't on the plan (or a correction). Bus, driver and place come from your lists." footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={save}>Save</Button></>}>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Trip type</span>
           <select className={inputCls} value={f.trip_type} onChange={(ev) => set('trip_type', ev.target.value as TripType)}>
             <option value="pickup">Pickup</option><option value="knockoff">Knock-off</option>

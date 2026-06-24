@@ -368,9 +368,8 @@ function QuickRefuelModal({ open, onClose, branch, vehicles, drivers, routes, at
   const [odo, setOdo] = useState(''); const [litres, setLitres] = useState('')
   const [before, setBefore] = useState(''); const [after, setAfter] = useState('Full')
   const [route, setRoute] = useState(''); const [trips, setTrips] = useState('')
-  const [more, setMore] = useState(false)
   const [wasOpen, setWasOpen] = useState(false)
-  if (open && !wasOpen) { setWasOpen(true); setDate(todayStr); setFleet(''); setReg(''); setDriver(''); setAttendant(''); setOdo(''); setLitres(''); setBefore(''); setAfter('Full'); setRoute(''); setTrips(''); setMore(false) }
+  if (open && !wasOpen) { setWasOpen(true); setDate(todayStr); setFleet(''); setReg(''); setDriver(''); setAttendant(''); setOdo(''); setLitres(''); setBefore(''); setAfter('Full'); setRoute(''); setTrips('') }
   if (!open && wasOpen) setWasOpen(false)
 
   function onFleet(v: string) { setFleet(v); const veh = vehicles.find((x: any) => x.fleet_no.toLowerCase() === v.toLowerCase()); if (veh) setReg(veh.reg_plate) }
@@ -390,7 +389,7 @@ function QuickRefuelModal({ open, onClose, branch, vehicles, drivers, routes, at
     <Modal open={open} onClose={onClose} title="Refuel" subtitle="Enter it as you fuel — finish fuelling, finish entering."
       footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={save} disabled={!ready}><Check size={15} /> Save refuel</Button></>}>
       <div className="space-y-3">
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Fleet No</span><input list="dl-fuel-fleet" className={inputCls} placeholder="INZ 120" value={fleet} onChange={(e) => onFleet(e.target.value)} /></label>
           <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Reg No</span><input className={inputCls} placeholder="BCG 4270" value={reg} onChange={(e) => setReg(e.target.value)} /></label>
         </div>
@@ -398,23 +397,19 @@ function QuickRefuelModal({ open, onClose, branch, vehicles, drivers, routes, at
           <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Odometer now</span><input type="number" inputMode="numeric" className={bigCls} placeholder="km" value={odo} onChange={(e) => setOdo(e.target.value)} /></label>
           <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Litres given</span><input type="number" inputMode="decimal" className={bigCls} placeholder="L" value={litres} onChange={(e) => setLitres(e.target.value)} /></label>
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Tank before</span><select className={inputCls} value={before} onChange={(e) => setBefore(e.target.value)}><option value="">—</option>{FUEL_LEVELS.map((l) => <option key={l} value={l}>{l}</option>)}</select></label>
           <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Tank after</span><select className={inputCls} value={after} onChange={(e) => setAfter(e.target.value)}>{FUEL_LEVELS.map((l) => <option key={l} value={l}>{l}</option>)}</select></label>
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Driver</span><select className={inputCls} value={driver} onChange={(e) => setDriver(e.target.value)}><option value="">—</option>{drivers.map((d: any) => <option key={d.id} value={d.full_name}>{d.full_name}</option>)}</select></label>
           <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Attendant</span><select className={inputCls} value={attendant} onChange={(e) => setAttendant(e.target.value)}><option value="">—</option>{attendants.map((a: any) => <option key={a.id} value={a.full_name}>{a.full_name}</option>)}</select></label>
         </div>
-        {!more ? (
-          <button onClick={() => setMore(true)} className="text-xs font-medium text-brand hover:underline">Add date / route / trips</button>
-        ) : (
-          <div className="grid grid-cols-3 gap-3">
-            <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Date</span><input type="date" className={inputCls} value={date} onChange={(e) => setDate(e.target.value)} /></label>
-            <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Route</span><select className={inputCls} value={route} onChange={(e) => setRoute(e.target.value)}><option value="">—</option>{routes.map((x: any) => <option key={x.id} value={x.name}>{x.name}</option>)}</select></label>
-            <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Trips</span><input type="number" className={inputCls} value={trips} onChange={(e) => setTrips(e.target.value)} /></label>
-          </div>
-        )}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Date</span><input type="date" className={inputCls} value={date} onChange={(e) => setDate(e.target.value)} /></label>
+          <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Route</span><select className={inputCls} value={route} onChange={(e) => setRoute(e.target.value)}><option value="">—</option>{routes.map((x: any) => <option key={x.id} value={x.name}>{x.name}</option>)}</select></label>
+          <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Trips</span><input type="number" className={inputCls} value={trips} onChange={(e) => setTrips(e.target.value)} /></label>
+        </div>
         <datalist id="dl-fuel-fleet">{vehicles.map((v: any) => <option key={v.id} value={v.fleet_no} />)}</datalist>
         <p className="text-[11px] text-status-neutral">You only enter the odometer now — the next refuel for this bus closes this one automatically and computes km/L.</p>
       </div>

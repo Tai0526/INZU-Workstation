@@ -287,7 +287,7 @@ function EditTripModal({ trip, onClose, vehicles, drivers, locations }: { trip: 
   }
   return (
     <Modal open={!!trip} onClose={onClose} title="Edit trip" footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={save}>Save</Button></>}>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Type</span><select className={inputCls} value={f.trip_type} onChange={(e) => set(withGate(f, e.target.value as TripType))}><option value="pickup">Pickup</option><option value="knockoff">Knock-off</option></select></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Departure time</span><input type="time" className={inputCls} value={f.departure_time} onChange={(e) => set({ departure_time: e.target.value })} /></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Bus (fleet no)</span><select className={inputCls} value={f.fleet_no} onChange={(e) => onFleet(e.target.value)}><option value="">Select bus…</option>{fleetOpts.map((n) => <option key={n} value={n}>{n}</option>)}</select></label>
