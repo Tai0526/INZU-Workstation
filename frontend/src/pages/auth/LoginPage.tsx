@@ -26,20 +26,32 @@ export default function LoginPage() {
   return (
     <div className="flex h-screen w-screen overflow-hidden font-sans">
       {/* LEFT PANEL */}
-      <div className="relative hidden flex-col overflow-hidden bg-navy md:flex md:basis-[52%]">
+      <div className="relative hidden flex-col justify-between overflow-hidden bg-navy md:flex md:basis-[52%]">
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            alignItems: 'flex-start',
+            justifyContent: 'center',
+            paddingTop: '70px',
+            zIndex: 0,
+            pointerEvents: 'none',
+          }}
+        >
+          <img
+            src="/login-bg.png"
+            alt=""
+            style={{ width: '80%', maxWidth: '900px', height: 'auto' }}
+            onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')}
+          />
+        </div>
         <div className="relative z-10 p-8 lg:p-11">
           <img src="/logo.png" alt="INZU" className="block h-12 object-contain" onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')} />
           <div className="mt-3">
             <div className="font-display text-[17px] font-bold tracking-tight text-white">INZU MCS Limited</div>
             <div className="mt-0.5 text-xs text-white/60">Transport · Safety · Compliance</div>
           </div>
-        </div>
-
-        {/* Centered brand image — contained, fits between the top and bottom blocks */}
-        <div className="relative z-10 flex min-h-0 flex-1 items-center justify-center px-10 py-4">
-          <img src="/login-bg.png" alt="INZU" className="max-h-full max-w-[78%] object-contain"
-            style={{ filter: 'drop-shadow(0 18px 40px rgba(0,0,0,0.4))' }}
-            onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')} />
         </div>
 
         <div className="relative z-10 p-8 lg:p-11">
