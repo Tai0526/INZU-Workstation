@@ -28,8 +28,14 @@ export interface SchedulingConfig {
   crews: CrewDef[]
   schedules: WorkScheduleDef[]
   /** Cycle start date per rotation type — 14/7 (Pit), 10/5 (Security & Dewatering),
-   *  7/7 (split). Crews stagger from each one; the cycles began on different dates. */
+   *  7/7 (split). Crews rotate from each one; the cycles began on different dates. */
   cycleAnchors: Record<CycleKey, string>
+  /**
+   * Each crew's phase at the cycle start, per cycle type (admin-chosen; missing →
+   * default A/B/C order). Continuous: 0 = Day, 1 = Night, 2 = Off. 7/7: 0 = On,
+   * 1 = Off. The system rotates this selection forward every block.
+   */
+  crewPhase: Record<CycleKey, Record<string, number>>
 }
 
 export const DEFAULT_SCHEDULING: SchedulingConfig = {
@@ -48,6 +54,7 @@ export const DEFAULT_SCHEDULING: SchedulingConfig = {
     { id: '10x5', label: '10 on / 5 off', on_days: 10, off_days: 5, continuous: true },
   ],
   cycleAnchors: { '14x7': '2026-01-02', '10x5': '2026-01-02', '7x7': '2026-01-02' }, // Fridays; shift change is Friday 10:00
+  crewPhase: { '14x7': {}, '10x5': {}, '7x7': {} }, // empty = default A Day · B Night · C Off
 }
 
 const cfg = createSyncConfig<SchedulingConfig>({
@@ -71,6 +78,11 @@ const cfg = createSyncConfig<SchedulingConfig>({
         '14x7': sa?.['14x7'] ?? legacy ?? d['14x7'],
         '10x5': sa?.['10x5'] ?? legacy ?? d['10x5'],
         '7x7': sa?.['7x7'] ?? legacy ?? d['7x7'],
+      },
+      crewPhase: {
+        '14x7': saved?.crewPhase?.['14x7'] ?? {},
+        '10x5': saved?.crewPhase?.['10x5'] ?? {},
+        '7x7': saved?.crewPhase?.['7x7'] ?? {},
       },
     }
   },
@@ -154,6 +166,11 @@ export const schedulingStore = {
   setCycleAnchor(key: CycleKey, dateISO: string) {
     const c = cfg.get()
     cfg.set({ ...c, cycleAnchors: { ...c.cycleAnchors, [key]: dateISO } })
+  },
+  /** Set a crew's phase at the cycle start (continuous: 0 Day/1 Night/2 Off · 7/7: 0 On/1 Off). */
+  setCrewPhase(key: CycleKey, crewId: string, phase: number) {
+    const c = cfg.get()
+    cfg.set({ ...c, crewPhase: { ...c.crewPhase, [key]: { ...c.crewPhase[key], [crewId]: phase } } })
   },
 }
 

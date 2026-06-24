@@ -106,18 +106,12 @@ export function anchorFor(d: { schedule_anchor?: string }): string {
   return d.schedule_anchor || DEFAULT_ANCHOR
 }
 
-// ── Crew-staggered rotation ──────────────────────────────────────────────
-// Continuous sections rotate Day → Night → Off ACROSS crews: at the cycle
-// anchor crew A (index 0) is on Day, crew B (index 1) on Night, crew C (index 2)
-// resting, then each advances a phase every block. We get this by shifting each
-// crew's cycle start back by (crewIndex × block length). The 7/7 split sections
-// alternate on/off by crew, with day/night from the driver's Morning/Afternoon.
-const DAY = 86_400_000
-function addDaysISO(iso: string, n: number): string {
-  const d = new Date(`${iso}T00:00:00`)
-  d.setTime(d.getTime() + n * DAY)
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
+// ── Crew rotation ────────────────────────────────────────────────────────
+// Each crew has a PHASE at the cycle start (admin-set in Admin → Scheduling;
+// default A/B/C order = Day/Night/Off). Continuous sections rotate Day → Night →
+// Off (3 phases); 7/7 sections alternate On → Off (2 phases), with day/night on
+// the On block coming from the driver's Morning/Afternoon. The phase advances one
+// step every block (N days) from the cycle start, so the selection keeps rotating.
 export function isContinuousSection(section: string): boolean {
   return section.startsWith('Pit') || section === 'Security' || section === 'Dewatering'
 }
@@ -127,12 +121,11 @@ function blockLen(section: string): number {
   if (section === 'Security' || section === 'Dewatering') return 5
   return 7
 }
-/** Crew's position (A=0, B=1, C=2…) among the configured crews — its rotation phase. */
+/** Crew's position (A=0, B=1, C=2…) among the configured crews — the default phase order. */
 function crewIndex(crewId: string): number {
   const i = schedulingStore.get().crews.findIndex((c) => c.id === crewId)
   return i >= 0 ? i : 0
 }
-/** Global rotation cycle start (Admin → Scheduling), falling back to the default Friday. */
 /** Cycle group for a section: 14/7 (Pit), 10/5 (Security & Dewatering), else 7/7. */
 export function cycleKeyFor(section: string): CycleKey {
   if (section.startsWith('Pit')) return '14x7'
@@ -143,15 +136,39 @@ export function cycleKeyFor(section: string): CycleKey {
 export function cycleAnchorFor(section: string): string {
   return schedulingStore.get().cycleAnchors[cycleKeyFor(section)] || DEFAULT_ANCHOR
 }
-
-/** Shift type for a driver on a date, given a cycle anchor, with crews staggered by phase. */
-export function previewShiftOnDate(d: { id?: string; section: string; crew: string }, anchor: string, dateISO: string): ShiftType {
-  const staggered = addDaysISO(anchor || DEFAULT_ANCHOR, -crewIndex(d.crew) * blockLen(d.section))
-  return shiftOnDate(patternKeyFor(d), staggered, dateISO)
+/** Number of phases in a cycle — continuous Day/Night/Off = 3 · 7/7 On/Off = 2. */
+export function phaseCount(key: CycleKey): number {
+  return key === '7x7' ? 2 : 3
 }
-/** Shift type for a driver on a date using the live global cycle anchor. */
+/** A crew's phase at the cycle start for a cycle type — admin override, else A/B/C order. */
+export function crewPhaseFor(key: CycleKey, crewId: string): number {
+  const ov = schedulingStore.get().crewPhase?.[key]?.[crewId]
+  return ov == null ? crewIndex(crewId) % phaseCount(key) : ov
+}
+
+/** What a driver is doing on a date: day / night / off — their crew's phase rotated each block. */
+function driverPhase(d: { id?: string; section: string; crew: string }, dateISO: string, anchorOverride?: string): 'day' | 'night' | 'off' {
+  const key = cycleKeyFor(d.section)
+  const count = phaseCount(key)
+  const anchor = anchorOverride || cycleAnchorFor(d.section)
+  const blocks = Math.floor(daysBetween(anchor, dateISO) / blockLen(d.section))
+  const phase = (((crewPhaseFor(key, d.crew) + blocks) % count) + count) % count
+  if (key === '7x7') return phase === 1 ? 'off' : effectiveKind(d) // On → Morning(day)/Afternoon(night)
+  return phase === 0 ? 'day' : phase === 1 ? 'night' : 'off'
+}
+function phaseToShift(section: string, ph: 'day' | 'night' | 'off'): ShiftType {
+  if (ph === 'off') return 'off'
+  const cont = isContinuousSection(section)
+  if (ph === 'night') return cont ? 'night_cont' : 'night_split'
+  return cont ? 'day_cont' : 'day_split'
+}
+/** Shift type for a driver on a date, against a specific cycle start (used for previews). */
+export function previewShiftOnDate(d: { id?: string; section: string; crew: string }, anchor: string, dateISO: string): ShiftType {
+  return phaseToShift(d.section, driverPhase(d, dateISO, anchor))
+}
+/** Shift type for a driver on a date using the live cycle settings. */
 export function driverShiftOnDate(d: { id?: string; section: string; crew: string }, dateISO: string): ShiftType {
-  return previewShiftOnDate(d, cycleAnchorFor(d.section), dateISO)
+  return phaseToShift(d.section, driverPhase(d, dateISO))
 }
 
 const localISO = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`

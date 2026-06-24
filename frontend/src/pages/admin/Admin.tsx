@@ -15,6 +15,7 @@ import { isSupabaseConfigured } from '@/lib/supabase/client'
 import { supaUsersStore } from '@/lib/auth/profiles'
 import { useApprovals, approvalsStore } from '@/lib/auth/approvals'
 import { useScheduling, schedulingStore } from '@/lib/drivers/scheduling'
+import { crewPhaseFor } from '@/lib/drivers/schedule'
 import { employeesStore } from '@/lib/hr/store'
 import type { JobRole } from '@/lib/hr/types'
 import { clearAllData, restoreDemoData } from '@/lib/demo/reset'
@@ -530,18 +531,32 @@ function SchedulingTab() {
       </div>
 
       <div className="card p-4">
-        <div className="mb-2 flex items-center gap-2"><CalendarClock size={15} className="text-brand" /><h3 className="font-display text-sm font-bold text-navy">Rotation cycle starts</h3></div>
-        <p className="mb-3 text-[11px] text-status-neutral">When each rotation began — crews stagger from these dates (at the start A on Day, B on Night, C resting, then each rotates every block). The 10/5 and 14/7 cycles started on different dates, so set each one.</p>
-        <div className="grid gap-3 sm:grid-cols-3">
+        <div className="mb-2 flex items-center gap-2"><CalendarClock size={15} className="text-brand" /><h3 className="font-display text-sm font-bold text-navy">Crew rotation</h3></div>
+        <p className="mb-3 text-[11px] text-status-neutral">Pick what each crew is doing now and when the current block started — the system rotates the selection forward every block. Continuous (10/5 &amp; 14/7) cycle Day → Night → Off; 7/7 alternates On → Off (a driver's morning/afternoon is set on their profile).</p>
+        <div className="space-y-3">
           {([
-            ['14x7', '14 on / 7 off — Pit (Enterprise & Sentinel)'],
-            ['10x5', '10 on / 5 off — Security & Dewatering'],
-            ['7x7', '7 on / 7 off — Sentinel, Enterprise, Omega'],
-          ] as const).map(([key, label]) => (
-            <label key={key} className="block">
-              <span className="mb-1 block text-xs font-medium text-navy">{label}</span>
-              <input type="date" className={inputCls} value={sched.cycleAnchors[key]} onChange={(e) => schedulingStore.setCycleAnchor(key, e.target.value)} />
-            </label>
+            { key: '14x7', label: '14 on / 7 off — Pit (Enterprise & Sentinel)', phases: [[0, 'Day'], [1, 'Night'], [2, 'Off']] },
+            { key: '10x5', label: '10 on / 5 off — Security & Dewatering', phases: [[0, 'Day'], [1, 'Night'], [2, 'Off']] },
+            { key: '7x7', label: '7 on / 7 off — Sentinel, Enterprise, Omega', phases: [[0, 'On shift'], [1, 'Off']] },
+          ] as const).map((cyc) => (
+            <div key={cyc.key} className="rounded-lg border border-black/10 p-3">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <span className="text-sm font-semibold text-navy">{cyc.label}</span>
+                <label className="flex items-center gap-2 text-[11px] text-status-neutral">Block started
+                  <input type="date" className="rounded-lg border border-black/15 bg-white px-2 py-1 text-sm text-navy outline-none focus:border-brand" value={sched.cycleAnchors[cyc.key]} onChange={(e) => schedulingStore.setCycleAnchor(cyc.key, e.target.value)} />
+                </label>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-3">
+                {sched.crews.map((c) => (
+                  <label key={c.id} className="flex items-center gap-2 rounded-lg border border-black/10 bg-white px-2.5 py-1.5">
+                    <span className="w-16 shrink-0 text-xs font-medium text-navy">Crew {c.label}</span>
+                    <select className="flex-1 rounded-lg border border-black/15 bg-white px-2 py-1 text-xs text-navy outline-none focus:border-brand" value={crewPhaseFor(cyc.key, c.id)} onChange={(e) => schedulingStore.setCrewPhase(cyc.key, c.id, Number(e.target.value))}>
+                      {cyc.phases.map(([v, lbl]) => <option key={v} value={v}>{lbl}</option>)}
+                    </select>
+                  </label>
+                ))}
+              </div>
+            </div>
           ))}
         </div>
       </div>
