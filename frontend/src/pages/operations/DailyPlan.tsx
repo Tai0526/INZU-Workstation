@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Plus, Pencil, Trash2, Download, FileText, ArrowRight, Bus, Clock, Check } from 'lucide-react'
+import { Plus, Pencil, Trash2, Download, FileText, ArrowRight, Bus, Clock, Check, MapPin, X } from 'lucide-react'
 import clsx from 'clsx'
 import { useAuth } from '@/auth/AuthContext'
 import { ROLES, BRANCHES, type BranchCode } from '@/lib/roles'
@@ -8,7 +8,8 @@ import Modal from '@/components/ui/Modal'
 import Button from '@/components/ui/Button'
 import { useVehicles } from '@/lib/fleet/store'
 import { useDrivers } from '@/lib/drivers/store'
-import { useRoutes, useDailyPlan, dailyPlanStore } from '@/lib/operations/store'
+import { useDailyPlan, dailyPlanStore } from '@/lib/operations/store'
+import { useLocations, locationsStore } from '@/lib/operations/locations'
 import { DEFAULT_TO_LOCATION, TRIP_LABEL, type DailyPlanInput, type DailyPlanTrip, type TripType } from '@/lib/operations/types'
 import { exportDailyPlan } from '@/lib/operations/excel'
 import { downloadTablePdf, type PdfTable } from '@/lib/reports/pdfDoc'
@@ -44,14 +45,15 @@ export default function DailyPlan() {
 
   const vehicles = useVehicles().filter((v) => v.branch === branch && v.status === 'active')
   const drivers = useDrivers().filter((d) => d.branch === branch)
-  const routes = useRoutes().filter((r) => r.branch === branch)
   const plan = useDailyPlan()
+  const locationOptions = useLocations(branch)
 
   // Planning is for the NEXT day by default (done the evening before / in the office).
   const [date, setDate] = useState(tomorrowISO())
   const [defaultType, setDefaultType] = useState<TripType>('pickup')
   const [rows, setRows] = useState<DraftRow[]>([blankRow('pickup'), blankRow('pickup'), blankRow('pickup')])
   const [editing, setEditing] = useState<DailyPlanTrip | null>(null)
+  const [placesOpen, setPlacesOpen] = useState(false)
   const [error, setError] = useState('')
 
   const trips = useMemo(
@@ -60,8 +62,6 @@ export default function DailyPlan() {
   )
   const pickups = trips.filter((t) => t.trip_type !== 'knockoff')
   const knockoffs = trips.filter((t) => t.trip_type === 'knockoff')
-
-  const locationOptions = useMemo(() => [...new Set<string>([GATE, ...routes.map((r) => r.name)])].filter(Boolean), [routes])
 
   function setRow(i: number, patch: Partial<DraftRow>) { setRows((rs) => rs.map((r, idx) => (idx === i ? { ...r, ...patch } : r))); setError('') }
   function setRowType(i: number, t: TripType) { setRows((rs) => rs.map((r, idx) => (idx === i ? withGate(r, t) : r))) }
@@ -140,6 +140,7 @@ export default function DailyPlan() {
                 <button key={t} onClick={() => chooseDefault(t)} className={clsx('px-3 py-1.5 text-xs font-semibold transition-colors', defaultType === t ? 'bg-navy text-white' : 'bg-white text-navy hover:bg-canvas')}>{TRIP_LABEL[t]}</button>
               ))}
             </div>
+            <Button variant="secondary" onClick={() => setPlacesOpen(true)}><MapPin size={14} /> Manage places</Button>
             <span className="ml-auto text-xs text-status-neutral">{readyRows.length} ready</span>
           </div>
 
@@ -165,8 +166,8 @@ export default function DailyPlan() {
                     <td className="px-1.5 py-1 w-28"><select className={cellCls} value={r.trip_type} onChange={(e) => setRowType(i, e.target.value as TripType)}><option value="pickup">Pickup</option><option value="knockoff">Knock-off</option></select></td>
                     <td className="px-1.5 py-1 w-28"><input list="dp-fleet" className={cellCls} placeholder="INZ 226" value={r.fleet_no} onChange={(e) => onFleet(i, e.target.value)} /></td>
                     <td className="px-1.5 py-1 w-28"><input className={cellCls} placeholder="reg" value={r.reg_no} onChange={(e) => setRow(i, { reg_no: e.target.value })} /></td>
-                    <td className="px-1.5 py-1"><input list="dp-locations" className={clsx(cellCls, r.from_location === GATE && 'font-medium text-brand')} placeholder="from" value={r.from_location} onChange={(e) => setRow(i, { from_location: e.target.value })} /></td>
-                    <td className="px-1.5 py-1"><input list="dp-locations" className={clsx(cellCls, r.to_location === GATE && 'font-medium text-brand')} placeholder="to" value={r.to_location} onChange={(e) => setRow(i, { to_location: e.target.value })} /></td>
+                    <td className="px-1.5 py-1"><select className={clsx(cellCls, r.from_location === GATE && 'font-medium text-brand')} value={r.from_location} onChange={(e) => setRow(i, { from_location: e.target.value })}><option value="">From…</option>{locationOptions.map((n) => <option key={n} value={n}>{n}</option>)}</select></td>
+                    <td className="px-1.5 py-1"><select className={clsx(cellCls, r.to_location === GATE && 'font-medium text-brand')} value={r.to_location} onChange={(e) => setRow(i, { to_location: e.target.value })}><option value="">To…</option>{locationOptions.map((n) => <option key={n} value={n}>{n}</option>)}</select></td>
                     <td className="px-1.5 py-1 w-28"><input type="time" className={cellCls} value={r.departure_time} onChange={(e) => setRow(i, { departure_time: e.target.value })} /></td>
                     <td className="px-1.5 py-1 w-40"><input list="dp-drivers" className={cellCls} placeholder="driver" value={r.driver_name} onChange={(e) => setRow(i, { driver_name: e.target.value })} /></td>
                     <td className="px-1.5 py-1"><button onClick={() => removeRow(i)} className="rounded p-1 text-status-neutral hover:bg-status-critical/10 hover:text-status-critical"><Trash2 size={14} /></button></td>
@@ -257,9 +258,9 @@ export default function DailyPlan() {
 
       <datalist id="dp-drivers">{drivers.map((d) => <option key={d.id} value={d.full_name} />)}</datalist>
       <datalist id="dp-fleet">{vehicles.map((v) => <option key={v.id} value={v.fleet_no} />)}</datalist>
-      <datalist id="dp-locations">{locationOptions.map((n) => <option key={n} value={n} />)}</datalist>
 
-      <EditTripModal trip={editing} onClose={() => setEditing(null)} vehicles={vehicles} />
+      <EditTripModal trip={editing} onClose={() => setEditing(null)} vehicles={vehicles} locations={locationOptions} />
+      <PlacesModal open={placesOpen} onClose={() => setPlacesOpen(false)} branch={branch} />
 
       {!ROLES[role].canToggleBranch && <p className="text-xs text-status-neutral">Showing {branchLabel} only.</p>}
       {!canPlan && <p className="text-xs text-status-neutral">View only — Bus Controllers, Route Supervisors and Operations can edit the plan.</p>}
@@ -267,7 +268,7 @@ export default function DailyPlan() {
   )
 }
 
-function EditTripModal({ trip, onClose, vehicles }: { trip: DailyPlanTrip | null; onClose: () => void; vehicles: any[] }) {
+function EditTripModal({ trip, onClose, vehicles, locations }: { trip: DailyPlanTrip | null; onClose: () => void; vehicles: any[]; locations: string[] }) {
   const [f, setF] = useState<DraftRow | null>(null)
   const [key, setKey] = useState('')
   const k = trip?.id ?? ''
@@ -275,6 +276,7 @@ function EditTripModal({ trip, onClose, vehicles }: { trip: DailyPlanTrip | null
   if (!trip || !f) return null
 
   const set = (patch: Partial<DraftRow>) => setF((p) => (p ? { ...p, ...patch } : p))
+  const optsFor = (val: string) => (val && !locations.includes(val) ? [val, ...locations] : locations)
   function onFleet(v: string) { const veh = vehicles.find((x) => x.fleet_no.toLowerCase() === v.trim().toLowerCase()); setF((p) => (p ? { ...p, fleet_no: v, reg_no: veh ? veh.reg_plate : p.reg_no } : p)) }
   function save() {
     if (!f!.fleet_no.trim() || !f!.from_location.trim() || !f!.to_location.trim()) return
@@ -291,9 +293,39 @@ function EditTripModal({ trip, onClose, vehicles }: { trip: DailyPlanTrip | null
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Departure time</span><input type="time" className={inputCls} value={f.departure_time} onChange={(e) => set({ departure_time: e.target.value })} /></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Bus (fleet no)</span><input list="dp-fleet" className={inputCls} value={f.fleet_no} onChange={(e) => onFleet(e.target.value)} /></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Reg No</span><input className={inputCls} value={f.reg_no} onChange={(e) => set({ reg_no: e.target.value })} /></label>
-        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">From</span><input list="dp-locations" className={inputCls} value={f.from_location} onChange={(e) => set({ from_location: e.target.value })} /></label>
-        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">To</span><input list="dp-locations" className={inputCls} value={f.to_location} onChange={(e) => set({ to_location: e.target.value })} /></label>
+        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">From</span><select className={inputCls} value={f.from_location} onChange={(e) => set({ from_location: e.target.value })}><option value="">Select…</option>{optsFor(f.from_location).map((n) => <option key={n} value={n}>{n}</option>)}</select></label>
+        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">To</span><select className={inputCls} value={f.to_location} onChange={(e) => set({ to_location: e.target.value })}><option value="">Select…</option>{optsFor(f.to_location).map((n) => <option key={n} value={n}>{n}</option>)}</select></label>
         <label className="col-span-2 block"><span className="mb-1 block text-xs font-medium text-navy">Driver</span><input list="dp-drivers" className={inputCls} value={f.driver_name} onChange={(e) => set({ driver_name: e.target.value })} /></label>
+      </div>
+    </Modal>
+  )
+}
+
+// Manage the pick-up / drop-off places that fill the From / To dropdowns.
+function PlacesModal({ open, onClose, branch }: { open: boolean; onClose: () => void; branch: BranchCode }) {
+  const places = useLocations(branch)
+  const [name, setName] = useState('')
+  function add() { const n = name.trim(); if (!n) return; locationsStore.add(branch, n); setName('') }
+  return (
+    <Modal open={open} onClose={onClose} title="Places" subtitle="Pick-up & drop-off points used in the From / To dropdowns."
+      footer={<Button onClick={onClose}>Done</Button>}>
+      <div className="space-y-3">
+        <div className="flex gap-2">
+          <input className={inputCls} placeholder="Add a place (e.g. Kisasa)" value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && add()} autoFocus />
+          <Button onClick={add} disabled={!name.trim()}><Plus size={15} /> Add</Button>
+        </div>
+        <div className="divide-y divide-black/5 rounded-lg border border-black/10">
+          {places.map((p) => (
+            <div key={p} className="flex items-center gap-2 px-3 py-2 text-sm">
+              <MapPin size={14} className="text-status-neutral" />
+              <span className="flex-1 text-navy">{p}</span>
+              {p === GATE
+                ? <span className="text-[11px] text-status-neutral">always available</span>
+                : <button onClick={() => locationsStore.remove(branch, p)} className="rounded p-1 text-status-neutral hover:bg-status-critical/10 hover:text-status-critical" title="Remove"><X size={14} /></button>}
+            </div>
+          ))}
+        </div>
+        <p className="text-[11px] text-status-neutral">Places are shared with everyone on this branch and appear in the From / To dropdowns immediately.</p>
       </div>
     </Modal>
   )
