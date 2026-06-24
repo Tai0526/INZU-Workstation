@@ -10,11 +10,12 @@ import { BRANCHES } from '@/lib/roles'
 import { putFile } from '@/lib/storage/fileStore'
 import { useDrivers, driversStore } from '@/lib/drivers/store'
 import {
-  type Driver, SHIFT_LABEL, SHIFT_STATE_META, driverShiftState,
+  type Driver, SHIFT_STATE_META, driverShiftState,
   complianceItems, EXPIRY_TONE,
 } from '@/lib/drivers/types'
-import { useScheduling, crewLabel, shiftTime, windowForKind } from '@/lib/drivers/scheduling'
-import { effectiveShiftDef, effectiveKind, useDriverShifts } from '@/lib/drivers/driverShifts'
+import { useScheduling, crewLabel } from '@/lib/drivers/scheduling'
+import { useDriverShifts } from '@/lib/drivers/driverShifts'
+import { scheduledShift, dutyLabel, dutyHours } from '@/lib/drivers/schedule'
 import { useSpeedEvents } from '@/lib/speed/store'
 import { overBy, STATUS_META } from '@/lib/speed/types'
 import { useCases, INCIDENT_TYPE_META, CASE_STAGE_META } from '@/lib/safety/cases'
@@ -50,10 +51,9 @@ export default function DriverDetail({
   if (!d) return null
 
   const branch = BRANCHES.find((b) => b.code === d.branch)!
-  const eShift = effectiveShiftDef(d)
-  const shiftKey = effectiveKind(d)
-  const shiftLabel = eShift?.label ?? SHIFT_LABEL[shiftKey]
-  const windowStr = shiftTime(eShift) || windowForKind(sched, shiftKey)
+  const todayType = scheduledShift(d)
+  const shiftLabel = dutyLabel(d, todayType) // current Day/Night/Off (or Day/Afternoon for 7/7)
+  const windowStr = dutyHours(d, todayType)
   const state = driverShiftState(d)
   const stateMeta = SHIFT_STATE_META[state]
   const comp = complianceItems(d)

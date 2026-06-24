@@ -132,28 +132,29 @@ export function cycleKeyFor(section: string): CycleKey {
   if (section === 'Security' || section === 'Dewatering') return '10x5'
   return '7x7'
 }
-/** Cycle start date for a section's rotation type (each type began on its own date). */
-export function cycleAnchorFor(section: string): string {
-  return schedulingStore.get().cycleAnchors[cycleKeyFor(section)] || DEFAULT_ANCHOR
+/** Rotation start date for a section (each section can begin on its own date). */
+export function sectionAnchorFor(section: string): string {
+  return schedulingStore.get().sectionAnchors[section] || DEFAULT_ANCHOR
 }
 /** Number of phases in a cycle — continuous Day/Night/Off = 3 · 7/7 On/Off = 2. */
 export function phaseCount(key: CycleKey): number {
   return key === '7x7' ? 2 : 3
 }
-/** A crew's phase at the cycle start for a cycle type — admin override, else A/B/C order. */
-export function crewPhaseFor(key: CycleKey, crewId: string): number {
-  const ov = schedulingStore.get().crewPhase?.[key]?.[crewId]
-  return ov == null ? crewIndex(crewId) % phaseCount(key) : ov
+/**
+ * A crew's phase index on a date: continuous 0 Day / 1 Night / 2 Off · 7/7 0 On / 1 Off.
+ * At the section's rotation start A=0, B=1, C=2, advancing one step each block.
+ */
+export function crewPhaseIndex(section: string, crewId: string, dateISO: string, anchorOverride?: string): number {
+  const count = phaseCount(cycleKeyFor(section))
+  const anchor = anchorOverride || sectionAnchorFor(section)
+  const blocks = Math.floor(daysBetween(anchor, dateISO) / blockLen(section))
+  return (((crewIndex(crewId) + blocks) % count) + count) % count
 }
 
 /** What a driver is doing on a date: day / night / off — their crew's phase rotated each block. */
 function driverPhase(d: { id?: string; section: string; crew: string }, dateISO: string, anchorOverride?: string): 'day' | 'night' | 'off' {
-  const key = cycleKeyFor(d.section)
-  const count = phaseCount(key)
-  const anchor = anchorOverride || cycleAnchorFor(d.section)
-  const blocks = Math.floor(daysBetween(anchor, dateISO) / blockLen(d.section))
-  const phase = (((crewPhaseFor(key, d.crew) + blocks) % count) + count) % count
-  if (key === '7x7') return phase === 1 ? 'off' : effectiveKind(d) // On → Morning(day)/Afternoon(night)
+  const phase = crewPhaseIndex(d.section, d.crew, dateISO, anchorOverride)
+  if (cycleKeyFor(d.section) === '7x7') return phase === 1 ? 'off' : effectiveKind(d) // On → Day(morning)/Afternoon(night)
   return phase === 0 ? 'day' : phase === 1 ? 'night' : 'off'
 }
 function phaseToShift(section: string, ph: 'day' | 'night' | 'off'): ShiftType {

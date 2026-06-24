@@ -27,34 +27,28 @@ export interface SchedulingConfig {
   shifts: ShiftDef[]
   crews: CrewDef[]
   schedules: WorkScheduleDef[]
-  /** Cycle start date per rotation type — 14/7 (Pit), 10/5 (Security & Dewatering),
-   *  7/7 (split). Crews rotate from each one; the cycles began on different dates. */
-  cycleAnchors: Record<CycleKey, string>
-  /**
-   * Each crew's phase at the cycle start, per cycle type (admin-chosen; missing →
-   * default A/B/C order). Continuous: 0 = Day, 1 = Night, 2 = Off. 7/7: 0 = On,
-   * 1 = Off. The system rotates this selection forward every block.
-   */
-  crewPhase: Record<CycleKey, Record<string, number>>
+  /** When each section's rotation started (keyed by section name). Missing → default.
+   *  Crews rotate from here — A starts Day, B Night, C Off (continuous); A on, B off (7/7). */
+  sectionAnchors: Record<string, string>
 }
 
 export const DEFAULT_SCHEDULING: SchedulingConfig = {
   shifts: [
-    { id: 'day', label: 'Day', start: '06:00', end: '18:00' },
-    { id: 'night', label: 'Night', start: '18:00', end: '06:00' },
+    { id: 'day', label: 'Day', start: '05:00', end: '17:00' },
+    { id: 'night', label: 'Night', start: '17:00', end: '05:00' },
+    { id: 'afternoon', label: 'Afternoon', start: '14:00', end: '02:00' },
   ],
   crews: [
-    { id: 'A', label: 'A', shift_id: 'day' },
-    { id: 'B', label: 'B', shift_id: 'night' },
-    { id: 'C', label: 'C' }, // rest crew at the cycle start; rotates Day→Night→Off for 14/7 & 10/5
+    { id: 'A', label: 'A' },
+    { id: 'B', label: 'B' },
+    { id: 'C', label: 'C' },
   ],
   schedules: [
     { id: '7x7', label: '7 on / 7 off', on_days: 7, off_days: 7, continuous: false },
     { id: '14x7', label: '14 on / 7 off', on_days: 14, off_days: 7, continuous: true },
     { id: '10x5', label: '10 on / 5 off', on_days: 10, off_days: 5, continuous: true },
   ],
-  cycleAnchors: { '14x7': '2026-01-02', '10x5': '2026-01-02', '7x7': '2026-01-02' }, // Fridays; shift change is Friday 10:00
-  crewPhase: { '14x7': {}, '10x5': {}, '7x7': {} }, // empty = default A Day · B Night · C Off
+  sectionAnchors: {}, // per-section rotation start; fall back to the default Friday
 }
 
 const cfg = createSyncConfig<SchedulingConfig>({
@@ -62,28 +56,17 @@ const cfg = createSyncConfig<SchedulingConfig>({
   lsKey: 'inzu_scheduling',
   default: DEFAULT_SCHEDULING,
   merge: (saved) => {
-    // Keep the user's crews but make sure the three rotation crews (A/B/C) all
-    // exist — continuous 14/7 & 10/5 sections need a rest crew to rotate through.
+    // Ensure the three rotation crews (A/B/C) and the core shifts (Day/Night/
+    // Afternoon) exist, without wiping any customisation the user has made.
     const crews = saved?.crews ? [...saved.crews] : [...DEFAULT_SCHEDULING.crews]
     for (const dc of DEFAULT_SCHEDULING.crews) if (!crews.some((c) => c.id === dc.id)) crews.push(dc)
-    // Migrate the old single anchor (if present) into the per-cycle anchors.
-    const legacy = (saved as { cycleAnchor?: string } | null | undefined)?.cycleAnchor
-    const sa = saved?.cycleAnchors
-    const d = DEFAULT_SCHEDULING.cycleAnchors
+    const shifts = saved?.shifts ? [...saved.shifts] : [...DEFAULT_SCHEDULING.shifts]
+    for (const ds of DEFAULT_SCHEDULING.shifts) if (!shifts.some((s) => s.id === ds.id)) shifts.push(ds)
     return {
-      shifts: saved?.shifts ?? DEFAULT_SCHEDULING.shifts,
+      shifts,
       crews,
       schedules: saved?.schedules ?? DEFAULT_SCHEDULING.schedules,
-      cycleAnchors: {
-        '14x7': sa?.['14x7'] ?? legacy ?? d['14x7'],
-        '10x5': sa?.['10x5'] ?? legacy ?? d['10x5'],
-        '7x7': sa?.['7x7'] ?? legacy ?? d['7x7'],
-      },
-      crewPhase: {
-        '14x7': saved?.crewPhase?.['14x7'] ?? {},
-        '10x5': saved?.crewPhase?.['10x5'] ?? {},
-        '7x7': saved?.crewPhase?.['7x7'] ?? {},
-      },
+      sectionAnchors: saved?.sectionAnchors ?? {},
     }
   },
 })
@@ -162,15 +145,10 @@ export const schedulingStore = {
     cfg.set({ ...c, schedules: c.schedules.filter((s) => s.id !== id) })
   },
 
-  // ── Rotation cycle start (per cycle type) ──
-  setCycleAnchor(key: CycleKey, dateISO: string) {
+  // ── Rotation start (per section) ──
+  setSectionAnchor(section: string, dateISO: string) {
     const c = cfg.get()
-    cfg.set({ ...c, cycleAnchors: { ...c.cycleAnchors, [key]: dateISO } })
-  },
-  /** Set a crew's phase at the cycle start (continuous: 0 Day/1 Night/2 Off · 7/7: 0 On/1 Off). */
-  setCrewPhase(key: CycleKey, crewId: string, phase: number) {
-    const c = cfg.get()
-    cfg.set({ ...c, crewPhase: { ...c.crewPhase, [key]: { ...c.crewPhase[key], [crewId]: phase } } })
+    cfg.set({ ...c, sectionAnchors: { ...c.sectionAnchors, [section]: dateISO } })
   },
 }
 

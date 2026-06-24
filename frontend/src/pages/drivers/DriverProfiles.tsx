@@ -16,7 +16,8 @@ import {
   type Driver, type Crew, SHIFT_STATE_META,
   driverShiftState, worstExpiry, EXPIRY_TONE,
 } from '@/lib/drivers/types'
-import { useScheduling, crewLabel, crewShiftLabel, shiftForCrew } from '@/lib/drivers/scheduling'
+import { useScheduling, crewLabel, shiftForCrew } from '@/lib/drivers/scheduling'
+import { scheduledShift, dutyLabel } from '@/lib/drivers/schedule'
 
 export default function DriverProfiles() {
   const { user } = useAuth()
@@ -98,7 +99,7 @@ export default function DriverProfiles() {
                 <StatusBadge tone={SHIFT_STATE_META[state].tone}>{SHIFT_STATE_META[state].label}</StatusBadge>
               </div>
               <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[11px]">
-                <span className="rounded-full bg-navy/5 px-2 py-0.5 text-navy">Crew {crewLabel(sched, d.crew)}{crewShiftLabel(sched, d.crew) ? ` · ${crewShiftLabel(sched, d.crew)}` : ''}</span>
+                <span className="rounded-full bg-navy/5 px-2 py-0.5 text-navy">Crew {crewLabel(sched, d.crew)} · {dutyLabel(d, scheduledShift(d))}</span>
                 <span className="rounded-full bg-navy/5 px-2 py-0.5 text-navy">{d.section}</span>
                 {worst !== 'current' && worst !== 'none' && (
                   <span className={`rounded-full px-2 py-0.5 font-medium ${worst === 'expired' ? 'bg-status-critical/10 text-status-critical' : 'bg-status-warning/10 text-[#8a6d10]'}`}>

@@ -5,10 +5,10 @@ import { useAuth } from '@/auth/AuthContext'
 import { BRANCHES, type BranchCode } from '@/lib/roles'
 import { SECTIONS } from '@/lib/org/sections'
 import { driversStore } from '@/lib/drivers/store'
-import { type Driver, type DriverInput, type Crew, type DriverStatus, patternFor, shiftWindow } from '@/lib/drivers/types'
-import { schedulingStore, useScheduling, crewLabel, crewShiftLabel, crewShiftKind, shiftTime, shiftKindOf } from '@/lib/drivers/scheduling'
+import { type Driver, type DriverInput, type DriverStatus } from '@/lib/drivers/types'
+import { schedulingStore, useScheduling } from '@/lib/drivers/scheduling'
 import { driverShiftsStore } from '@/lib/drivers/driverShifts'
-import { isContinuousSection } from '@/lib/drivers/schedule'
+import { isContinuousSection, crewPhaseIndex } from '@/lib/drivers/schedule'
 
 function Field({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) {
   return (
@@ -54,7 +54,33 @@ export default function DriverFormModal({
     setError('')
     setLastKey(key)
   }
-  const selShift = sched.shifts.find((s) => s.id === shiftId)
+  // Section-driven crew options: continuous shows each crew's live Day/Night/Off;
+  // 7/7 shows each crew × Day/Afternoon with the live (on)/(off). Value encodes both.
+  const todayISO = new Date().toISOString().slice(0, 10)
+  const cont = isContinuousSection(form.section)
+  const PHASE = ['Day', 'Night', 'Off']
+  const crewOpts = cont
+    ? sched.crews.map((c) => ({ value: c.id, label: `Crew ${c.label} · ${PHASE[crewPhaseIndex(form.section, c.id, todayISO)]}` }))
+    : sched.crews.slice(0, 2).flatMap((c) => {
+        const on = crewPhaseIndex(form.section, c.id, todayISO) === 0 ? 'on' : 'off'
+        return [
+          { value: `${c.id}__day`, label: `Crew ${c.label} · Day (${on})` },
+          { value: `${c.id}__afternoon`, label: `Crew ${c.label} · Afternoon (${on})` },
+        ]
+      })
+  const crewVal = cont ? form.crew : `${form.crew}__${shiftId === 'afternoon' ? 'afternoon' : 'day'}`
+  function onCrewChange(v: string) {
+    if (cont) { set('crew', v); setShiftId('') }
+    else { const [cid, blk] = v.split('__'); set('crew', cid); setShiftId(blk === 'afternoon' ? 'afternoon' : 'day') }
+  }
+  function onSectionChange(v: string) {
+    setForm((f) => {
+      let crew = f.crew
+      if (!isContinuousSection(v) && !sched.crews.slice(0, 2).some((c) => c.id === crew)) crew = sched.crews[0]?.id ?? 'A'
+      return { ...f, section: v, crew }
+    })
+    setShiftId((prev) => (isContinuousSection(v) ? '' : (prev === 'afternoon' ? 'afternoon' : 'day')))
+  }
 
   function set<K extends keyof Driver>(k: K, v: Driver[K]) {
     setForm((f) => {
@@ -74,7 +100,7 @@ export default function DriverFormModal({
 
     const payload = { ...form, full_name, employee_no }
     // Morning/Afternoon only applies to 7/7 split sections; continuous rotates by crew.
-    const blockShift = isContinuousSection(form.section) ? undefined : (shiftId || undefined)
+    const blockShift = isContinuousSection(form.section) ? undefined : (shiftId || 'day')
     if (editing) { driversStore.update(editing.id, payload); driverShiftsStore.set(editing.id, blockShift) }
     else { const created = driversStore.add(payload); driverShiftsStore.set(created.id, blockShift) }
     onClose()
@@ -94,7 +120,7 @@ export default function DriverFormModal({
       onClose={onClose}
       size="lg"
       title={editing ? `Edit ${editing.full_name}` : 'Add driver'}
-      subtitle="Crew sets the shift pattern; section is the area this driver runs."
+      subtitle="Section sets the rotation; pick the crew (with Day/Afternoon for 7-on/7-off)."
       footer={
         <div className="flex w-full items-center justify-between gap-2">
           {editing && isAdmin
@@ -128,28 +154,14 @@ export default function DriverFormModal({
           <input className={inputCls} value={form.phone} onChange={(e) => set('phone', e.target.value)} />
         </Field>
 
-        <Field label="Crew" hint={`Crew ${crewLabel(sched, form.crew)} → ${crewShiftLabel(sched, form.crew) || 'no set shift'} · roster ${shiftWindow(patternFor(form.branch, form.section), crewShiftKind(sched, form.crew))}`}>
-          <select className={inputCls} value={form.crew} onChange={(e) => set('crew', e.target.value as Crew)}>
-            {sched.crews.map((c) => (
-              <option key={c.id} value={c.id}>Crew {c.label}{crewShiftLabel(sched, c.id) ? ` · ${crewShiftLabel(sched, c.id)}` : ''}</option>
-            ))}
+        <Field label="Section">
+          <select className={inputCls} value={form.section} onChange={(e) => onSectionChange(e.target.value)}>
+            {SECTIONS[form.branch].map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
         </Field>
-        {isContinuousSection(form.section) ? (
-          <Field label="Shift / block" hint="Continuous section — day/night rotates by crew">
-            <div className={`${inputCls} bg-canvas text-status-neutral`}>A Day · B Night · C Off (auto-rotates)</div>
-          </Field>
-        ) : (
-          <Field label="Shift / block" hint={selShift ? `${shiftKindOf(selShift) === 'night' ? 'Counts as night' : 'Counts as day'}${shiftTime(selShift) ? ` · ${shiftTime(selShift)}` : ''}` : 'Follows the crew’s shift'}>
-            <select className={inputCls} value={shiftId} onChange={(e) => setShiftId(e.target.value)}>
-              <option value="">Use crew default</option>
-              {sched.shifts.map((s) => <option key={s.id} value={s.id}>{s.label}{shiftTime(s) ? ` · ${shiftTime(s)}` : ''}</option>)}
-            </select>
-          </Field>
-        )}
-        <Field label="Section">
-          <select className={inputCls} value={form.section} onChange={(e) => set('section', e.target.value)}>
-            {SECTIONS[form.branch].map((s) => <option key={s} value={s}>{s}</option>)}
+        <Field label="Crew" hint={cont ? 'Rotates Day → Night → Off automatically' : 'Crews A & B alternate weekly; Day = morning block, Afternoon runs to ~02:00'}>
+          <select className={inputCls} value={crewVal} onChange={(e) => onCrewChange(e.target.value)}>
+            {crewOpts.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
         </Field>
 
