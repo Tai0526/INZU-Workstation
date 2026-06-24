@@ -58,18 +58,20 @@ export default function FleetOverview() {
     [fleet, branchDocs],
   )
 
-  // ── Composition by seating capacity ──
+  // ── Seats available by seating capacity (active vehicles only) ──
   const capacityData = useMemo(() => {
-    const m = new Map<number, number>()
+    const m = new Map<number, number>() // capacity → number of active vehicles
     for (const v of fleet) {
+      if (v.status !== 'active') continue
       const cap = v.capacity ?? 0
+      if (cap <= 0) continue
       m.set(cap, (m.get(cap) ?? 0) + 1)
     }
     return [...m.entries()]
       .sort((a, b) => b[0] - a[0])
-      .map(([cap, n]) => ({ name: cap ? `${cap}-seat` : 'Unset', vehicles: n }))
+      .map(([cap, n]) => ({ name: `${cap}-seat`, seats: cap * n, vehicles: n }))
   }, [fleet])
-  const totalSeats = useMemo(() => fleet.reduce((s, v) => s + (v.capacity ?? 0), 0), [fleet])
+  const totalSeats = useMemo(() => fleet.filter((v) => v.status === 'active').reduce((s, v) => s + (v.capacity ?? 0), 0), [fleet])
 
   // ── Recent activity (audit) — latest 5 ──
   const activity = useMemo(() => {
@@ -170,10 +172,10 @@ export default function FleetOverview() {
         <div className="card p-5">
           <div className="mb-3 flex items-center justify-between">
             <h3 className="font-display text-sm font-bold text-navy">Fleet by seating capacity</h3>
-            <span className="text-xs text-status-neutral">{totalSeats.toLocaleString()} seats total</span>
+            <span className="text-xs text-status-neutral">{totalSeats.toLocaleString()} seats available · active</span>
           </div>
           {capacityData.length === 0 ? (
-            <p className="py-8 text-center text-sm text-status-neutral">No vehicles yet.</p>
+            <p className="py-8 text-center text-sm text-status-neutral">No active vehicles with seats.</p>
           ) : (
             <div className="h-56">
               <ResponsiveContainer width="100%" height="100%">
@@ -183,9 +185,9 @@ export default function FleetOverview() {
                   <Tooltip
                     cursor={{ fill: 'rgba(209,107,33,0.06)' }}
                     contentStyle={{ borderRadius: 10, border: '1px solid #eee', fontSize: 12 }}
-                    formatter={(v: number) => [`${v} vehicle${v === 1 ? '' : 's'}`, 'Count']}
+                    formatter={(v: number, _n: any, item: any) => [`${v} seats · ${item.payload.vehicles} bus${item.payload.vehicles === 1 ? '' : 'es'}`, 'Available']}
                   />
-                  <Bar dataKey="vehicles" radius={[6, 6, 0, 0]} maxBarSize={64}>
+                  <Bar dataKey="seats" radius={[6, 6, 0, 0]} maxBarSize={64}>
                     {capacityData.map((_, i) => (
                       <Cell key={i} fill="#D16B21" />
                     ))}

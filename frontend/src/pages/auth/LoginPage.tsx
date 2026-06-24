@@ -27,11 +27,10 @@ export default function LoginPage() {
     <div className="flex h-screen w-screen overflow-hidden font-sans">
       {/* LEFT PANEL */}
       <div className="relative hidden flex-col justify-between overflow-hidden bg-navy md:flex md:basis-[52%]">
-        <div className="pointer-events-none absolute inset-0 z-0 flex items-center justify-center">
-          <img src="/logo.png" alt="" className="w-[60%] max-w-[420px] object-contain opacity-95"
-            style={{ filter: 'drop-shadow(0 25px 45px rgba(0,0,0,0.45))' }}
-            onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')} />
-        </div>
+        <img src="/login-bg.png" alt="" className="pointer-events-none absolute inset-0 z-0 h-full w-full object-cover object-center"
+          onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')} />
+        {/* Navy scrim keeps the white text readable over the image. */}
+        <div className="pointer-events-none absolute inset-0 z-0 bg-gradient-to-t from-navy/85 via-navy/35 to-navy/55" />
         <div className="relative z-10 p-8 lg:p-11">
           <img src="/logo.png" alt="INZU" className="block h-12 object-contain" onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')} />
           <div className="mt-3">
