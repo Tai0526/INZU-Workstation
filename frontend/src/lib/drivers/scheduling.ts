@@ -161,6 +161,40 @@ export function crewShiftKind(c: SchedulingConfig, crewId: string): 'day' | 'nig
   return crewId.trim().toUpperCase() === 'B' ? 'night' : 'day'
 }
 
+// ── Time resolution (the single source of truth for shift windows) ────────
+/** Parse 'HH:MM' to fractional hours (e.g. '17:30' → 17.5); null if blank/invalid. */
+export function parseHM(t?: string): number | null {
+  if (!t) return null
+  const m = /^(\d{1,2}):(\d{2})$/.exec(t.trim())
+  if (!m) return null
+  const h = Number(m[1]) + Number(m[2]) / 60
+  return Number.isFinite(h) ? h : null
+}
+/** The configured shift representing a given day/night kind. */
+export function shiftDefForKind(c: SchedulingConfig, kind: 'day' | 'night'): ShiftDef | undefined {
+  if (kind === 'night') return c.shifts.find((s) => /night/i.test(`${s.id} ${s.label}`))
+  return c.shifts.find((s) => !/night/i.test(`${s.id} ${s.label}`)) ?? c.shifts[0]
+}
+/** "05:00–17:00" for a kind, or '' when its shift has no times. */
+export function windowForKind(c: SchedulingConfig, kind: 'day' | 'night'): string {
+  return shiftTime(shiftDefForKind(c, kind))
+}
+/**
+ * Numeric [start, end] block(s) for a kind, used by "on shift now". `end` may
+ * exceed 24 to denote a window that wraps past midnight (e.g. 17:00–05:00 → [17, 29]).
+ */
+export function blocksForKind(c: SchedulingConfig, kind: 'day' | 'night'): [number, number][] {
+  const s = shiftDefForKind(c, kind)
+  const a = parseHM(s?.start), b = parseHM(s?.end)
+  if (a == null || b == null) return []
+  return [[a, b <= a ? b + 24 : b]]
+}
+/** Is the clock time `now` inside any of these blocks? */
+export function inAnyBlock(blocks: [number, number][], now: Date): boolean {
+  const h = now.getHours() + now.getMinutes() / 60
+  return blocks.some(([s, e]) => (e <= 24 ? h >= s && h < e : h >= s || h < e - 24))
+}
+
 // ── Hooks ────────────────────────────────────────────────────────────────
 export function useScheduling(): SchedulingConfig {
   return useSyncExternalStore(cfg.subscribe, cfg.get, cfg.get)

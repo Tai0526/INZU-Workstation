@@ -11,18 +11,28 @@
  *  • 10 on / 5 off — CONTINUOUS 12-hour: 5 days Day, 5 days Night, 5 days off.
  */
 
-import { schedulingStore, crewShiftKind } from '@/lib/drivers/scheduling'
+import { schedulingStore, crewShiftKind, windowForKind, blocksForKind, inAnyBlock } from '@/lib/drivers/scheduling'
 
 export type ShiftType = 'day_split' | 'night_split' | 'day_cont' | 'night_cont' | 'off'
 export type ShiftKind = 'day' | 'night' | 'off'
 
-export interface ShiftMeta { label: string; short: string; kind: ShiftKind; hours: string }
+export interface ShiftMeta { label: string; short: string; kind: ShiftKind }
 export const SHIFT_META: Record<ShiftType, ShiftMeta> = {
-  day_split: { label: 'Day (split)', short: 'D', kind: 'day', hours: '03:00–09:00 · 14:00–20:00' },
-  night_split: { label: 'Night (split)', short: 'N', kind: 'night', hours: '11:00–16:00 · 20:00–02:00' },
-  day_cont: { label: 'Day (continuous)', short: 'D', kind: 'day', hours: '06:00–18:00' },
-  night_cont: { label: 'Night (continuous)', short: 'N', kind: 'night', hours: '18:00–06:00' },
-  off: { label: 'Off / rest', short: '·', kind: 'off', hours: 'Rest day' },
+  day_split: { label: 'Day (split)', short: 'D', kind: 'day' },
+  night_split: { label: 'Night (split)', short: 'N', kind: 'night' },
+  day_cont: { label: 'Day (continuous)', short: 'D', kind: 'day' },
+  night_cont: { label: 'Night (continuous)', short: 'N', kind: 'night' },
+  off: { label: 'Off / rest', short: '·', kind: 'off' },
+}
+
+/**
+ * Clock window for a rotation shift type, read from the configured shift times
+ * (Admin → Scheduling) by day/night kind — '' for an off/rest day or a
+ * label-only shift. Single source of truth for shift hours across the app.
+ */
+export function shiftHours(t: ShiftType): string {
+  const kind = SHIFT_META[t].kind
+  return kind === 'off' ? '' : windowForKind(schedulingStore.get(), kind)
 }
 
 export interface RotationPattern {
@@ -38,12 +48,12 @@ const rep = (t: ShiftType, n: number): ShiftType[] => Array.from({ length: n }, 
 export const ROTATIONS: Record<string, RotationPattern> = {
   '7x7_day': {
     key: '7x7_day', label: '7 on / 7 off — Day (split)', continuous: false,
-    blurb: '7 days on, 7 off. Split 12-hour day shift (03–09 & 14–20).',
+    blurb: '7 days on, 7 off — day shift.',
     cycle: [...rep('day_split', 7), ...rep('off', 7)],
   },
   '7x7_night': {
     key: '7x7_night', label: '7 on / 7 off — Night (split)', continuous: false,
-    blurb: '7 days on, 7 off. Split 12-hour night shift (11–16 & 20–02).',
+    blurb: '7 days on, 7 off — night shift.',
     cycle: [...rep('night_split', 7), ...rep('off', 7)],
   },
   '14x7': {
@@ -99,21 +109,11 @@ export function anchorFor(d: { schedule_anchor?: string }): string {
 }
 
 // ── Time-of-day windows (for "on shift now") ────────────────────────────
-// `end` may exceed 24 to denote wrapping past midnight (e.g. 26 = 02:00).
-const SHIFT_BLOCKS: Record<ShiftType, [number, number][]> = {
-  day_split: [[3, 9], [14, 20]],
-  night_split: [[11, 16], [20, 26]],
-  day_cont: [[6, 18]],
-  night_cont: [[18, 30]],
-  off: [],
-}
-function inBlock([s, e]: [number, number], h: number): boolean {
-  return e <= 24 ? h >= s && h < e : h >= s || h < e - 24
-}
-/** Is the current time within this shift's working window? */
+/** Is the current time within this shift's configured working window? */
 export function isWithinShift(t: ShiftType, now: Date = new Date()): boolean {
-  const h = now.getHours() + now.getMinutes() / 60
-  return SHIFT_BLOCKS[t].some((b) => inBlock(b, h))
+  const kind = SHIFT_META[t].kind
+  if (kind === 'off') return false
+  return inAnyBlock(blocksForKind(schedulingStore.get(), kind), now)
 }
 
 const localISO = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`

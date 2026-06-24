@@ -2,6 +2,7 @@ import type { BranchCode } from '@/lib/roles'
 import type { StatusTone } from '@/components/ui/StatusBadge'
 import { daysUntil, EXPIRY_WARNING_DAYS } from '@/lib/documents/types'
 import { scheduledShift, isWithinShift } from '@/lib/drivers/schedule'
+import { schedulingStore, windowForKind, blocksForKind, inAnyBlock } from '@/lib/drivers/scheduling'
 
 // ── Crews & shifts (spec §4.3.2) ───────────────────────────────────────
 // Crews are admin-configurable (Admin → Scheduling) — A, B, C… each optionally
@@ -18,20 +19,6 @@ export type PatternKey = 'split' | 'straight'
 export const CREW_SHIFT: Record<string, ShiftKey> = { A: 'day', B: 'night' }
 export const SHIFT_LABEL: Record<ShiftKey, string> = { day: 'Day', night: 'Night' }
 
-// Block hours; `end` may exceed 24 to denote wrapping past midnight (e.g. 26 = 02:00).
-interface Block { start: number; end: number }
-
-const PATTERNS: Record<PatternKey, Record<ShiftKey, Block[]>> = {
-  split: {
-    day: [{ start: 3, end: 9 }, { start: 14, end: 20 }],
-    night: [{ start: 11, end: 16 }, { start: 20, end: 26 }], // 20:00–02:00
-  },
-  straight: {
-    day: [{ start: 5, end: 17 }],
-    night: [{ start: 17, end: 29 }], // 17:00–05:00
-  },
-}
-
 // Sections that run the straight 12-hour shift (continuous). Everything else on
 // Trident is split. Pit (both mines), Security and Dewatering run continuous.
 const isStraightSection = (section: string) => section.startsWith('Pit') || section === 'Security' || section === 'Dewatering'
@@ -41,15 +28,13 @@ export function patternFor(branch: BranchCode, section: string): PatternKey {
   return 'straight' // Kansanshi: straight day/night (assumed — adjust when confirmed)
 }
 
-const pad = (h: number) => String(((h % 24) + 24) % 24).padStart(2, '0')
-export function shiftWindow(pattern: PatternKey, shift: ShiftKey): string {
-  return PATTERNS[pattern][shift].map((b) => `${pad(b.start)}:00–${pad(b.end)}:00`).join(', ')
+// Shift windows come from the configured shift times (Admin → Scheduling),
+// resolved by day/night kind so a change there reflects everywhere.
+export function shiftWindow(_pattern: PatternKey, shift: ShiftKey): string {
+  return windowForKind(schedulingStore.get(), shift) || '—'
 }
-export function shiftWindowCompact(pattern: PatternKey, shift: ShiftKey): string {
-  return PATTERNS[pattern][shift].map((b) => `${pad(b.start)}–${pad(b.end)}`).join(' · ')
-}
-function inBlock(b: Block, h: number): boolean {
-  return b.end <= 24 ? h >= b.start && h < b.end : h >= b.start || h < b.end - 24
+export function shiftWindowCompact(_pattern: PatternKey, shift: ShiftKey): string {
+  return windowForKind(schedulingStore.get(), shift) || '—'
 }
 
 export type DriverStatus = 'active' | 'on_leave' | 'suspended'
@@ -81,9 +66,8 @@ export interface Driver {
 export type DriverInput = Omit<Driver, 'id' | 'created_by' | 'created_at' | 'updated_by' | 'updated_at'>
 
 // ── Live shift state ───────────────────────────────────────────────────
-export function isShiftActiveNow(pattern: PatternKey, shift: ShiftKey, now = new Date()): boolean {
-  const h = now.getHours() + now.getMinutes() / 60
-  return PATTERNS[pattern][shift].some((b) => inBlock(b, h))
+export function isShiftActiveNow(_pattern: PatternKey, shift: ShiftKey, now = new Date()): boolean {
+  return inAnyBlock(blocksForKind(schedulingStore.get(), shift), now)
 }
 
 export type ShiftState = 'on_shift' | 'overtime' | 'off' | 'leave' | 'suspended'

@@ -11,7 +11,7 @@ import ReassignModal from '@/components/drivers/ReassignModal'
 import { useDrivers, driversStore } from '@/lib/drivers/store'
 import { type Driver, SHIFT_STATE_META, driverShiftState } from '@/lib/drivers/types'
 import { useCrews, useScheduling, crewLabel } from '@/lib/drivers/scheduling'
-import { scheduledShift, SHIFT_META, type ShiftKind } from '@/lib/drivers/schedule'
+import { scheduledShift, SHIFT_META, shiftHours, type ShiftKind } from '@/lib/drivers/schedule'
 import { useWeeklyAssign } from '@/lib/operations/store'
 import { buildAssignmentIndex, dutyOn } from '@/lib/drivers/duty'
 
@@ -155,7 +155,7 @@ function ShiftColumn({
         {drivers.map((d) => {
           const state = driverShiftState(d)
           const meta = SHIFT_STATE_META[state]
-          const schedShift = SHIFT_META[scheduledShift(d)]
+          const schedHours = shiftHours(scheduledShift(d))
           const duty = dutyOn(d, today, idx)
           const isOT = kind === 'off' && (duty.kind === 'overtime' || d.overtime)
           const showVehicle = duty.vehicle && (kind !== 'off' || isOT)
@@ -165,7 +165,7 @@ function ShiftColumn({
                 <div className="truncate text-sm font-medium text-navy">{d.full_name}</div>
                 <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-status-neutral">
                   <span className={SECTION_CHIP}>{d.section}</span>
-                  {kind === 'off' ? <span>Crew {crewLabel(sched, d.crew)}</span> : <span title={schedShift.hours}>{schedShift.hours}</span>}
+                  {kind === 'off' ? <span>Crew {crewLabel(sched, d.crew)}</span> : <span title={schedHours}>{schedHours}</span>}
                   {showVehicle && <VehicleChip fleet={duty.vehicle} />}
                 </div>
               </button>

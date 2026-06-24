@@ -10,7 +10,8 @@ import SetScheduleModal from '@/components/drivers/SetScheduleModal'
 import DutyReportModal from '@/components/drivers/DutyReportModal'
 import { useDrivers } from '@/lib/drivers/store'
 import type { Driver } from '@/lib/drivers/types'
-import { ROTATIONS, SHIFT_META, shiftOnDate, patternKeyFor, anchorFor, type ShiftKind } from '@/lib/drivers/schedule'
+import { ROTATIONS, SHIFT_META, shiftHours, shiftOnDate, patternKeyFor, anchorFor, type ShiftKind } from '@/lib/drivers/schedule'
+import { useScheduling, windowForKind } from '@/lib/drivers/scheduling'
 import { useWeeklyAssign } from '@/lib/operations/store'
 import { buildAssignmentIndex, dutyOn } from '@/lib/drivers/duty'
 
@@ -31,6 +32,9 @@ export default function DriverSchedule() {
   const editable = canEdit(role, 'drivers')
 
   const all = useDrivers()
+  const sched = useScheduling()
+  const dayWin = windowForKind(sched, 'day') || '—'
+  const nightWin = windowForKind(sched, 'night') || '—'
   const assigns = useWeeklyAssign()
   const branchAssigns = useMemo(() => assigns.filter((a) => a.branch === branch), [assigns, branch])
   const idx = useMemo(() => buildAssignmentIndex(branchAssigns), [branchAssigns])
@@ -102,8 +106,8 @@ export default function DriverSchedule() {
 
       {/* Legend */}
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-xs">
-        <span className="inline-flex items-center gap-1.5"><span className="h-3.5 w-3.5 rounded bg-[#FCEAD3]" /> <b className="text-navy">Day</b> <span className="text-status-neutral">split 03–09 &amp; 14–20 · cont. 06–18</span></span>
-        <span className="inline-flex items-center gap-1.5"><span className="h-3.5 w-3.5 rounded bg-[#DDE4F3]" /> <b className="text-navy">Night</b> <span className="text-status-neutral">split 11–16 &amp; 20–02 · cont. 18–06</span></span>
+        <span className="inline-flex items-center gap-1.5"><span className="h-3.5 w-3.5 rounded bg-[#FCEAD3]" /> <b className="text-navy">Day</b> <span className="text-status-neutral">{dayWin}</span></span>
+        <span className="inline-flex items-center gap-1.5"><span className="h-3.5 w-3.5 rounded bg-[#DDE4F3]" /> <b className="text-navy">Night</b> <span className="text-status-neutral">{nightWin}</span></span>
         <span className="inline-flex items-center gap-1.5"><span className="h-3.5 w-3.5 rounded border border-black/10 bg-white" /> <span className="text-status-neutral">Off / rest</span></span>
         <span className="inline-flex items-center gap-1.5"><span className="flex h-3.5 w-3.5 items-center justify-center rounded bg-status-warning/30 text-[7px] font-bold text-[#8a6d10]">OT</span> <span className="text-status-neutral">Overtime (covering off-day)</span></span>
       </div>
@@ -137,7 +141,7 @@ export default function DriverSchedule() {
                       const duty = dutyOn(dr, d.dateISO, idx)
                       const meta = SHIFT_META[duty.shift]
                       const isOT = duty.kind === 'overtime'
-                      const tip = `${dr.full_name} · ${d.dateISO} — ${isOT ? `Overtime${duty.vehicle ? ` on ${duty.vehicle}` : ''}` : `${meta.label}${meta.kind !== 'off' ? ` (${meta.hours})` : ''}${duty.vehicle ? ` · ${duty.vehicle}` : ''}`}`
+                      const tip = `${dr.full_name} · ${d.dateISO} — ${isOT ? `Overtime${duty.vehicle ? ` on ${duty.vehicle}` : ''}` : `${meta.label}${meta.kind !== 'off' && shiftHours(duty.shift) ? ` (${shiftHours(duty.shift)})` : ''}${duty.vehicle ? ` · ${duty.vehicle}` : ''}`}`
                       return (
                         <td key={d.day} className={clsx('h-8 w-7 border-l border-black/5 text-center', d.weekend && meta.kind === 'off' && !isOT && 'bg-black/[0.02]')}>
                           <span className={clsx('mx-auto flex h-7 w-6 items-center justify-center rounded text-[11px] font-bold', isOT ? OT_CELL : KIND_CELL[meta.kind], d.dateISO === todayISO && 'ring-1 ring-brand')} title={tip}>
