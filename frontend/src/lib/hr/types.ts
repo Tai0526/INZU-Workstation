@@ -13,6 +13,8 @@ export const JOB_ROLES = [
 export type JobRole = (typeof JOB_ROLES)[number]
 
 export const FUEL_ATTENDANT_ROLE: JobRole = 'Fuel Attendant'
+/** Job roles that can dispense/record fuel — they appear in the fuel form's attendant list. */
+export const FUEL_HANDLER_ROLES: JobRole[] = ['Fuel Attendant', 'Fuel Controller']
 
 export interface Employee {
   id: string

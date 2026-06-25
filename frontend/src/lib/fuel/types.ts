@@ -1,8 +1,21 @@
 import type { BranchCode } from '@/lib/roles'
 import type { Audited } from '@/lib/operations/types'
 
-// Descriptive tank levels recorded at fuelling.
-export const FUEL_LEVELS = ['Full', 'Above half', 'Half tank', 'Between half & quarter', 'Below half tank', 'Quarter tank', 'Reserve']
+// Descriptive tank levels recorded at fuelling — full → empty, with the finer
+// quarter steps so attendants can record exactly what the gauge shows.
+export const FUEL_LEVELS = [
+  'Full',
+  'Above three-quarters',
+  'Three-quarters',
+  'Above half',
+  'Half tank',
+  'Below half',
+  'Slightly above quarter',
+  'Quarter tank',
+  'Below quarter',
+  'Reserve',
+  'Empty',
+]
 
 // ── Per-trip fuel issuance (the detailed, per-vehicle log) ─────────────
 export interface FuelIssuance extends Audited {

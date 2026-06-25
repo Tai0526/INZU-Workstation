@@ -13,7 +13,7 @@ import { useVehicles } from '@/lib/fleet/store'
 import { useDrivers } from '@/lib/drivers/store'
 import { useMileageRoutes } from '@/lib/mileage/store'
 import { useEmployees } from '@/lib/hr/store'
-import { FUEL_ATTENDANT_ROLE } from '@/lib/hr/types'
+import { FUEL_HANDLER_ROLES } from '@/lib/hr/types'
 import {
   useIssuances, useReceipts, useGenFuel, useFuelConfig, setFuelConfig, useFuelRate, setFuelRate, fetchLiveUsdZmw, recordRefuel, editIssuance, authorizeDraw, issuancesStore, receiptsStore, genFuelStore,
 } from '@/lib/fuel/store'
@@ -78,7 +78,9 @@ export default function Fuel() {
   const vehicles = useVehicles().filter((v) => v.branch === branch)
   const drivers = useDrivers().filter((d) => d.branch === branch && d.status === 'active')
   const routes = useMileageRoutes().filter((r) => r.branch === branch)
-  const attendants = useEmployees().filter((e) => e.branch === branch && e.status === 'active' && e.job_role === FUEL_ATTENDANT_ROLE)
+  // Fuel attendants AND fuel controllers (both dispense fuel) for this branch.
+  // Reactive — a newly added attendant/controller shows up in the form at once.
+  const attendants = useEmployees().filter((e) => e.branch === branch && e.status === 'active' && FUEL_HANDLER_ROLES.includes(e.job_role))
 
   const [tab, setTab] = useState<Tab>('issuances')
 
@@ -296,7 +298,7 @@ function PeopleHeader({ fleet, reg, driver, attendant, onFleet, setReg, setDrive
       <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Fuel attendant</span>
         <SearchableSelect className={inputCls} value={attendant} onChange={setAttendant} placeholder="Select attendant…"
           options={attendants.map((a: any) => ({ value: a.full_name, label: a.full_name }))} />
-        {attendants.length === 0 && <span className="mt-1 block text-[11px] text-status-neutral">No Fuel Attendants in HR for this branch.</span>}
+        {attendants.length === 0 && <span className="mt-1 block text-[11px] text-status-neutral">No fuel attendants or controllers in HR for this branch.</span>}
       </label>
     </div>
   )
