@@ -8,7 +8,7 @@ import Modal from '@/components/ui/Modal'
 import Button from '@/components/ui/Button'
 import KpiCard from '@/components/ui/KpiCard'
 import StatusBadge from '@/components/ui/StatusBadge'
-import SearchableSelect from '@/components/ui/SearchableSelect'
+import SearchableSelect, { SearchableMultiSelect } from '@/components/ui/SearchableSelect'
 import { useVehicles } from '@/lib/fleet/store'
 import { useDrivers } from '@/lib/drivers/store'
 import { useMileageRoutes } from '@/lib/mileage/store'
@@ -417,7 +417,12 @@ function QuickRefuelModal({ open, onClose, branch, vehicles, drivers, routes, at
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Date</span><input type="date" className={inputCls} value={date} onChange={(e) => setDate(e.target.value)} /></label>
-          <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Route</span><select className={inputCls} value={route} onChange={(e) => setRoute(e.target.value)}><option value="">—</option>{routes.map((x: any) => <option key={x.id} value={x.name}>{x.name}</option>)}</select></label>
+          <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Route(s)</span>
+            <SearchableMultiSelect className={inputCls} placeholder="Search route(s)…"
+              values={route ? route.split(',').map((s) => s.trim()).filter(Boolean) : []}
+              onChange={(arr) => setRoute(arr.join(', '))}
+              options={routes.map((x: any) => ({ value: x.name, label: x.name }))}
+              emptyText="No routes — add them in Mileage → Route catalogue" /></label>
           <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Trips</span><input type="number" className={inputCls} value={trips} onChange={(e) => setTrips(e.target.value)} /></label>
         </div>
         <datalist id="dl-fuel-fleet">{vehicles.map((v: any) => <option key={v.id} value={v.fleet_no} />)}</datalist>
