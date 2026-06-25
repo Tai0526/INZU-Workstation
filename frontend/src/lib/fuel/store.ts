@@ -129,8 +129,18 @@ const RATE_SEED: Record<string, FuelRate> = {
 }
 const ratesCfg = createSyncConfig<Record<string, FuelRate>>({ key: 'fuel_rates', lsKey: 'inzu_fuel_rates', default: RATE_SEED })
 
+/**
+ * The month's rate. If a month hasn't been set yet, carry forward the most recent
+ * earlier month for that branch (so a new month starts from the last known figures
+ * until they're updated). Falls back to the built-in default if there's nothing.
+ */
 export function getFuelRate(branch: string, ym: string): FuelRate {
-  return ratesCfg.get()[rateKey(branch, ym)] ?? DEFAULT_FUEL_RATE
+  const all = ratesCfg.get()
+  const exact = all[rateKey(branch, ym)]
+  if (exact) return exact
+  const prefix = `${branch}:`
+  const prior = Object.keys(all).filter((k) => k.startsWith(prefix) && k.slice(prefix.length) <= ym).sort()
+  return prior.length ? all[prior[prior.length - 1]] : DEFAULT_FUEL_RATE
 }
 export function setFuelRate(branch: string, ym: string, rate: FuelRate) {
   ratesCfg.set({ ...ratesCfg.get(), [rateKey(branch, ym)]: rate })
@@ -140,19 +150,16 @@ export function useFuelRate(branch: string, ym: string): FuelRate {
 }
 
 /**
- * Pull the month's diesel price (ERB) and USD→ZMW rate (Bank of Zambia).
- * STUB: the browser can't reach BoZ/ERB directly (no CORS). The backend will
- * scrape/call them on a monthly schedule; here we simulate a plausible result
- * so the workflow is ready. Swap this body for a real API call later.
+ * Live USD→ZMW from a free, CORS-enabled FX feed (market/interbank rate — very
+ * close to, but not identical to, the Bank of Zambia official mid-rate, which has
+ * no public API). The diesel pump price (ERB) is not published as a feed the app
+ * can fetch, so it's entered/confirmed manually each month.
  */
-export async function pullMonthlyRate(branch: string, ym: string): Promise<FuelRate> {
-  const monthNum = Number(ym.slice(5, 7)) || 1
-  const rate: FuelRate = {
-    diesel_zmw: +(31.5 + monthNum * 0.35).toFixed(2),
-    fx_zmw_per_usd: +(26.3 + monthNum * 0.12).toFixed(2),
-    source: 'ERB + Bank of Zambia (auto-pull)',
-    updated_at: new Date().toISOString(),
-  }
-  setFuelRate(branch, ym, rate)
-  return rate
+export async function fetchLiveUsdZmw(): Promise<number> {
+  const res = await fetch('https://open.er-api.com/v6/latest/USD', { headers: { accept: 'application/json' } })
+  if (!res.ok) throw new Error(`Rate service error (${res.status})`)
+  const data = await res.json()
+  const zmw = data?.rates?.ZMW
+  if (typeof zmw !== 'number' || !isFinite(zmw)) throw new Error('USD→ZMW not available right now')
+  return +zmw.toFixed(2)
 }

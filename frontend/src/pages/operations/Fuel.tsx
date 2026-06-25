@@ -14,7 +14,7 @@ import { useMileageRoutes } from '@/lib/mileage/store'
 import { useEmployees } from '@/lib/hr/store'
 import { FUEL_ATTENDANT_ROLE } from '@/lib/hr/types'
 import {
-  useIssuances, useReceipts, useGenFuel, useFuelConfig, setFuelConfig, useFuelRate, pullMonthlyRate, recordRefuel, editIssuance, authorizeDraw, issuancesStore, receiptsStore, genFuelStore,
+  useIssuances, useReceipts, useGenFuel, useFuelConfig, setFuelConfig, useFuelRate, setFuelRate, fetchLiveUsdZmw, recordRefuel, editIssuance, authorizeDraw, issuancesStore, receiptsStore, genFuelStore,
 } from '@/lib/fuel/store'
 import { putFile, viewFile } from '@/lib/storage/fileStore'
 import {
@@ -849,7 +849,7 @@ function SummaryTab({ issuances, genFuel, branch, canManage }: { issuances: Fuel
   const [month, setMonth] = useState('')
   const effMonth = months.includes(month) ? month : curMonth
   const [cur, setCur] = useState<Currency>('USD')
-  const [pulling, setPulling] = useState(false)
+  const [editRate, setEditRate] = useState(false)
 
   const rate = useFuelRate(branch, effMonth)
   const monthIssuances = issuances.filter((i) => monthKey(i.date) === effMonth)
@@ -864,8 +864,6 @@ function SummaryTab({ issuances, genFuel, branch, canManage }: { issuances: Fuel
   const totalCost = totalLitres * price
   const branchLabel = BRANCHES.find((b) => b.code === branch)!.short
   const report = () => fuelReport({ branchLabel, monthLbl: monthLabel(effMonth), cur, rate, vehicleLitres, km: totalKm, price, perVehicle, draws: monthDraws })
-
-  async function pull() { if (!effMonth) return; setPulling(true); try { await pullMonthlyRate(branch, effMonth) } finally { setPulling(false) } }
 
   return (
     <div className="space-y-4">
@@ -892,7 +890,7 @@ function SummaryTab({ issuances, genFuel, branch, canManage }: { issuances: Fuel
         <span className="text-navy"><b>Diesel</b> K{rate.diesel_zmw.toFixed(2)}/L <span className="text-status-neutral">(ERB)</span></span>
         <span className="text-navy"><b>USD→ZMW</b> K{rate.fx_zmw_per_usd.toFixed(2)} <span className="text-status-neutral">(Bank of Zambia)</span></span>
         <span className="text-[11px] text-status-neutral">{rate.source} · updated {new Date(rate.updated_at).toLocaleDateString()}</span>
-        {canManage && <Button variant="secondary" className="ml-auto" onClick={pull} disabled={pulling || !effMonth}>{pulling ? 'Pulling…' : 'Pull latest (BoZ & ERB)'}</Button>}
+        {canManage && <Button variant="secondary" className="ml-auto" onClick={() => setEditRate(true)} disabled={!effMonth}>Update rates</Button>}
       </div>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
@@ -959,6 +957,56 @@ function SummaryTab({ issuances, genFuel, branch, canManage }: { issuances: Fuel
           </div>
         </div>
       )}
+
+      {editRate && <RateModal branch={branch} ym={effMonth} rate={rate} onClose={() => setEditRate(false)} />}
     </div>
+  )
+}
+
+// ── Monthly rates editor: ERB diesel (manual) + USD→ZMW (live fetch or manual) ──
+function RateModal({ branch, ym, rate, onClose }: { branch: BranchCode; ym: string; rate: FuelRate; onClose: () => void }) {
+  const [diesel, setDiesel] = useState(String(rate.diesel_zmw))
+  const [fx, setFx] = useState(String(rate.fx_zmw_per_usd))
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const [note, setNote] = useState('')
+
+  async function fetchFx() {
+    setBusy(true); setErr(''); setNote('')
+    try {
+      const v = await fetchLiveUsdZmw()
+      setFx(String(v))
+      setNote(`Live market rate K${v.toFixed(2)} — confirm against the Bank of Zambia figure and adjust if needed.`)
+    } catch (e) {
+      setErr((e as Error).message || 'Could not reach the rate service. Enter it manually.')
+    } finally { setBusy(false) }
+  }
+  function save() {
+    const d = Number(diesel), f = Number(fx)
+    if (!isFinite(d) || d <= 0) return setErr('Enter a valid diesel price (K / litre).')
+    if (!isFinite(f) || f <= 0) return setErr('Enter a valid USD → ZMW rate.')
+    setFuelRate(branch, ym, { diesel_zmw: +d.toFixed(2), fx_zmw_per_usd: +f.toFixed(2), source: 'ERB diesel · BoZ FX (entered)', updated_at: new Date().toISOString() })
+    onClose()
+  }
+
+  return (
+    <Modal open onClose={onClose} title={`Rates — ${monthLabel(ym)}`} subtitle="ERB diesel price and the USD → ZMW rate used to cost this month"
+      footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={save} disabled={busy}>Save rates</Button></>}>
+      {err && <div className="mb-3 rounded-lg border border-status-critical/30 bg-status-critical/5 px-3 py-2 text-sm text-status-critical">{err}</div>}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-navy">Diesel price — ERB (K / litre)</span>
+          <input type="number" step="0.01" min="0" className={inputCls} value={diesel} onChange={(e) => setDiesel(e.target.value)} />
+          <span className="mt-1 block text-[11px] text-status-neutral">From the ERB monthly pump-price notice — there's no public feed to pull, so enter it here.</span>
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-navy">USD → ZMW (Bank of Zambia)</span>
+          <input type="number" step="0.01" min="0" className={inputCls} value={fx} onChange={(e) => setFx(e.target.value)} />
+          <Button variant="secondary" type="button" className="mt-2" onClick={fetchFx} disabled={busy}>{busy ? 'Fetching…' : 'Fetch live USD → ZMW'}</Button>
+        </label>
+      </div>
+      {note && <p className="mt-3 rounded-lg bg-canvas px-3 py-2 text-xs text-status-neutral">{note}</p>}
+      <p className="mt-3 text-[11px] text-status-neutral">Saved for {monthLabel(ym)} only — each month keeps its own figures and the summary uses the selected month's.</p>
+    </Modal>
   )
 }
