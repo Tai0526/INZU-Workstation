@@ -19,20 +19,33 @@ export interface PdfTable {
   columnStyles?: Record<number, PdfColStyle>
 }
 
-export function buildTablePdf(opts: { title: string; subtitle?: string; tables: PdfTable[]; landscape?: boolean }): jsPDF {
+export function buildTablePdf(opts: { title: string; subtitle?: string; tables: PdfTable[]; landscape?: boolean; dense?: boolean }): jsPDF {
   const doc = new jsPDF({ orientation: opts.landscape ? 'landscape' : 'portrait', unit: 'pt', format: 'a4' })
   const M = 40
-  doc.setFontSize(14); doc.setTextColor(15, 27, 51); doc.text(opts.title, M, 46)
-  let startY = 62
-  if (opts.subtitle) { doc.setFontSize(10); doc.setTextColor(107, 114, 128); doc.text(opts.subtitle, M, 62); startY = 80 }
+  const pageW = doc.internal.pageSize.getWidth()
+  // ── Clean header: bold title, muted subtitle, a thin rule ──
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(15); doc.setTextColor(15, 27, 51)
+  doc.text(opts.title, M, 48)
+  let headBottom = 56
+  if (opts.subtitle) {
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(107, 114, 128)
+    doc.text(opts.subtitle, M, 64)
+    headBottom = 74
+  }
+  doc.setDrawColor(209, 107, 33); doc.setLineWidth(1.2) // brand rule
+  doc.line(M, headBottom, pageW - M, headBottom)
+  let startY = headBottom + 14
+
+  const fontSize = opts.dense ? 8 : 9
+  const cellPadding = opts.dense ? 3 : 4
   for (const t of opts.tables) {
-    if (t.heading) { doc.setFontSize(11); doc.setTextColor(15, 27, 51); doc.text(t.heading, M, startY); startY += 6 }
+    if (t.heading) { doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.setTextColor(15, 27, 51); doc.text(t.heading, M, startY); startY += 4 }
     autoTable(doc, {
       startY: startY + 6,
       head: [t.head],
       body: t.rows.map((r) => r.map((c) => String(c))),
-      styles: { fontSize: 9, cellPadding: 4, textColor: [15, 27, 51] },
-      headStyles: { fillColor: [15, 27, 51], textColor: 255, fontStyle: 'bold' },
+      styles: { fontSize, cellPadding, textColor: [15, 27, 51], valign: 'top', lineColor: [230, 232, 236], lineWidth: 0.5 },
+      headStyles: { fillColor: [15, 27, 51], textColor: 255, fontStyle: 'bold', halign: 'left' },
       alternateRowStyles: { fillColor: [246, 247, 249] },
       columnStyles: t.columnStyles as never,
       margin: { left: M, right: M },
@@ -44,6 +57,6 @@ export function buildTablePdf(opts: { title: string; subtitle?: string; tables: 
 }
 
 /** Download the PDF to the user's machine. */
-export function downloadTablePdf(opts: { title: string; subtitle?: string; tables: PdfTable[]; landscape?: boolean; filename: string }) {
+export function downloadTablePdf(opts: { title: string; subtitle?: string; tables: PdfTable[]; landscape?: boolean; dense?: boolean; filename: string }) {
   buildTablePdf(opts).save(opts.filename.endsWith('.pdf') ? opts.filename : `${opts.filename}.pdf`)
 }

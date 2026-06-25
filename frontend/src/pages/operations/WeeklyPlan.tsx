@@ -70,6 +70,7 @@ export default function WeeklyPlan() {
   const [pendingOT, setPendingOT] = useState<{ driverId: string; name: string; fleet: string } | null>(null)
   const [otDays, setOtDays] = useState(7)
   const [otStart, setOtStart] = useState('')
+  const [otError, setOtError] = useState('')
   const [selected, setSelected] = useState<Picked | null>(null)
   const [qOn, setQOn] = useState('')
   const [qOff, setQOff] = useState('')
@@ -111,7 +112,17 @@ export default function WeeklyPlan() {
   }, [showOwned, ownedBuses, shownOperated])
 
   // Driver pools — active drivers (in the chosen section) not yet assigned this period.
-  const assignedIds = useMemo(() => new Set(weekAssigns.map((a) => a.driver_id)), [weekAssigns])
+  // Only a FULL (non-overtime) booking removes a driver; an overtime cover is
+  // partial, so an off-duty driver stays available to take another non-overlapping
+  // overtime stint on a different vehicle/period.
+  const assignedIds = useMemo(() => new Set(weekAssigns.filter((a) => !a.overtime).map((a) => a.driver_id)), [weekAssigns])
+  const otDaysByDriver = useMemo(() => {
+    const m = new Map<string, number>()
+    weekAssigns.filter((a) => a.overtime).forEach((a) => {
+      m.set(a.driver_id, (m.get(a.driver_id) ?? 0) + datesInRange(a.cover_start || a.week_start, a.cover_end || a.week_end).length)
+    })
+    return m
+  }, [weekAssigns])
   const { onShift, offDuty } = useMemo(() => {
     const on: { d: Driver; s: ReturnType<typeof shiftsOver> }[] = []
     const off: { d: Driver; s: ReturnType<typeof shiftsOver> }[] = []
@@ -126,15 +137,26 @@ export default function WeeklyPlan() {
   const fOn = onShift.filter(({ d }) => { const t = qOn.trim().toLowerCase(); return !t || `${d.full_name} ${d.section}`.toLowerCase().includes(t) })
   const fOff = offDuty.filter(({ d }) => { const t = qOff.trim().toLowerCase(); return !t || `${d.full_name} ${d.section}`.toLowerCase().includes(t) })
 
+  /** First free day for a driver's next overtime — the day after their latest existing OT. */
+  function nextOtStart(driverId: string): string {
+    const ot = weekAssigns.filter((a) => a.driver_id === driverId && a.overtime)
+    if (!ot.length) return period.start
+    const latest = ot.reduce((m, a) => { const e = a.cover_end || a.week_end; return e > m ? e : m }, '')
+    const next = addDaysISO(latest, 1)
+    return next < period.start ? period.start : next > period.end ? period.end : next
+  }
   function assignDriver(p: Picked, fleet: string) {
     if (!canPlan) return
-    if (weekAssigns.some((a) => a.fleet_no === fleet && a.driver_id === p.driverId)) { setSelected(null); pickedRef.current = null; return }
     if (isOffThisWeek(p.driverId)) {
-      // Off this week → overtime cover. Confirm how many days (leave overrun, sickness, …).
+      // Off this period → overtime cover. Default the start to the day after any
+      // existing overtime, so a driver can do back-to-back stints on different buses.
+      const start = nextOtStart(p.driverId)
       setPendingOT({ driverId: p.driverId, name: p.name, fleet })
-      setOtDays(periodDates.length)
-      setOtStart(period.start)
+      setOtStart(start)
+      setOtDays(Math.max(1, datesInRange(start, period.end).length))
+      setOtError('')
     } else {
+      if (weekAssigns.some((a) => a.fleet_no === fleet && a.driver_id === p.driverId && !a.overtime)) { setSelected(null); pickedRef.current = null; return }
       weeklyAssignStore.add({ branch, week_start: period.start, week_end: period.end, fleet_no: fleet, driver_id: p.driverId, driver_name: p.name, overtime: false })
     }
     setSelected(null)
@@ -146,6 +168,13 @@ export default function WeeklyPlan() {
     const start = otStart && otStart >= period.start && otStart <= period.end ? otStart : period.start
     const rawEnd = addDaysISO(start, days - 1)
     const end = rawEnd > period.end ? period.end : rawEnd
+    // Overtime stints for the same driver must not overlap.
+    const clash = weekAssigns.some((a) => {
+      if (a.driver_id !== pendingOT.driverId || !a.overtime) return false
+      const s = a.cover_start || a.week_start, e = a.cover_end || a.week_end
+      return start <= e && s <= end
+    })
+    if (clash) { setOtError('That overlaps overtime this driver already has. Start it after the existing stint ends.'); return }
     weeklyAssignStore.add({ branch, week_start: period.start, week_end: period.end, cover_start: start, cover_end: end, fleet_no: pendingOT.fleet, driver_id: pendingOT.driverId, driver_name: pendingOT.name, overtime: true })
     setPendingOT(null)
   }
@@ -154,12 +183,18 @@ export default function WeeklyPlan() {
   }
   function goThisWeek() { const start = fridayOf(isoOf(new Date())); setPeriod({ start, end: addDaysISO(start, 6) }); setCustom(false) }
 
-  // ── Export ──
+  // ── Export (respects the Owned / Operated / section filter — they're separate
+  //    operations and must never print together) ──
+  const srcLabel = source === 'owned' ? 'Owned vehicles' : source === 'operated' ? 'Operated vehicles' : 'All vehicles'
+  function exportAssigns() {
+    const shownFleets = new Set(slots.filter((s) => !s.workshop).map((s) => s.fleet))
+    return weekAssigns.filter((a) => (a.fleet_no === WORKSHOP ? source === 'all' : shownFleets.has(a.fleet_no)))
+  }
   function planRows() {
     const regBy = new Map<string, string>()
     ownedBuses.forEach((v) => regBy.set(v.fleet_no, v.reg_plate))
     operatedAll.forEach((v) => regBy.set(v.fleet_no, v.reg_plate))
-    return [...weekAssigns]
+    return [...exportAssigns()]
       .sort((a, b) => a.fleet_no.localeCompare(b.fleet_no) || a.driver_name.localeCompare(b.driver_name))
       .map((a) => {
         const drv = driverById.get(a.driver_id)
@@ -172,46 +207,46 @@ export default function WeeklyPlan() {
       })
   }
   const periodLabel = `${period.start} → ${period.end}`
-  // Vehicle-centric layout: day/morning driver (left) · vehicle (centre) ·
-  // night/afternoon driver (right) — so a two-shift vehicle reads at a glance.
+  // Vehicle on the left, then the Day shift, then the Night shift — each driver
+  // with their hours in brackets. Portrait, compact, easy to read on one page.
   function planPdfTables(): PdfTable[] {
     const regBy = new Map<string, string>()
     ownedBuses.forEach((v) => regBy.set(v.fleet_no, v.reg_plate))
     operatedAll.forEach((v) => regBy.set(v.fleet_no, v.reg_plate))
     const vehicles = new Map<string, { day: string[]; night: string[] }>()
     const workshop: string[] = []
-    for (const a of weekAssigns) {
+    for (const a of exportAssigns()) {
       const drv = driverById.get(a.driver_id)
       const st = drv ? firstWorkingShift(drv, periodDates) : null
       const isNight = st ? SHIFT_META[st].kind === 'night' : (drv ? effectiveKind(drv) === 'night' : false)
-      const detail = drv && st ? [dutyLabel(drv, st), dutyHours(drv, st)].filter(Boolean).join(' ') : ''
-      const cover = a.overtime ? ` (OT ${datesInRange(a.cover_start || a.week_start, a.cover_end || a.week_end).length}d)` : ''
-      const line = `${cleanName(a.driver_name)}${cover}${detail ? ` · ${detail}` : ''}`
-      if (a.fleet_no === WORKSHOP) { workshop.push(line); continue }
+      const hrs = drv && st ? dutyHours(drv, st).replace(/ · /g, ', ') : ''
+      const cover = a.overtime ? ` [OT ${datesInRange(a.cover_start || a.week_start, a.cover_end || a.week_end).length}d]` : ''
+      const entry = `${cleanName(a.driver_name)}${hrs ? ` (${hrs})` : ''}${cover}`
+      if (a.fleet_no === WORKSHOP) { workshop.push(`${cleanName(a.driver_name)}${cover}`); continue }
       const v = vehicles.get(a.fleet_no) ?? { day: [], night: [] }
-      ;(isNight ? v.night : v.day).push(line)
+      ;(isNight ? v.night : v.day).push(entry)
       vehicles.set(a.fleet_no, v)
     }
     const rows = [...vehicles.entries()]
       .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([fleet, v]) => [v.day.join('\n') || '—', `${fleet}\n${regBy.get(fleet) ?? '—'}`, v.night.join('\n') || '—'])
+      .map(([fleet, v]) => [`${fleet}${regBy.get(fleet) ? `\n${regBy.get(fleet)}` : ''}`, v.day.join('\n') || '—', v.night.join('\n') || '—'])
     const tables: PdfTable[] = [{
-      heading: 'Day / Morning  ·  Vehicle  ·  Night / Afternoon',
-      head: ['Day / Morning', 'Vehicle', 'Night / Afternoon'],
+      head: ['Vehicle', 'Day shift', 'Night shift'],
       rows,
-      columnStyles: { 0: { halign: 'left' }, 1: { halign: 'center', fontStyle: 'bold' }, 2: { halign: 'right' } },
+      columnStyles: { 0: { fontStyle: 'bold', cellWidth: 84 } },
     }]
     if (workshop.length) tables.push({ heading: 'Workshop duty', head: ['Driver'], rows: workshop.map((w) => [w]) })
     return tables
   }
-  const pdfSubtitle = () => `${periodLabel} · ${weekAssigns.length} assignments · ${weekAssigns.filter((a) => a.overtime).length} overtime`
+  const pdfSubtitle = () => { const n = exportAssigns().length; return `${srcLabel} · ${fmtDay(period.start)} → ${fmtDay(period.end)} · ${n} assignment${n === 1 ? '' : 's'}` }
   function exportPdf() {
     downloadTablePdf({
       title: `Weekly Plan — ${branchLabel}`,
       subtitle: pdfSubtitle(),
       tables: planPdfTables(),
-      landscape: true,
-      filename: `Weekly Plan - ${branchLabel} - ${period.start}.pdf`,
+      landscape: false,
+      dense: true,
+      filename: `Weekly Plan - ${branchLabel} - ${srcLabel} - ${period.start}.pdf`,
     })
   }
   function exportExcel() {
@@ -227,12 +262,12 @@ export default function WeeklyPlan() {
   }
   function saveToDocs() {
     if (weekAssigns.length === 0) return
-    const doc = buildTablePdf({ title: `Weekly Plan — ${branchLabel}`, subtitle: pdfSubtitle(), tables: planPdfTables(), landscape: true })
+    const doc = buildTablePdf({ title: `Weekly Plan — ${branchLabel}`, subtitle: pdfSubtitle(), tables: planPdfTables(), landscape: false, dense: true })
     const blob = doc.output('blob')
-    const fileName = `Weekly Plan - ${branchLabel} - ${period.start}.pdf`
+    const fileName = `Weekly Plan - ${branchLabel} - ${srcLabel} - ${period.start}.pdf`
     const fileId = `wplan_${branch}_${period.start}_${Date.now()}`
     putFile(fileId, new File([blob], fileName, { type: 'application/pdf' })).then(() => {
-      documentsStore.add({ category: 'other', entity_type: 'general', entity_id: `weekly-plan-${branch}-${period.start}`, entity_label: `Weekly Plan — ${branchLabel} (${fmtDay(period.start)})`, branch, issue_date: isoOf(new Date()), expiry_date: '', reference_no: '', issuer: '', file_id: fileId, file_name: fileName, file_size: blob.size, mime_type: 'application/pdf', notes: `${weekAssigns.length} assignments · ${periodLabel}`, uploaded_by_role: role })
+      documentsStore.add({ category: 'other', entity_type: 'general', entity_id: `weekly-plan-${branch}-${period.start}`, entity_label: `Weekly Plan — ${branchLabel} · ${srcLabel} (${fmtDay(period.start)})`, branch, issue_date: isoOf(new Date()), expiry_date: '', reference_no: '', issuer: '', file_id: fileId, file_name: fileName, file_size: blob.size, mime_type: 'application/pdf', notes: `${srcLabel} · ${exportAssigns().length} assignments · ${periodLabel}`, uploaded_by_role: role })
       alert('Weekly plan saved to Documents.')
     })
   }
@@ -429,7 +464,9 @@ export default function WeeklyPlan() {
         <Pool title="Off duty" count={fOff.length} q={qOff} setQ={setQOff} icon={<Moon size={14} className="text-status-neutral" />} accent="neutral" hint="Drag in to cover → overtime">
           {fOff.map(({ d }) => {
             const lastV = lastVehicleByDriver.get(d.id)
-            return <Token key={d.id} p={{ driverId: d.id, name: d.full_name }} subtitle={lastV ? `${d.section} · drove ${lastV}` : `${d.section} · off`} grayed />
+            const ot = otDaysByDriver.get(d.id)
+            const sub = `${d.section}${lastV ? ` · drove ${lastV}` : ''}${ot ? ` · ${ot}d OT booked` : ''}`
+            return <Token key={d.id} p={{ driverId: d.id, name: d.full_name }} subtitle={sub} grayed />
           })}
           {fOff.length === 0 && <Empty>Everyone is on shift.</Empty>}
         </Pool>
@@ -442,20 +479,32 @@ export default function WeeklyPlan() {
       </div>
 
       {/* Overtime cover — confirm how many days (leave overrun, sickness, …) */}
-      <Modal open={!!pendingOT} onClose={() => setPendingOT(null)} title="Overtime cover"
+      <Modal open={!!pendingOT} onClose={() => { setPendingOT(null); setOtError('') }} title="Overtime cover"
         subtitle={pendingOT ? `${cleanName(pendingOT.name)} · ${pendingOT.fleet === WORKSHOP ? 'Workshop' : pendingOT.fleet}` : ''}
-        footer={<><Button variant="secondary" onClick={() => setPendingOT(null)}>Cancel</Button><Button onClick={confirmOT}>Add overtime</Button></>}>
-        <p className="mb-3 text-sm text-status-neutral">They're off this period — confirm how many days they're covering (e.g. while someone's leave overruns or they're off sick). It doesn't have to be the full week.</p>
+        footer={<><Button variant="secondary" onClick={() => { setPendingOT(null); setOtError('') }}>Cancel</Button><Button onClick={confirmOT}>Add overtime</Button></>}>
+        <p className="mb-3 text-sm text-status-neutral">They're off this period — confirm how many days they're covering (e.g. while someone's leave overruns or they're off sick). It doesn't have to be the full week, and you can add more than one stint as long as the dates don't overlap.</p>
+        {pendingOT && (() => {
+          const existing = weekAssigns.filter((a) => a.driver_id === pendingOT.driverId && a.overtime).sort((a, b) => (a.cover_start || '').localeCompare(b.cover_start || ''))
+          if (!existing.length) return null
+          return (
+            <div className="mb-3 rounded-lg border border-black/10 bg-canvas px-3 py-2 text-xs text-navy">
+              <div className="mb-1 font-semibold text-status-neutral">Already covering this period:</div>
+              <ul className="space-y-0.5">
+                {existing.map((a) => <li key={a.id}>• {a.fleet_no === WORKSHOP ? 'Workshop' : a.fleet_no} — {fmtDay(a.cover_start || a.week_start)} → {fmtDay(a.cover_end || a.week_end)}</li>)}
+              </ul>
+            </div>
+          )
+        })()}
         <div className="flex flex-wrap items-end gap-3">
           <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Days</span>
-            <input type="number" min={1} max={periodDates.length} value={otDays} onChange={(e) => setOtDays(Number(e.target.value))} className={`${inputCls} w-24`} /></label>
+            <input type="number" min={1} max={periodDates.length} value={otDays} onChange={(e) => { setOtDays(Number(e.target.value)); setOtError('') }} className={`${inputCls} w-24`} /></label>
           <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Starting</span>
-            <input type="date" min={period.start} max={period.end} value={otStart} onChange={(e) => setOtStart(e.target.value)} className={inputCls} /></label>
+            <input type="date" min={period.start} max={period.end} value={otStart} onChange={(e) => { setOtStart(e.target.value); setOtError('') }} className={inputCls} /></label>
           <div className="flex gap-1 pb-0.5">
             {[2, 3, 5].filter((n) => n <= periodDates.length).map((n) => (
-              <button key={n} onClick={() => setOtDays(n)} className={clsx('rounded-lg border px-2.5 py-2 text-xs font-medium', otDays === n ? 'border-brand bg-brand-tint/60 text-navy' : 'border-black/15 text-navy hover:bg-canvas')}>{n}d</button>
+              <button key={n} onClick={() => { setOtDays(n); setOtError('') }} className={clsx('rounded-lg border px-2.5 py-2 text-xs font-medium', otDays === n ? 'border-brand bg-brand-tint/60 text-navy' : 'border-black/15 text-navy hover:bg-canvas')}>{n}d</button>
             ))}
-            <button onClick={() => setOtDays(periodDates.length)} className={clsx('rounded-lg border px-2.5 py-2 text-xs font-medium', otDays === periodDates.length ? 'border-brand bg-brand-tint/60 text-navy' : 'border-black/15 text-navy hover:bg-canvas')}>Full</button>
+            <button onClick={() => { setOtDays(periodDates.length); setOtError('') }} className={clsx('rounded-lg border px-2.5 py-2 text-xs font-medium', otDays === periodDates.length ? 'border-brand bg-brand-tint/60 text-navy' : 'border-black/15 text-navy hover:bg-canvas')}>Full</button>
           </div>
         </div>
         {pendingOT && (() => {
@@ -464,6 +513,7 @@ export default function WeeklyPlan() {
           const rawEnd = addDaysISO(start, days - 1); const end = rawEnd > period.end ? period.end : rawEnd
           return <p className="mt-3 text-xs text-status-neutral">Covering <b className="text-navy">{datesInRange(start, end).length} day(s)</b> · {fmtDay(start)} → {fmtDay(end)}.</p>
         })()}
+        {otError && <p className="mt-3 rounded-lg border border-status-critical/30 bg-status-critical/5 px-3 py-2 text-xs text-status-critical">{otError}</p>}
       </Modal>
     </div>
   )

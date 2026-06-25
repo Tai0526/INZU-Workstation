@@ -32,13 +32,37 @@ export function useDriverShifts(): Record<string, string> {
   return useSyncExternalStore(cfg.subscribe, cfg.get, cfg.get)
 }
 
-type DriverLike = { id?: string; crew: string }
+type DriverLike = { id?: string; crew: string; section?: string }
 
-/** The shift a driver actually works: explicit override → crew's shift → canonical for the crew's kind. */
+/**
+ * Section-specific shift TIMES — some sections run split shifts that the generic
+ * Day/Afternoon times don't capture. Sentinel & Enterprise work split shifts:
+ * Day = 03:00–10:00 & 14:00–20:00, Afternoon = 11:00–16:00 & 20:00–02:00. The
+ * block (day/afternoon) and its kind stay the same — only the clock times change.
+ */
+const SECTION_SHIFT_OVERRIDES: Record<string, Record<string, { start: string; end: string; start2?: string; end2?: string }>> = {
+  Sentinel: {
+    day: { start: '03:00', end: '10:00', start2: '14:00', end2: '20:00' },
+    afternoon: { start: '11:00', end: '16:00', start2: '20:00', end2: '02:00' },
+  },
+  Enterprise: {
+    day: { start: '03:00', end: '10:00', start2: '14:00', end2: '20:00' },
+    afternoon: { start: '11:00', end: '16:00', start2: '20:00', end2: '02:00' },
+  },
+}
+
+/** The shift a driver actually works: explicit override (with any section-specific
+ *  split times) → crew's shift → canonical for the crew's kind. */
 export function effectiveShiftDef(d: DriverLike): ShiftDef | undefined {
   const c = schedulingStore.get()
   const ov = d.id ? cfg.get()[d.id] : ''
-  if (ov) { const s = shiftById(c, ov); if (s) return s }
+  if (ov) {
+    const base = shiftById(c, ov)
+    if (base) {
+      const split = d.section ? SECTION_SHIFT_OVERRIDES[d.section]?.[ov] : undefined
+      return split ? { ...base, ...split } : base
+    }
+  }
   return shiftForCrew(c, d.crew) ?? shiftDefForKind(c, crewShiftKind(c, d.crew))
 }
 /** day/night classification of a driver's effective shift (afternoon → night). */
