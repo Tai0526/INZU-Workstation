@@ -24,6 +24,18 @@
   }
 }
 
+/* Stop mobile browsers (esp. iOS Safari) auto-zooming into a form control on
+   focus — that happens whenever the control's font-size is under 16px, and it
+   leaves the page zoomed-in so you have to pinch back out. Bumping form controls
+   to 16px on small screens keeps the layout put. */
+@media (max-width: 767px) {
+  input:not([type='checkbox']):not([type='radio']):not([type='range']),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
+
 /* Thin, unobtrusive scrollbars */
 * {
   scrollbar-width: thin;

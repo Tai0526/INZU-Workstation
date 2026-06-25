@@ -8,6 +8,7 @@ import Modal from '@/components/ui/Modal'
 import Button from '@/components/ui/Button'
 import KpiCard from '@/components/ui/KpiCard'
 import StatusBadge from '@/components/ui/StatusBadge'
+import SearchableSelect from '@/components/ui/SearchableSelect'
 import { useVehicles } from '@/lib/fleet/store'
 import { useDrivers } from '@/lib/drivers/store'
 import { useMileageRoutes } from '@/lib/mileage/store'
@@ -284,19 +285,20 @@ const draft = (date = ''): Draft => ({ date, trip_number: '', route: '', opening
 
 function PeopleHeader({ fleet, reg, driver, attendant, onFleet, setReg, setDriver, setAttendant, vehicles, drivers, attendants }: any) {
   return (
-    <>
-      <div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Fleet No</span><input list="dl-fuel-fleet" className={inputCls} placeholder="INZ 120" value={fleet} onChange={(e) => onFleet(e.target.value)} /></label>
-        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Reg No</span><input className={inputCls} placeholder="BCG 4270" value={reg} onChange={(e) => setReg(e.target.value)} /></label>
-        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Driver</span>
-          <select className={inputCls} value={driver} onChange={(e) => setDriver(e.target.value)}><option value="">Select driver…</option>{drivers.map((d: any) => <option key={d.id} value={d.full_name}>{d.full_name}</option>)}</select></label>
-        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Fuel attendant</span>
-          <select className={inputCls} value={attendant} onChange={(e) => setAttendant(e.target.value)}><option value="">Select attendant…</option>{attendants.map((a: any) => <option key={a.id} value={a.full_name}>{a.full_name}</option>)}</select>
-          {attendants.length === 0 && <span className="mt-1 block text-[11px] text-status-neutral">No Fuel Attendants in HR for this branch.</span>}
-        </label>
-      </div>
-      <datalist id="dl-fuel-fleet">{vehicles.map((v: any) => <option key={v.id} value={v.fleet_no} />)}</datalist>
-    </>
+    <div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Vehicle (fleet)</span>
+        <SearchableSelect className={inputCls} value={fleet} onChange={onFleet} placeholder="Select bus…"
+          options={vehicles.map((v: any) => ({ value: v.fleet_no, label: v.fleet_no, sub: v.reg_plate }))} /></label>
+      <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Reg No</span><input className={inputCls} placeholder="BCG 4270" value={reg} onChange={(e) => setReg(e.target.value)} /></label>
+      <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Driver</span>
+        <SearchableSelect className={inputCls} value={driver} onChange={setDriver} placeholder="Select driver…"
+          options={drivers.map((d: any) => ({ value: d.full_name, label: d.full_name, sub: d.section }))} /></label>
+      <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Fuel attendant</span>
+        <SearchableSelect className={inputCls} value={attendant} onChange={setAttendant} placeholder="Select attendant…"
+          options={attendants.map((a: any) => ({ value: a.full_name, label: a.full_name }))} />
+        {attendants.length === 0 && <span className="mt-1 block text-[11px] text-status-neutral">No Fuel Attendants in HR for this branch.</span>}
+      </label>
+    </div>
   )
 }
 
@@ -390,7 +392,9 @@ function QuickRefuelModal({ open, onClose, branch, vehicles, drivers, routes, at
       footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={save} disabled={!ready}><Check size={15} /> Save refuel</Button></>}>
       <div className="space-y-3">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Fleet No</span><input list="dl-fuel-fleet" className={inputCls} placeholder="INZ 120" value={fleet} onChange={(e) => onFleet(e.target.value)} /></label>
+          <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Vehicle (fleet)</span>
+            <SearchableSelect className={inputCls} value={fleet} onChange={onFleet} placeholder="Select bus…"
+              options={vehicles.map((v: any) => ({ value: v.fleet_no, label: v.fleet_no, sub: v.reg_plate }))} /></label>
           <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Reg No</span><input className={inputCls} placeholder="BCG 4270" value={reg} onChange={(e) => setReg(e.target.value)} /></label>
         </div>
         <div className="grid grid-cols-2 gap-3">
@@ -402,8 +406,12 @@ function QuickRefuelModal({ open, onClose, branch, vehicles, drivers, routes, at
           <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Tank after</span><select className={inputCls} value={after} onChange={(e) => setAfter(e.target.value)}>{FUEL_LEVELS.map((l) => <option key={l} value={l}>{l}</option>)}</select></label>
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Driver</span><select className={inputCls} value={driver} onChange={(e) => setDriver(e.target.value)}><option value="">—</option>{drivers.map((d: any) => <option key={d.id} value={d.full_name}>{d.full_name}</option>)}</select></label>
-          <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Attendant</span><select className={inputCls} value={attendant} onChange={(e) => setAttendant(e.target.value)}><option value="">—</option>{attendants.map((a: any) => <option key={a.id} value={a.full_name}>{a.full_name}</option>)}</select></label>
+          <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Driver</span>
+            <SearchableSelect className={inputCls} value={driver} onChange={setDriver} placeholder="Select driver…"
+              options={drivers.map((d: any) => ({ value: d.full_name, label: d.full_name, sub: d.section }))} /></label>
+          <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Attendant</span>
+            <SearchableSelect className={inputCls} value={attendant} onChange={setAttendant} placeholder="Select attendant…"
+              options={attendants.map((a: any) => ({ value: a.full_name, label: a.full_name }))} /></label>
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Date</span><input type="date" className={inputCls} value={date} onChange={(e) => setDate(e.target.value)} /></label>

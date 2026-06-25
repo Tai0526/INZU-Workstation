@@ -14,8 +14,9 @@ import { useVehicles } from '@/lib/fleet/store'
 import { useOperatedVehicles } from '@/lib/fleet/operated'
 import { useDrivers } from '@/lib/drivers/store'
 import { driverShiftState } from '@/lib/drivers/types'
+import { buildAssignmentIndex, dutyOn } from '@/lib/drivers/duty'
 import { useEmployees } from '@/lib/hr/store'
-import { useAllocations } from '@/lib/operations/store'
+import { useAllocations, useWeeklyAssign } from '@/lib/operations/store'
 import { useDocuments } from '@/lib/documents/store'
 import { docStatus, LICENSING_CATEGORIES } from '@/lib/documents/types'
 import { SECTIONS } from '@/lib/org/sections'
@@ -126,17 +127,25 @@ export default function Dashboard() {
   const operatedV = useOperatedVehicles().filter((v) => v.branch === branch)
   const operated = { total: operatedV.length, active: operatedV.filter((v) => v.status === 'active').length }
 
+  // Overtime is driven by the Weekly Plan (off-duty drivers covering today), not a
+  // per-driver flag — so count covers that span today.
+  const weekAssigns = useWeeklyAssign().filter((a) => a.branch === branch)
+  const otIdx = useMemo(() => buildAssignmentIndex(weekAssigns), [weekAssigns])
+  const todayISO = new Date().toISOString().slice(0, 10)
+
   // Real staffing / operations / HR roll-ups for the cards + staffing visuals.
   const staff = useMemo(() => {
-    const onNow = (d: (typeof drivers)[number]) => { const s = driverShiftState(d); return s === 'on_shift' || s === 'overtime' }
+    const isOT = (d: (typeof drivers)[number]) => dutyOn(d, todayISO, otIdx).kind === 'overtime' || d.overtime
+    const onNow = (d: (typeof drivers)[number]) => { const s = driverShiftState(d); return s === 'on_shift' || s === 'overtime' || isOT(d) }
     return {
       active: drivers.filter((d) => d.status === 'active').length,
       onShift: drivers.filter(onNow).length,
-      overtime: drivers.filter((d) => d.overtime).length,
+      overtime: drivers.filter(isOT).length,
       total: drivers.length,
       zones: SECTIONS[branch].map((z) => ({ name: z, drivers: drivers.filter((d) => d.section === z).length })),
     }
-  }, [drivers, branch])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drivers, branch, otIdx, todayISO])
   const today = new Date().toISOString().slice(0, 10)
   const ops = useMemo(() => {
     const todays = allocations.filter((a) => a.date === today)
