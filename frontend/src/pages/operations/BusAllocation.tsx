@@ -8,10 +8,11 @@ import { ROLES, BRANCHES, type BranchCode } from '@/lib/roles'
 import { canEdit } from '@/lib/permissions'
 import Modal from '@/components/ui/Modal'
 import Button from '@/components/ui/Button'
+import SearchableSelect from '@/components/ui/SearchableSelect'
 import { useVehicles } from '@/lib/fleet/store'
 import { useDrivers } from '@/lib/drivers/store'
 import { useAllocations, allocationsStore, useDailyPlan } from '@/lib/operations/store'
-import { type Allocation, type AllocationInput, type DailyPlanTrip, type TripType, TRIP_LABEL } from '@/lib/operations/types'
+import { type Allocation, type AllocationInput, type DailyPlanTrip, type TripType, TRIP_LABEL, DEFAULT_TO_LOCATION } from '@/lib/operations/types'
 import { useLocations } from '@/lib/operations/locations'
 import { downloadAllocTemplate, parseAllocations, exportAllocations, type AllocImportResult } from '@/lib/operations/excel'
 import { exportReportWord, esc, type ReportInput } from '@/lib/reports/exporter'
@@ -23,6 +24,9 @@ const inputCls = 'w-full rounded-lg border border-black/15 bg-white px-3 py-2 te
 const withCurrent = (val: string, opts: string[]) => (val && !opts.includes(val) ? [val, ...opts] : opts)
 const today = () => new Date().toISOString().slice(0, 10)
 const nowHM = () => { const d = new Date(); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` }
+// Mine entry points — the fixed end of every run (the other end is a searchable place).
+const GATES = [DEFAULT_TO_LOCATION, 'TWE']
+const joinRoute = (from: string, to: string) => [from.trim(), to.trim()].filter(Boolean).join(' → ')
 
 // ── Reports (PDF + Word + email) — built from the actuals ─────────────────────
 function allocReport(date: string, branchLabel: string, pickups: Allocation[], knockoffs: Allocation[]): ReportInput {
@@ -210,7 +214,7 @@ function PlanCard({ trip, actual, canPlan, branch, date, vehicles, drivers }: { 
     const veh = vehicles.find((v) => v.fleet_no === fleet.trim())
     const payload = {
       branch, date, trip_type: trip.trip_type, driver_name: driver.trim(), fleet_no: fleet.trim(), reg_no: veh ? veh.reg_plate : trip.reg_no,
-      route_id: '', location: trip.from_location || trip.to_location || '', planned_km: 0,
+      route_id: '', location: joinRoute(trip.from_location, trip.to_location), planned_km: 0,
       departure_time: time, passengers: pax === '' ? null : Number(pax), notes: '', plan_trip_id: trip.id,
     }
     if (actual) allocationsStore.update(actual.id, payload)
@@ -373,46 +377,72 @@ function MultiRunModal({ open, onClose, branch, date, vehicles, drivers, locatio
 
 function RunModal({ state, onClose, branch, date, vehicles, drivers, locations }: { state: { open: boolean; editing: Allocation | null }; onClose: () => void; branch: BranchCode; date: string; vehicles: any[]; drivers: any[]; locations: string[] }) {
   const e = state.editing
+  const otherOptions = useMemo(() => locations.filter((l) => !GATES.includes(l)).map((l) => ({ value: l, label: l })), [locations])
   const [f, setF] = useState<AllocationInput>(blank(branch, date))
+  const [gate, setGate] = useState(DEFAULT_TO_LOCATION) // the mine-gate end (Main Mine Gate / TWE)
+  const [other, setOther] = useState('') // the searchable end (where workers are collected / dropped)
   const [key, setKey] = useState('')
   const k = (e?.id ?? 'new') + String(state.open)
-  if (state.open && k !== key) { setKey(k); setF(e ? { ...e } : blank(branch, date)) }
-  function set<K extends keyof AllocationInput>(kk: K, v: AllocationInput[K]) { setF((p) => ({ ...p, [kk]: v })) }
-  function onVehicle(v: string) {
-    const veh = vehicles.find((x) => x.fleet_no === v)
-    setF((p) => ({ ...p, fleet_no: v, reg_no: veh ? veh.reg_plate : '' }))
+  if (state.open && k !== key) {
+    setKey(k)
+    if (e) {
+      setF({ ...e })
+      // Recover From/To from the stored "From → To" route (older rows store one place).
+      const parts = (e.location || '').split('→').map((s) => s.trim()).filter(Boolean)
+      const from = parts.length === 2 ? parts[0] : (e.trip_type === 'pickup' ? (e.location || '') : DEFAULT_TO_LOCATION)
+      const to = parts.length === 2 ? parts[1] : (e.trip_type === 'pickup' ? DEFAULT_TO_LOCATION : (e.location || ''))
+      const g = e.trip_type === 'pickup' ? to : from
+      setGate(GATES.includes(g) ? g : DEFAULT_TO_LOCATION)
+      setOther(e.trip_type === 'pickup' ? from : to)
+    } else { setF(blank(branch, date)); setGate(DEFAULT_TO_LOCATION); setOther('') }
   }
+  function set<K extends keyof AllocationInput>(kk: K, v: AllocationInput[K]) { setF((p) => ({ ...p, [kk]: v })) }
+  function onVehicle(v: string) { const veh = vehicles.find((x) => x.fleet_no === v); setF((p) => ({ ...p, fleet_no: v, reg_no: veh ? veh.reg_plate : '' })) }
+
+  const isPickup = f.trip_type === 'pickup'
   function save() {
     if (!f.fleet_no.trim()) return
-    if (e) allocationsStore.update(e.id, f); else allocationsStore.add(f)
+    const from = isPickup ? other : gate
+    const to = isPickup ? gate : other
+    const payload: AllocationInput = { ...f, location: joinRoute(from, to) }
+    if (e) allocationsStore.update(e.id, payload); else allocationsStore.add(payload)
     onClose()
   }
+
+  const gateSelect = (
+    <select className={inputCls} value={gate} onChange={(ev) => setGate(ev.target.value)}>
+      {GATES.map((g) => <option key={g} value={g}>{g}</option>)}
+    </select>
+  )
+  const otherSelect = (
+    <SearchableSelect className={inputCls} value={other} onChange={setOther} placeholder="Search place…" options={otherOptions} emptyText="No places — add them in Daily Plan" />
+  )
+
   return (
-    <Modal open={state.open} onClose={onClose} title={e ? 'Edit run' : 'Add run'} subtitle="A run that isn't on the plan (or a correction). Bus, driver and place come from your lists." footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={save}>Save</Button></>}>
+    <Modal open={state.open} onClose={onClose} title={e ? 'Edit run' : 'Add run'} subtitle="An ad-hoc run (or a correction). Search the bus & driver; the mine-gate end defaults in." footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={save} disabled={!f.fleet_no.trim()}>Save run</Button></>}>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Trip type</span>
           <select className={inputCls} value={f.trip_type} onChange={(ev) => set('trip_type', ev.target.value as TripType)}>
-            <option value="pickup">Pickup</option><option value="knockoff">Knock-off</option>
+            <option value="pickup">Pickup (to the mine)</option><option value="knockoff">Knock-off (from the mine)</option>
           </select></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Departure time</span><input type="time" className={inputCls} value={f.departure_time} onChange={(ev) => set('departure_time', ev.target.value)} /></label>
+
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Bus</span>
-          <select className={inputCls} value={f.fleet_no} onChange={(ev) => onVehicle(ev.target.value)}>
-            <option value="">Select bus…</option>
-            {withCurrent(f.fleet_no, vehicles.map((v) => v.fleet_no)).map((n) => <option key={n} value={n}>{n}</option>)}
-          </select></label>
+          <SearchableSelect className={inputCls} value={f.fleet_no} onChange={onVehicle} placeholder="Search bus…"
+            options={vehicles.map((v) => ({ value: v.fleet_no, label: v.fleet_no, sub: v.reg_plate }))} /></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Reg No</span><div className="flex h-[38px] items-center rounded-lg border border-black/10 bg-canvas px-3 text-sm text-navy">{f.reg_no || '—'}</div></label>
+
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Driver</span>
-          <select className={inputCls} value={f.driver_name} onChange={(ev) => set('driver_name', ev.target.value)}>
-            <option value="">Select driver…</option>
-            {withCurrent(f.driver_name, drivers.map((d) => d.full_name)).map((n) => <option key={n} value={n}>{n}</option>)}
-          </select></label>
+          <SearchableSelect className={inputCls} value={f.driver_name} onChange={(v) => set('driver_name', v)} placeholder="Search driver…"
+            options={drivers.map((d) => ({ value: d.full_name, label: d.full_name, sub: d.section }))} /></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Passengers</span><input type="number" className={inputCls} value={f.passengers ?? ''} onChange={(ev) => set('passengers', ev.target.value ? Number(ev.target.value) : null)} /></label>
-        <label className="col-span-2 block"><span className="mb-1 block text-xs font-medium text-navy">Location / route name</span>
-          <select className={inputCls} value={f.location} onChange={(ev) => set('location', ev.target.value)}>
-            <option value="">Select place…</option>
-            {withCurrent(f.location, locations).map((n) => <option key={n} value={n}>{n}</option>)}
-          </select></label>
+
+        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">From{isPickup ? '' : ' (mine gate)'}</span>{isPickup ? otherSelect : gateSelect}</label>
+        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">To{isPickup ? ' (mine gate)' : ''}</span>{isPickup ? gateSelect : otherSelect}</label>
       </div>
+      <p className="mt-2 text-[11px] text-status-neutral">{isPickup
+        ? 'Pickup: workers travel to the mine — search where you collect them; the destination defaults to Main Mine Gate (switchable to TWE).'
+        : 'Knock-off: workers leave the mine — origin defaults to Main Mine Gate (switchable to TWE); search where you drop them.'}</p>
     </Modal>
   )
 }
