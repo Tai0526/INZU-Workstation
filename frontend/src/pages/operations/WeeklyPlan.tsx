@@ -18,6 +18,7 @@ import type { Driver } from '@/lib/drivers/types'
 import { driverShiftOnDate, dutyLabel, dutyHours, SHIFT_META, type ShiftType } from '@/lib/drivers/schedule'
 import { useScheduling } from '@/lib/drivers/scheduling'
 import { useDriverShifts, effectiveKind } from '@/lib/drivers/driverShifts'
+import { leaveOverlaps, useDriverLeave } from '@/lib/drivers/leave'
 import { WORKSHOP, fridayOf, datesInRange } from '@/lib/drivers/duty'
 import { downloadTablePdf, buildTablePdf, type PdfTable } from '@/lib/reports/pdfDoc'
 
@@ -61,6 +62,7 @@ export default function WeeklyPlan() {
   const assigns = useWeeklyAssign()
   useScheduling() // re-render when shift times / crews change so duty windows stay live
   useDriverShifts() // …and when a driver's morning/afternoon assignment changes
+  const leaveMap = useDriverLeave() // …and when leave changes (on-leave drivers drop out of the pools)
 
   // The week runs Friday → Friday (shift change Friday 10:00); the period is customizable.
   const [period, setPeriod] = useState(() => { const start = fridayOf(isoOf(new Date())); return { start, end: addDaysISO(start, 6) } })
@@ -123,16 +125,21 @@ export default function WeeklyPlan() {
     })
     return m
   }, [weekAssigns])
+  // Drivers on leave over this period drop out of the assignable pools.
+  const onLeaveCount = useMemo(
+    () => drivers.filter((d) => d.status === 'active' && (section === 'all' || d.section === section) && leaveOverlaps(d.id, period.start, period.end)).length,
+    [drivers, section, period.start, period.end, leaveMap],
+  )
   const { onShift, offDuty } = useMemo(() => {
     const on: { d: Driver; s: ReturnType<typeof shiftsOver> }[] = []
     const off: { d: Driver; s: ReturnType<typeof shiftsOver> }[] = []
-    drivers.filter((d) => d.status === 'active' && !assignedIds.has(d.id) && (section === 'all' || d.section === section)).forEach((d) => {
+    drivers.filter((d) => d.status === 'active' && !assignedIds.has(d.id) && !leaveOverlaps(d.id, period.start, period.end) && (section === 'all' || d.section === section)).forEach((d) => {
       const s = shiftsOver(d, periodDates)
       ;(s.working > 0 ? on : off).push({ d, s })
     })
     const byName = (a: { d: Driver }, b: { d: Driver }) => a.d.full_name.localeCompare(b.d.full_name)
     return { onShift: on.sort(byName), offDuty: off.sort(byName) }
-  }, [drivers, assignedIds, periodDates, section])
+  }, [drivers, assignedIds, periodDates, section, period.start, period.end, leaveMap])
 
   const fOn = onShift.filter(({ d }) => { const t = qOn.trim().toLowerCase(); return !t || `${d.full_name} ${d.section}`.toLowerCase().includes(t) })
   const fOff = offDuty.filter(({ d }) => { const t = qOff.trim().toLowerCase(); return !t || `${d.full_name} ${d.section}`.toLowerCase().includes(t) })
@@ -352,7 +359,7 @@ export default function WeeklyPlan() {
             </button>
           ))}
         </div>
-        <span className="text-[11px] text-status-neutral">{fOn.length + fOff.length} drivers · {vehicleCount} vehicle{vehicleCount === 1 ? '' : 's'}</span>
+        <span className="text-[11px] text-status-neutral">{fOn.length + fOff.length} drivers · {vehicleCount} vehicle{vehicleCount === 1 ? '' : 's'}{onLeaveCount > 0 ? ` · ${onLeaveCount} on leave` : ''}</span>
       </div>
 
       {/* Tap-to-place banner */}

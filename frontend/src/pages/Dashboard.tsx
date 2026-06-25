@@ -15,6 +15,7 @@ import { useOperatedVehicles } from '@/lib/fleet/operated'
 import { useDrivers } from '@/lib/drivers/store'
 import { driverShiftState } from '@/lib/drivers/types'
 import { buildAssignmentIndex, dutyOn } from '@/lib/drivers/duty'
+import { useDriverLeave } from '@/lib/drivers/leave'
 import { useEmployees } from '@/lib/hr/store'
 import { useAllocations, useWeeklyAssign } from '@/lib/operations/store'
 import { useDocuments } from '@/lib/documents/store'
@@ -131,6 +132,7 @@ export default function Dashboard() {
   // per-driver flag — so count covers that span today.
   const weekAssigns = useWeeklyAssign().filter((a) => a.branch === branch)
   const otIdx = useMemo(() => buildAssignmentIndex(weekAssigns), [weekAssigns])
+  const leaveMap = useDriverLeave()
   const todayISO = new Date().toISOString().slice(0, 10)
 
   // Real staffing / operations / HR roll-ups for the cards + staffing visuals.
@@ -141,11 +143,12 @@ export default function Dashboard() {
       active: drivers.filter((d) => d.status === 'active').length,
       onShift: drivers.filter(onNow).length,
       overtime: drivers.filter(isOT).length,
+      onLeave: drivers.filter((d) => driverShiftState(d) === 'leave').length,
       total: drivers.length,
       zones: SECTIONS[branch].map((z) => ({ name: z, drivers: drivers.filter((d) => d.section === z).length })),
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [drivers, branch, otIdx, todayISO])
+  }, [drivers, branch, otIdx, todayISO, leaveMap])
   const today = new Date().toISOString().slice(0, 10)
   const ops = useMemo(() => {
     const todays = allocations.filter((a) => a.date === today)
@@ -461,7 +464,7 @@ function buildStories(
   branchLabel: string,
   data: {
     real: { avail: number; grounded: number; repair: number; total: number; inService: number; seats: number; active: number; licExpired: number; licExpiring: number }
-    staff: { active: number; onShift: number; overtime: number; total: number }
+    staff: { active: number; onShift: number; overtime: number; onLeave: number; total: number }
     ops: { runsToday: number; busesToday: number }
     hr: { headcount: number }
     operated: { total: number; active: number }
@@ -485,11 +488,11 @@ function buildStories(
   })
   add('drivers', {
     title: 'Drivers', icon: Users, link: '/drivers',
-    narrative: `${staff.active} active driver(s), ${staff.onShift} on shift now${staff.overtime ? `, ${staff.overtime} on overtime` : ''}.`,
+    narrative: `${staff.active} active driver(s), ${staff.onShift} on shift now${staff.overtime ? `, ${staff.overtime} on overtime` : ''}${staff.onLeave ? `, ${staff.onLeave} on leave` : ''}.`,
     stats: [
-      { label: 'Active', value: staff.active },
       { label: 'On shift', value: staff.onShift },
       { label: 'Overtime', value: staff.overtime, tone: staff.overtime ? 'warning' : undefined },
+      { label: 'On leave', value: staff.onLeave, tone: staff.onLeave ? 'warning' : undefined },
     ],
   })
   add('operations', {

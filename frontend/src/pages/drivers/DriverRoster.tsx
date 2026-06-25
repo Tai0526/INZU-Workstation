@@ -12,11 +12,14 @@ import { useDrivers, driversStore } from '@/lib/drivers/store'
 import { type Driver, SHIFT_STATE_META, driverShiftState } from '@/lib/drivers/types'
 import { useCrews, useScheduling, crewLabel } from '@/lib/drivers/scheduling'
 import { useDriverShifts } from '@/lib/drivers/driverShifts'
+import { useDriverLeave } from '@/lib/drivers/leave'
 import { scheduledShift, SHIFT_META, dutyShort, dutyHours, type ShiftKind } from '@/lib/drivers/schedule'
 import { useWeeklyAssign } from '@/lib/operations/store'
 import { buildAssignmentIndex, dutyOn } from '@/lib/drivers/duty'
 
 const onShift = (d: Driver) => { const s = driverShiftState(d); return s === 'on_shift' || s === 'overtime' }
+// Drivers away from the shift today (on leave / suspended) sit in the rest column.
+const awayFromShift = (d: Driver) => { const s = driverShiftState(d); return s === 'leave' || s === 'suspended' }
 const kindOf = (d: Driver): ShiftKind => SHIFT_META[scheduledShift(d)].kind
 const SECTION_CHIP = 'rounded-full bg-navy/5 px-2 py-0.5 text-[10px] font-medium text-navy'
 const bySectionName = (a: Driver, b: Driver) => a.section.localeCompare(b.section) || a.full_name.localeCompare(b.full_name)
@@ -33,6 +36,7 @@ export default function DriverRoster() {
   const all = useDrivers()
   const crews = useCrews()
   useDriverShifts() // regroup/relabel when shift assignments change
+  useDriverLeave() // re-render when a driver is put on / off leave
   const assigns = useWeeklyAssign()
   const today = new Date().toISOString().slice(0, 10)
   const idx = useMemo(() => buildAssignmentIndex(assigns.filter((a) => a.branch === branch)), [assigns, branch])
@@ -59,9 +63,9 @@ export default function DriverRoster() {
       .filter((d) => !term || [d.full_name, d.employee_no, d.section].some((f) => f.toLowerCase().includes(term)))
   }, [branchDrivers, q, section])
 
-  const dayList = drivers.filter((d) => kindOf(d) === 'day').sort(bySectionName)
-  const nightList = drivers.filter((d) => kindOf(d) === 'night').sort(bySectionName)
-  const restList = drivers.filter((d) => kindOf(d) === 'off').sort(bySectionName)
+  const dayList = drivers.filter((d) => !awayFromShift(d) && kindOf(d) === 'day').sort(bySectionName)
+  const nightList = drivers.filter((d) => !awayFromShift(d) && kindOf(d) === 'night').sort(bySectionName)
+  const restList = drivers.filter((d) => awayFromShift(d) || kindOf(d) === 'off').sort(bySectionName)
 
   return (
     <div className="page space-y-5">
@@ -174,11 +178,13 @@ function ShiftColumn({
                 </div>
               </button>
               {kind === 'off'
-                ? (isOT
-                  ? <StatusBadge tone="warning">Overtime</StatusBadge>
-                  : <span className="rounded-full bg-canvas px-2 py-0.5 text-[10px] font-medium text-status-neutral">Rest</span>)
+                ? (state === 'leave' || state === 'suspended'
+                  ? <StatusBadge tone={meta.tone}>{meta.label}</StatusBadge>
+                  : isOT
+                    ? <StatusBadge tone="warning">Overtime</StatusBadge>
+                    : <span className="rounded-full bg-canvas px-2 py-0.5 text-[10px] font-medium text-status-neutral">Rest</span>)
                 : <StatusBadge tone={meta.tone}>{meta.label}</StatusBadge>}
-              {editable && kind === 'off' && !duty.overtime && (
+              {editable && kind === 'off' && !duty.overtime && state !== 'leave' && state !== 'suspended' && (
                 <button onClick={() => driversStore.update(d.id, { overtime: !d.overtime })}
                   className={clsx('shrink-0 rounded-md px-1.5 py-1 text-[10px] font-medium', d.overtime ? 'bg-status-warning/15 text-[#8a6d10] hover:bg-status-warning/25' : 'text-status-neutral hover:bg-white hover:text-navy')}
                   title={d.overtime ? 'Clear overtime' : 'Mark as covering today (overtime)'}>

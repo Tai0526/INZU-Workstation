@@ -16,6 +16,7 @@ import {
 import { useScheduling, crewShiftLabel } from '@/lib/drivers/scheduling'
 import { useWeeklyAssign } from '@/lib/operations/store'
 import { buildAssignmentIndex, dutyOn } from '@/lib/drivers/duty'
+import { useDriverLeave } from '@/lib/drivers/leave'
 
 const SHIFT_COLORS: Record<string, string> = {
   on_shift: '#2E7D4F', overtime: '#C9A227', off: '#6B7280', leave: '#1B2A4A', suspended: '#B3261E',
@@ -32,6 +33,7 @@ export default function DriversOverview() {
   const all = useDrivers()
   const sched = useScheduling()
   const assigns = useWeeklyAssign()
+  useDriverLeave() // re-render when a driver goes on / off leave
   const drivers = useMemo(() => all.filter((d) => d.branch === branch), [all, branch])
   const otIdx = useMemo(() => buildAssignmentIndex(assigns.filter((a) => a.branch === branch)), [assigns, branch])
   const today = new Date().toISOString().slice(0, 10)
@@ -46,10 +48,12 @@ export default function DriversOverview() {
   const stats = useMemo(() => {
     const by = { on_shift: 0, overtime: 0, off: 0, leave: 0, suspended: 0 }
     for (const d of drivers) {
-      if (d.status === 'suspended') { by.suspended++; continue }
-      if (d.status === 'on_leave') { by.leave++; continue }
-      if (isOvertimeToday(d)) { by.overtime++; continue }
-      by[driverShiftState(d) === 'on_shift' ? 'on_shift' : 'off']++
+      const s = driverShiftState(d)
+      if (s === 'suspended') by.suspended++
+      else if (s === 'leave') by.leave++
+      else if (s === 'overtime' || isOvertimeToday(d)) by.overtime++
+      else if (s === 'on_shift') by.on_shift++
+      else by.off++
     }
     const active = drivers.filter((d) => d.status === 'active').length
     const crewCounts = sched.crews.map((c) => ({ id: c.id, label: c.label, n: drivers.filter((d) => d.crew === c.id).length }))

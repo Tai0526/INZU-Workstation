@@ -3,6 +3,7 @@ import type { StatusTone } from '@/components/ui/StatusBadge'
 import { daysUntil, EXPIRY_WARNING_DAYS } from '@/lib/documents/types'
 import { scheduledShift, dutyBlocks } from '@/lib/drivers/schedule'
 import { schedulingStore, windowForKind, blocksForKind, inAnyBlock } from '@/lib/drivers/scheduling'
+import { isOnLeave } from '@/lib/drivers/leave'
 
 // ── Crews & shifts (spec §4.3.2) ───────────────────────────────────────
 // Crews are admin-configurable (Admin → Scheduling) — A, B, C… each optionally
@@ -82,12 +83,12 @@ export const SHIFT_STATE_META: Record<ShiftState, { label: string; tone: StatusT
 
 export function driverShiftState(d: Driver, now = new Date()): ShiftState {
   if (d.status === 'suspended') return 'suspended'
-  if (d.status === 'on_leave') return 'leave'
   const sched = scheduledShift(d, now)
-  // Working a scheduled rest day = overtime (covering). Otherwise the rotation rules.
+  // A scheduled rest day is rest (or overtime cover) — never leave.
   if (sched === 'off') return d.overtime ? 'overtime' : 'off'
-  // On a work day, "on shift now" uses the right window for this driver — the
-  // crew's day/night for continuous sections, or their Morning/Afternoon block.
+  // Working day: on leave (date-bounded, or legacy status) → leave; else on/off by window.
+  const ymd = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+  if (d.status === 'on_leave' || isOnLeave(d.id, ymd)) return 'leave'
   return inAnyBlock(dutyBlocks(d, sched), now) ? 'on_shift' : 'off'
 }
 

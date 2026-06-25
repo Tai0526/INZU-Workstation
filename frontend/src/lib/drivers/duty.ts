@@ -1,6 +1,7 @@
 import type { Driver } from './types'
 import type { WeeklyAssignment } from '@/lib/operations/types'
 import { driverShiftOnDate, SHIFT_META, type ShiftType } from './schedule'
+import { isOnLeave } from './leave'
 
 /**
  * Duty = what a driver actually did on a day, combining their work/rest ROTATION
@@ -60,11 +61,12 @@ export function dutyOn(driver: Driver, dateISO: string, idx: Map<string, WeeklyA
   const assignment = (idx.get(driver.id) ?? []).find((a) => coverStart(a) <= dateISO && dateISO <= coverEnd(a))
   const vehicle = assignment?.fleet_no ?? ''
   if (driver.status === 'suspended') return { shift, kind: 'suspended', vehicle: '', overtime: false }
-  if (driver.status === 'on_leave') return { shift, kind: 'leave', vehicle: '', overtime: false }
   if (isOff) {
     if (assignment) return { shift, kind: 'overtime', vehicle, overtime: true }
     return { shift, kind: 'off', vehicle: '', overtime: false }
   }
+  // Working day, but away on leave (date-bounded, or legacy status).
+  if (driver.status === 'on_leave' || isOnLeave(driver.id, dateISO)) return { shift, kind: 'leave', vehicle: '', overtime: false }
   return { shift, kind: 'worked', vehicle, overtime: false }
 }
 

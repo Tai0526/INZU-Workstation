@@ -1,11 +1,12 @@
-import { useMemo, useRef } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Pencil, Gauge, ShieldCheck, GraduationCap, ShieldAlert, Camera, ChevronRight } from 'lucide-react'
+import { Pencil, Gauge, ShieldCheck, GraduationCap, ShieldAlert, Camera, ChevronRight, Plane } from 'lucide-react'
 import Modal from '@/components/ui/Modal'
 import Button from '@/components/ui/Button'
 import StatusBadge from '@/components/ui/StatusBadge'
 import DriverAvatar from '@/components/drivers/DriverAvatar'
 import DriverDocuments from '@/components/drivers/DriverDocuments'
+import { useAuth } from '@/auth/AuthContext'
 import { BRANCHES } from '@/lib/roles'
 import { putFile } from '@/lib/storage/fileStore'
 import { useDrivers, driversStore } from '@/lib/drivers/store'
@@ -15,7 +16,8 @@ import {
 } from '@/lib/drivers/types'
 import { useScheduling, crewLabel } from '@/lib/drivers/scheduling'
 import { useDriverShifts } from '@/lib/drivers/driverShifts'
-import { scheduledShift, dutyLabel, dutyHours } from '@/lib/drivers/schedule'
+import { scheduledShift, dutyLabel, dutyHours, driverShiftOnDate, SHIFT_META } from '@/lib/drivers/schedule'
+import { leaveStore, useDriverLeave } from '@/lib/drivers/leave'
 import { useSpeedEvents } from '@/lib/speed/store'
 import { overBy, STATUS_META } from '@/lib/speed/types'
 import { useCases, INCIDENT_TYPE_META, CASE_STAGE_META } from '@/lib/safety/cases'
@@ -33,6 +35,13 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   )
 }
 
+// Who can place a driver on leave (Ops + Route Supervisors, plus the admin).
+const LEAVE_MANAGER_ROLES = ['administrator', 'operations_manager', 'asst_operations_manager', 'route_supervisor']
+const DAY_MS = 86_400_000
+const isoOf = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+const addDaysISO = (iso: string, n: number) => { const d = new Date(`${iso}T00:00:00`); d.setTime(d.getTime() + n * DAY_MS); return isoOf(d) }
+const daysInclusive = (a: string, b: string) => Math.max(1, Math.round((new Date(`${b}T00:00:00`).getTime() - new Date(`${a}T00:00:00`).getTime()) / DAY_MS) + 1)
+
 export default function DriverDetail({
   driver, open, onClose, canEdit, onEdit,
 }: {
@@ -42,14 +51,19 @@ export default function DriverDetail({
   canEdit: boolean
   onEdit: (d: Driver) => void
 }) {
+  const { user } = useAuth()
   const all = useDrivers()
   const sched = useScheduling()
   useDriverShifts() // re-render when this driver's shift assignment changes
+  const leaveMap = useDriverLeave()
+  const [leaveOpen, setLeaveOpen] = useState(false)
+  const canManageLeave = LEAVE_MANAGER_ROLES.includes(user?.role ?? '')
   const photoInput = useRef<HTMLInputElement>(null)
   // Resolve the live record so photo/doc changes reflect without reopening.
   const d = all.find((x) => x.id === driver?.id) ?? driver
   if (!d) return null
 
+  const leave = leaveMap[d.id]
   const branch = BRANCHES.find((b) => b.code === d.branch)!
   const todayType = scheduledShift(d)
   const shiftLabel = dutyLabel(d, todayType) // current Day/Night/Off (or Day/Afternoon for 7/7)
@@ -68,13 +82,22 @@ export default function DriverDetail({
   }
 
   return (
+    <>
     <Modal
       open={open}
       onClose={onClose}
       size="lg"
       title={d.full_name}
       subtitle={`${d.employee_no} · ${branch.short}`}
-      footer={canEdit ? <><Button variant="secondary" onClick={onClose}>Close</Button><Button onClick={() => onEdit(d)}><Pencil size={14} /> Edit</Button></> : <Button variant="secondary" onClick={onClose}>Close</Button>}
+      footer={
+        <div className="flex w-full items-center justify-between gap-2">
+          {canManageLeave ? <Button variant="secondary" onClick={() => setLeaveOpen(true)}><Plane size={14} /> {leave ? 'Manage leave' : 'Set on leave'}</Button> : <span />}
+          <div className="flex gap-2">
+            <Button variant="secondary" onClick={onClose}>Close</Button>
+            {canEdit && <Button onClick={() => onEdit(d)}><Pencil size={14} /> Edit</Button>}
+          </div>
+        </div>
+      }
     >
       {/* Header: photo + shift/section chips */}
       <div className="mb-4 flex items-start gap-4">
@@ -97,6 +120,7 @@ export default function DriverDetail({
           <StatusBadge tone={stateMeta.tone}>{stateMeta.label}</StatusBadge>
           <span className="rounded-full bg-navy/5 px-2.5 py-0.5 text-xs font-medium text-navy">Crew {crewLabel(sched, d.crew)} · {shiftLabel}{windowStr ? ` (${windowStr})` : ''}</span>
           <span className="rounded-full bg-navy/5 px-2.5 py-0.5 text-xs font-medium text-navy">{d.section}</span>
+          {leave && <span className="inline-flex items-center gap-1 rounded-full bg-[#E7E0F5] px-2.5 py-0.5 text-xs font-medium text-[#5b4a86]"><Plane size={11} /> On leave · {leave.start} → {leave.end}</span>}
         </div>
       </div>
 
@@ -146,6 +170,51 @@ export default function DriverDetail({
       </div>
 
       {d.notes && <p className="mt-4 rounded-lg bg-canvas px-3 py-2 text-sm text-navy">{d.notes}</p>}
+    </Modal>
+    {leaveOpen && <LeaveModal driver={d} onClose={() => setLeaveOpen(false)} />}
+    </>
+  )
+}
+
+// Leave editor — set the driver on leave for N days (must start on a working day).
+function LeaveModal({ driver, onClose }: { driver: Driver; onClose: () => void }) {
+  const existing = leaveStore.for(driver.id)
+  const [start, setStart] = useState(existing?.start || isoOf(new Date()))
+  const [days, setDays] = useState(existing ? daysInclusive(existing.start, existing.end) : 7)
+  const [err, setErr] = useState('')
+  const n = Math.max(1, Number(days) || 1)
+  const end = addDaysISO(start, n - 1)
+  const startOff = SHIFT_META[driverShiftOnDate(driver, start)].kind === 'off'
+
+  function save() {
+    if (startOff) { setErr('The driver is off-rotation on that start date — leave can only begin on a working day.'); return }
+    leaveStore.set(driver.id, start, end)
+    onClose()
+  }
+  function endLeave() { leaveStore.clear(driver.id); onClose() }
+
+  return (
+    <Modal open onClose={onClose} title={`Leave — ${driver.full_name}`} subtitle="Put the driver on leave for a number of days"
+      footer={
+        <div className="flex w-full items-center justify-between gap-2">
+          {existing ? <Button variant="danger" onClick={endLeave}>End leave</Button> : <span />}
+          <div className="flex gap-2"><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={save}>{existing ? 'Update leave' : 'Set on leave'}</Button></div>
+        </div>
+      }>
+      {err && <div className="mb-3 rounded-lg border border-status-critical/30 bg-status-critical/5 px-3 py-2 text-sm text-status-critical">{err}</div>}
+      <div className="grid grid-cols-2 gap-3">
+        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Start date</span>
+          <input type="date" className="w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand" value={start} onChange={(e) => { setStart(e.target.value); setErr('') }} /></label>
+        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Days</span>
+          <input type="number" min={1} className="w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand" value={days} onChange={(e) => setDays(Number(e.target.value))} /></label>
+      </div>
+      <div className="mt-2 flex gap-1">
+        {[3, 5, 7, 14].map((q) => (
+          <button key={q} type="button" onClick={() => setDays(q)} className={`rounded-lg border px-2.5 py-1.5 text-xs font-medium ${n === q ? 'border-brand bg-brand-tint/60 text-navy' : 'border-black/15 text-navy hover:bg-canvas'}`}>{q}d</button>
+        ))}
+      </div>
+      <p className="mt-3 text-xs text-status-neutral">On leave <b className="text-navy">{n} day{n === 1 ? '' : 's'}</b> · {start} → {end}.</p>
+      {startOff && <p className="mt-2 rounded-lg bg-status-warning/10 px-3 py-2 text-[11px] text-[#8a6d10]">This driver is off-rotation on the selected start date — leave can only begin on a working day.</p>}
     </Modal>
   )
 }

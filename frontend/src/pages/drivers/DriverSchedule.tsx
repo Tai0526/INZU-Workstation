@@ -15,6 +15,7 @@ import { useScheduling, windowForKind } from '@/lib/drivers/scheduling'
 import { useDriverShifts } from '@/lib/drivers/driverShifts'
 import { useWeeklyAssign } from '@/lib/operations/store'
 import { buildAssignmentIndex, dutyOn } from '@/lib/drivers/duty'
+import { useDriverLeave } from '@/lib/drivers/leave'
 
 const pad = (n: number) => String(n).padStart(2, '0')
 const KIND_CELL: Record<ShiftKind, string> = {
@@ -23,6 +24,7 @@ const KIND_CELL: Record<ShiftKind, string> = {
   off: 'bg-white text-status-neutral/40',
 }
 const OT_CELL = 'bg-status-warning/30 text-[#8a6d10]'
+const LEAVE_CELL = 'bg-[#E7E0F5] text-[#5b4a86]'
 
 export default function DriverSchedule() {
   const { user } = useAuth()
@@ -35,6 +37,7 @@ export default function DriverSchedule() {
   const all = useDrivers()
   const sched = useScheduling()
   useDriverShifts() // relabel cells when shift assignments change
+  useDriverLeave() // re-render when leave changes
   const dayWin = windowForKind(sched, 'day') || '—'
   const nightWin = windowForKind(sched, 'night') || '—'
   const assigns = useWeeklyAssign()
@@ -112,6 +115,7 @@ export default function DriverSchedule() {
         <span className="inline-flex items-center gap-1.5"><span className="h-3.5 w-3.5 rounded bg-[#DDE4F3]" /> <b className="text-navy">Night</b> <span className="text-status-neutral">{nightWin}</span></span>
         <span className="inline-flex items-center gap-1.5"><span className="h-3.5 w-3.5 rounded border border-black/10 bg-white" /> <span className="text-status-neutral">Off / rest</span></span>
         <span className="inline-flex items-center gap-1.5"><span className="flex h-3.5 w-3.5 items-center justify-center rounded bg-status-warning/30 text-[7px] font-bold text-[#8a6d10]">OT</span> <span className="text-status-neutral">Overtime (covering off-day)</span></span>
+        <span className="inline-flex items-center gap-1.5"><span className="flex h-3.5 w-3.5 items-center justify-center rounded bg-[#E7E0F5] text-[7px] font-bold text-[#5b4a86]">L</span> <span className="text-status-neutral">On leave</span></span>
       </div>
 
       {/* Calendar grid — header row (days/dates) and the Driver column stay put while scrolling */}
@@ -143,14 +147,15 @@ export default function DriverSchedule() {
                       const duty = dutyOn(dr, d.dateISO, idx)
                       const meta = SHIFT_META[duty.shift]
                       const isOT = duty.kind === 'overtime'
-                      const wLabel = dutyLabel(dr, duty.shift)
-                      const wHours = dutyHours(dr, duty.shift)
-                      const cellShort = dutyShort(dr, duty.shift)
+                      const isLeave = duty.kind === 'leave'
+                      const wLabel = isLeave ? 'On leave' : dutyLabel(dr, duty.shift)
+                      const wHours = isLeave ? '' : dutyHours(dr, duty.shift)
+                      const cellShort = isOT ? 'OT' : isLeave ? 'L' : dutyShort(dr, duty.shift)
                       const tip = `${dr.full_name} · ${d.dateISO} — ${isOT ? `Overtime${duty.vehicle ? ` on ${duty.vehicle}` : ''}` : `${wLabel}${wHours ? ` (${wHours})` : ''}${duty.vehicle ? ` · ${duty.vehicle}` : ''}`}`
                       return (
-                        <td key={d.day} className={clsx('h-8 w-7 border-l border-black/5 text-center', d.weekend && meta.kind === 'off' && !isOT && 'bg-black/[0.02]')}>
-                          <span className={clsx('mx-auto flex h-7 w-6 items-center justify-center rounded text-[11px] font-bold', isOT ? OT_CELL : KIND_CELL[meta.kind], d.dateISO === todayISO && 'ring-1 ring-brand')} title={tip}>
-                            {isOT ? 'OT' : cellShort}
+                        <td key={d.day} className={clsx('h-8 w-7 border-l border-black/5 text-center', d.weekend && meta.kind === 'off' && !isOT && !isLeave && 'bg-black/[0.02]')}>
+                          <span className={clsx('mx-auto flex h-7 w-6 items-center justify-center rounded text-[11px] font-bold', isLeave ? LEAVE_CELL : isOT ? OT_CELL : KIND_CELL[meta.kind], d.dateISO === todayISO && 'ring-1 ring-brand')} title={tip}>
+                            {cellShort}
                           </span>
                         </td>
                       )
