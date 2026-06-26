@@ -28,8 +28,10 @@ import {
   useHazards, riskScore, useCap, useCompliance, useComplianceClasses, classMap,
   cellState, prereqsMet, isCompliantCell, credStatus, useLoto, lotoStatus, useTools, inspectionDue,
 } from '@/lib/safety/registers'
-import { useGenFuel } from '@/lib/fuel/store'
+import { useGenFuel, useIssuances, useReceipts, useFuelConfig } from '@/lib/fuel/store'
+import { computeStock, isApprovedDraw } from '@/lib/fuel/types'
 import { useMileage } from '@/lib/operations/store'
+import KpiCard from '@/components/ui/KpiCard'
 import OpsInsight from '@/components/dashboard/OpsInsight'
 import StoryCard, { type Story } from '@/components/dashboard/StoryCard'
 import SafetyCard from '@/components/dashboard/SafetyCard'
@@ -53,6 +55,9 @@ const SEV = {
 }
 
 const OPS = ['operations_manager', 'asst_operations_manager'] as RoleKey[]
+// The whole operations chain: the two managers plus the people under them. Used
+// to give execs (MD / Directors) oversight of what Ops & their team haven't done.
+const OPS_CHAIN = ['operations_manager', 'asst_operations_manager', 'route_supervisor', 'bus_controller', 'tracker', 'fuel_controller'] as RoleKey[]
 const SAFETY = ['safety_officer', 'operations_manager'] as RoleKey[]
 const WORKSHOP = ['workshop_supervisor', 'operations_manager'] as RoleKey[]
 const SPEED = ['tracker', 'operations_manager', 'asst_operations_manager'] as RoleKey[]
@@ -119,6 +124,9 @@ export default function Dashboard() {
   const loto = useLoto().filter((p) => p.branch === branch)
   const tools = useTools().filter((t) => t.branch === branch)
   const draws = useGenFuel().filter((g) => g.branch === branch)
+  const issuances = useIssuances().filter((i) => i.branch === branch)
+  const receipts = useReceipts().filter((rr) => rr.branch === branch)
+  const fuelCfg = useFuelConfig(branch)
   const mileage = useMileage().filter((mm) => mm.branch === branch)
   const employees = useEmployees().filter((e) => e.branch === branch)
   const allocations = useAllocations().filter((a) => a.branch === branch)
@@ -169,6 +177,24 @@ export default function Dashboard() {
     const missingDocs = fleet.filter((v) => LICENSING_CATEGORIES.some((cat) => !branchDocs.some((d) => d.entity_id === v.id && d.category === cat))).length
     return { active, grounded, repair, total, inService, seats, avail: inService ? Math.round((active / inService) * 100) : 0, licExpired, licExpiring, missingDocs }
   }, [fleet, branchDocs])
+
+  // Fuel & fleet overview (live depot stock + this month's movements) — for the
+  // execs / ops managers who oversee the whole branch.
+  const fuelOverview = useMemo(() => {
+    const ym = today.slice(0, 7)
+    const genApproved = draws.filter(isApprovedDraw).reduce((s, g) => s + g.litres, 0)
+    const stock = computeStock(issuances, receipts, fuelCfg, genApproved)
+    const receivedThisMonth = receipts.filter((rr) => rr.date.slice(0, 7) === ym).reduce((s, rr) => s + rr.litres, 0)
+    const usedThisMonth =
+      issuances.filter((i) => i.date.slice(0, 7) === ym).reduce((s, i) => s + i.liters_given, 0) +
+      draws.filter((g) => isApprovedDraw(g) && g.date.slice(0, 7) === ym).reduce((s, g) => s + g.litres, 0)
+    return { usable: stock.usable, daysLeft: stock.daysLeft, receivedThisMonth, usedThisMonth }
+  }, [issuances, receipts, fuelCfg, draws, today])
+  // "Done today?" signals so recurring entry tasks clear once completed (and the
+  // exec oversight panel reflects reality).
+  const allocToday = ops.runsToday > 0
+  const mileageToday = mileage.some((m) => m.date === today)
+  const fuelToday = issuances.some((i) => i.date === today)
 
   // Derived metrics for the attention feed + safety/speed cards.
   const r = useMemo(() => {
@@ -269,13 +295,17 @@ export default function Dashboard() {
     if (r.drawsPending > 0)
       push({ id: 'fuel-auth', severity: 'action', icon: Fuel, title: `${r.drawsPending} fuel ${plural(r.drawsPending, 'authorisation')} pending`, detail: 'Authorised-vehicle draws awaiting your sign-off.', link: '/operations/fuel', actors: OPS })
 
-    // Data-entry recurring tasks
-    push({ id: 'mil-entry', severity: 'action', icon: RouteIcon, title: "Log today's mileage", detail: 'Capture actual distance covered per bus.', link: '/operations/mileage', actors: ['tracker'] })
-    push({ id: 'fuel-entry', severity: 'action', icon: Fuel, title: "Record today's fuel", detail: 'Fuel issued, driver, vehicle, locations visited.', link: '/operations/fuel', actors: ['fuel_controller'] })
-    push({ id: 'alloc-entry', severity: 'action', icon: RouteIcon, title: "Set today's bus allocation", detail: 'Assign bus, route and driver for the day.', link: '/operations/allocation', actors: ['bus_controller'] })
+    // Data-entry recurring tasks — shown only while still outstanding for today,
+    // so they clear once the entry is made (and the exec oversight stays honest).
+    if (!mileageToday)
+      push({ id: 'mil-entry', severity: 'action', icon: RouteIcon, title: "Log today's mileage", detail: 'Capture actual distance covered per bus.', link: '/operations/mileage', actors: ['tracker'] })
+    if (!fuelToday)
+      push({ id: 'fuel-entry', severity: 'action', icon: Fuel, title: "Record today's fuel", detail: 'Fuel issued, driver, vehicle, locations visited.', link: '/operations/fuel', actors: ['fuel_controller'] })
+    if (!allocToday)
+      push({ id: 'alloc-entry', severity: 'action', icon: RouteIcon, title: "Set today's bus allocation", detail: 'Assign bus, route and driver for the day.', link: '/operations/allocation', actors: ['bus_controller'] })
 
     return items
-  }, [real, r])
+  }, [real, r, allocToday, mileageToday, fuelToday])
 
   const myItems = allItems
     .filter((i) => i.actors.includes(role))
@@ -285,9 +315,18 @@ export default function Dashboard() {
     warning: myItems.filter((i) => i.severity === 'warning').length,
     action: myItems.filter((i) => i.severity === 'action').length,
   }
-  // Managers & execs also see top branch risks they don't personally action (awareness)
+  // Execs (MD / Directors) + admin: oversight of the whole operations chain —
+  // what Ops and the people under them still haven't done.
+  const showOpsOversight = tier === 'exec' || role === 'administrator'
+  const opsOutstanding = showOpsOversight
+    ? allItems.filter((i) => OPS_CHAIN.includes(ownerOf(i))).sort((a, b) => SEV[a.severity].rank - SEV[b.severity].rank)
+    : []
+  // Fleet & fuel overview audience: ops managers, execs and admin.
+  const showOverview = tier === 'exec' || tier === 'mgmt' || role === 'administrator'
+  // Managers & execs also see top branch risks they don't personally action (awareness).
+  // Ops-chain items already appear in the oversight panel, so keep them out of watch.
   const watch = (tier === 'exec' || tier === 'mgmt')
-    ? allItems.filter((i) => !i.actors.includes(role) && i.severity !== 'action').slice(0, 5)
+    ? allItems.filter((i) => !i.actors.includes(role) && i.severity !== 'action' && !(showOpsOversight && OPS_CHAIN.includes(ownerOf(i)))).slice(0, 5)
     : []
 
   // ── Domain cards (gated to what the role can view), in spec order ──
@@ -320,6 +359,10 @@ export default function Dashboard() {
     myItems.length === 0
       ? `${branchLabel} looks healthy — nothing needs your action right now.`
       : `${branchLabel}: ${myItems.length} item${myItems.length === 1 ? '' : 's'} ${myItems.length === 1 ? 'needs' : 'need'} your action.`
+
+  const monthLbl = new Date().toLocaleDateString('en', { month: 'long', year: 'numeric' })
+  const fuelTone: 'neutral' | 'critical' | 'warning' | 'good' =
+    fuelOverview.daysLeft == null ? 'neutral' : fuelOverview.daysLeft < 7 ? 'critical' : fuelOverview.daysLeft < 14 ? 'warning' : 'good'
 
   return (
     <div className="page space-y-6">
@@ -395,6 +438,82 @@ export default function Dashboard() {
           </div>
         )}
       </div>
+
+      {/* Operations oversight — what Ops & their team haven't done (execs + admin) */}
+      {showOpsOversight && (
+        <div className="card overflow-hidden">
+          <div className="flex flex-wrap items-center gap-2 border-b border-black/5 px-5 py-3.5">
+            <UserCog size={16} className="text-brand" />
+            <h3 className="font-display text-sm font-bold text-navy">Operations — outstanding</h3>
+            {opsOutstanding.length > 0 && <span className="rounded-full bg-navy/5 px-2 py-0.5 text-xs font-bold text-navy">{opsOutstanding.length}</span>}
+            <span className="ml-auto text-[11px] text-status-neutral">what Ops &amp; their team haven't done yet</span>
+          </div>
+          {opsOutstanding.length === 0 ? (
+            <div className="flex flex-col items-center gap-1.5 px-6 py-10 text-center">
+              <CheckCircle2 size={26} className="text-status-good" />
+              <p className="text-sm font-semibold text-navy">Operations is on top of everything</p>
+              <p className="text-xs text-status-neutral">No outstanding ops tasks in {branchLabel} right now.</p>
+            </div>
+          ) : (
+            <div className="divide-y divide-black/5">
+              {opsOutstanding.map((i) => {
+                const s = SEV[i.severity]
+                const Icon = i.icon
+                const who = responsible(ownerOf(i))
+                return (
+                  <Link key={i.id} to={i.link} className="group flex items-stretch hover:bg-canvas">
+                    <span className={clsx('w-1.5 shrink-0', s.bar)} aria-hidden />
+                    <div className="flex flex-1 items-center gap-3 px-4 py-3">
+                      <span className={clsx('flex h-9 w-9 shrink-0 items-center justify-center rounded-xl', s.tint)}>
+                        <Icon size={18} className={s.text} />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-semibold text-navy">{i.title}</div>
+                        <div className="text-xs text-status-neutral">{i.detail}</div>
+                        <div className="mt-1 inline-flex flex-wrap items-center gap-1 text-[11px]">
+                          <UserRound size={11} className="shrink-0 text-status-neutral" />
+                          <span className="text-status-neutral">Follow up:</span>
+                          <span className="font-semibold text-navy">{who.name}</span>
+                          {who.assigned ? <span className="text-status-neutral">· {who.role}</span> : <span className="font-medium text-status-critical">· no user assigned</span>}
+                        </div>
+                      </div>
+                      <span className={clsx('hidden rounded-full px-2 py-0.5 text-[10px] font-semibold sm:inline', s.chip)}>{s.label}</span>
+                      <ArrowRight size={16} className="shrink-0 text-status-neutral transition-transform group-hover:translate-x-0.5" />
+                    </div>
+                  </Link>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Fleet & fuel overview — for ops managers, execs and admin */}
+      {showOverview && (
+        <div className="space-y-3">
+          <h3 className="font-display text-sm font-bold text-navy">
+            Fleet &amp; fuel overview <span className="font-normal text-status-neutral">· {monthLbl} · {branchLabel}</span>
+          </h3>
+          <div>
+            <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-status-neutral"><Fuel size={13} className="text-brand" /> Fuel</div>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <KpiCard label="Fuel left" value={`${Math.round(fuelOverview.usable).toLocaleString()} L`} highlight tone={fuelTone} sub="usable in the depot" info="What's in the tank now minus the dead-stock reserve." />
+              <KpiCard label="Days left" value={fuelOverview.daysLeft == null ? '—' : Math.floor(fuelOverview.daysLeft)} tone={fuelTone} sub="at current usage" />
+              <KpiCard label="Received this month" value={`${fuelOverview.receivedThisMonth.toLocaleString()} L`} tone="good" sub={monthLbl} />
+              <KpiCard label="Used this month" value={`${Math.round(fuelOverview.usedThisMonth).toLocaleString()} L`} sub="vehicles + generator" />
+            </div>
+          </div>
+          <div>
+            <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-status-neutral"><Truck size={13} className="text-brand" /> Fleet</div>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <KpiCard label="On the road" value={real.active} tone="good" sub={`of ${real.inService} in service`} />
+              <KpiCard label="Vehicles down" value={real.repair + real.grounded} tone={real.repair + real.grounded ? 'critical' : 'good'} sub={`${real.repair} workshop · ${real.grounded} grounded`} info="Buses not available — in the workshop or grounded." />
+              <KpiCard label="Availability" value={real.inService ? `${real.avail}%` : '—'} tone={real.avail >= 90 ? 'good' : 'warning'} sub="active ÷ in service" />
+              <KpiCard label="Need attention" value={real.licExpired + real.licExpiring + real.missingDocs} tone={real.licExpired ? 'critical' : real.licExpiring + real.missingDocs ? 'warning' : 'good'} sub="licensing & documents" info="Expired / expiring licensing plus vehicles missing required documents." />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Domain cards — visual where it helps you act, narrative otherwise */}
       {glance.length > 0 && (
