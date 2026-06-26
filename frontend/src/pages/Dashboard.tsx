@@ -307,26 +307,30 @@ export default function Dashboard() {
     return items
   }, [real, r, allocToday, mileageToday, fuelToday])
 
-  const myItems = allItems
-    .filter((i) => i.actors.includes(role))
-    .sort((a, b) => SEV[a.severity].rank - SEV[b.severity].rank)
+  // Execs (MD / Directors) + admin oversee the whole branch rather than holding
+  // personal action items, so their "Needs your attention" IS the branch watch —
+  // everything not in order, at the top (the ops-team backlog has its own panel).
+  const isExecView = tier === 'exec' || role === 'administrator'
+  const myItems = (isExecView
+    ? allItems.filter((i) => i.severity !== 'action' && !OPS_CHAIN.includes(ownerOf(i)))
+    : allItems.filter((i) => i.actors.includes(role))
+  ).sort((a, b) => SEV[a.severity].rank - SEV[b.severity].rank)
   const sevCounts = {
     critical: myItems.filter((i) => i.severity === 'critical').length,
     warning: myItems.filter((i) => i.severity === 'warning').length,
     action: myItems.filter((i) => i.severity === 'action').length,
   }
-  // Execs (MD / Directors) + admin: oversight of the whole operations chain —
-  // what Ops and the people under them still haven't done.
-  const showOpsOversight = tier === 'exec' || role === 'administrator'
+  // Oversight of the whole operations chain — what Ops & their team haven't done.
+  const showOpsOversight = isExecView
   const opsOutstanding = showOpsOversight
     ? allItems.filter((i) => OPS_CHAIN.includes(ownerOf(i))).sort((a, b) => SEV[a.severity].rank - SEV[b.severity].rank)
     : []
   // Fleet & fuel overview audience: ops managers, execs and admin.
   const showOverview = tier === 'exec' || tier === 'mgmt' || role === 'administrator'
-  // Managers & execs also see top branch risks they don't personally action (awareness).
-  // Ops-chain items already appear in the oversight panel, so keep them out of watch.
-  const watch = (tier === 'exec' || tier === 'mgmt')
-    ? allItems.filter((i) => !i.actors.includes(role) && i.severity !== 'action' && !(showOpsOversight && OPS_CHAIN.includes(ownerOf(i)))).slice(0, 5)
+  // Ops managers keep a bottom "Branch watch" for awareness; execs/admin already
+  // get the full branch picture at the top, so they don't need a second list.
+  const watch = tier === 'mgmt'
+    ? allItems.filter((i) => !i.actors.includes(role) && i.severity !== 'action').slice(0, 5)
     : []
 
   // ── Domain cards (gated to what the role can view), in spec order ──
@@ -357,8 +361,10 @@ export default function Dashboard() {
 
   const story =
     myItems.length === 0
-      ? `${branchLabel} looks healthy — nothing needs your action right now.`
-      : `${branchLabel}: ${myItems.length} item${myItems.length === 1 ? '' : 's'} ${myItems.length === 1 ? 'needs' : 'need'} your action.`
+      ? `${branchLabel} looks healthy — ${isExecView ? "nothing's out of order" : 'nothing needs your action'} right now.`
+      : isExecView
+        ? `${branchLabel}: ${myItems.length} thing${myItems.length === 1 ? '' : 's'} ${myItems.length === 1 ? 'is' : 'are'} not in order.`
+        : `${branchLabel}: ${myItems.length} item${myItems.length === 1 ? '' : 's'} ${myItems.length === 1 ? 'needs' : 'need'} your action.`
 
   const monthLbl = new Date().toLocaleDateString('en', { month: 'long', year: 'numeric' })
   const fuelTone: 'neutral' | 'critical' | 'warning' | 'good' =
@@ -398,8 +404,8 @@ export default function Dashboard() {
         {myItems.length === 0 ? (
           <div className="flex flex-col items-center gap-1.5 px-6 py-12 text-center">
             <CheckCircle2 size={28} className="text-status-good" />
-            <p className="text-sm font-semibold text-navy">You're all caught up</p>
-            <p className="text-xs text-status-neutral">Nothing needs your action in {branchLabel} right now.</p>
+            <p className="text-sm font-semibold text-navy">{isExecView ? 'Everything is in order' : "You're all caught up"}</p>
+            <p className="text-xs text-status-neutral">{isExecView ? `Nothing is out of order in ${branchLabel} right now.` : `Nothing needs your action in ${branchLabel} right now.`}</p>
           </div>
         ) : (
           <div className="divide-y divide-black/5">
