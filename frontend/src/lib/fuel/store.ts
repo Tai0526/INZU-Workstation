@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import { getActor } from '@/lib/audit/actor'
 import type { Audited } from '@/lib/operations/types'
-import { type FuelIssuance, type IssuanceInput, type FuelReceipt, type FuelConfig, type FuelRate, type GenFuel, isOpen, DEFAULT_FUEL_CONFIG, DEFAULT_FUEL_RATE } from './types'
+import { type FuelIssuance, type IssuanceInput, type FuelReceipt, type FuelConfig, type FuelRate, type GenFuel, isOpen, DEFAULT_FUEL_CONFIG, DEFAULT_FUEL_RATE, FUEL_LEVELS } from './types'
 import { TRIDENT_BUSES, REFUEL_DATES } from '@/lib/demo/buses'
 import { createSyncTable, createSyncConfig } from '@/lib/supabase/syncTable'
 
@@ -118,6 +118,38 @@ export function setFuelConfig(branch: string, cfg: FuelConfig) {
 export function useFuelConfig(branch: string): FuelConfig {
   return useSyncExternalStore(fuelCfg.subscribe, () => getFuelConfig(branch), () => getFuelConfig(branch))
 }
+
+// ── Tank reading levels (editable) ─────────────────────────────────────
+// The before/after gauge readings offered in every refuel form. Seeded from the
+// built-in ladder but fully editable (add / remove / reorder) and stored in
+// app_config, so changes sync everywhere and need no DB migration.
+const fuelLevelsCfg = createSyncConfig<string[]>({
+  key: 'fuel_tank_levels', lsKey: 'inzu_fuel_tank_levels', default: FUEL_LEVELS,
+  merge: (saved) => (Array.isArray(saved) && saved.length ? saved : FUEL_LEVELS),
+})
+export const fuelLevelsStore = {
+  get: () => fuelLevelsCfg.get(),
+  subscribe: fuelLevelsCfg.subscribe,
+  set: (levels: string[]) => fuelLevelsCfg.set(levels),
+  add(level: string) {
+    const v = level.trim()
+    if (!v) return
+    const cur = fuelLevelsCfg.get()
+    if (cur.some((l) => l.toLowerCase() === v.toLowerCase())) return // no duplicates
+    fuelLevelsCfg.set([...cur, v])
+  },
+  remove: (level: string) => fuelLevelsCfg.set(fuelLevelsCfg.get().filter((l) => l !== level)),
+  move(level: string, dir: -1 | 1) {
+    const cur = [...fuelLevelsCfg.get()]
+    const i = cur.indexOf(level)
+    const j = i + dir
+    if (i < 0 || j < 0 || j >= cur.length) return
+    const tmp = cur[i]; cur[i] = cur[j]; cur[j] = tmp
+    fuelLevelsCfg.set(cur)
+  },
+  reset: () => fuelLevelsCfg.set([...FUEL_LEVELS]),
+}
+export const useFuelLevels = () => useSyncExternalStore(fuelLevelsCfg.subscribe, fuelLevelsCfg.get, fuelLevelsCfg.get)
 
 // ── Monthly rates (per branch:YYYY-MM) — ERB diesel price + BoZ FX ──────
 const rateKey = (branch: string, ym: string) => `${branch}:${ym}`

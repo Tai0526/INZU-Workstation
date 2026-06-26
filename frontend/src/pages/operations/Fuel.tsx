@@ -1,5 +1,5 @@
 import { Fragment, useMemo, useState } from 'react'
-import { Plus, Upload, Download, Trash2, Pencil, Fuel as FuelIcon, Gauge, Settings, PackagePlus, CheckCircle2, AlertTriangle, UploadCloud, FileText, FileType, ChevronDown, Search, Paperclip, Zap, Users, Check, X } from 'lucide-react'
+import { Plus, Upload, Download, Trash2, Pencil, Fuel as FuelIcon, Gauge, Settings, PackagePlus, CheckCircle2, AlertTriangle, UploadCloud, FileText, FileType, ChevronDown, ChevronUp, Search, Paperclip, Zap, Users, Check, X } from 'lucide-react'
 import clsx from 'clsx'
 import { useAuth } from '@/auth/AuthContext'
 import { ROLES, BRANCHES, type BranchCode } from '@/lib/roles'
@@ -15,11 +15,11 @@ import { useMileageRoutes } from '@/lib/mileage/store'
 import { useEmployees } from '@/lib/hr/store'
 import { FUEL_HANDLER_ROLES } from '@/lib/hr/types'
 import {
-  useIssuances, useReceipts, useGenFuel, useFuelConfig, setFuelConfig, useFuelRate, setFuelRate, fetchLiveUsdZmw, recordRefuel, editIssuance, authorizeDraw, issuancesStore, receiptsStore, genFuelStore,
+  useIssuances, useReceipts, useGenFuel, useFuelConfig, setFuelConfig, useFuelRate, setFuelRate, fetchLiveUsdZmw, recordRefuel, editIssuance, authorizeDraw, issuancesStore, receiptsStore, genFuelStore, useFuelLevels, fuelLevelsStore,
 } from '@/lib/fuel/store'
 import { putFile, viewFile } from '@/lib/storage/fileStore'
 import {
-  type FuelIssuance, type IssuanceInput, type FuelConfig, type FuelRate, type FuelReceipt, type GenFuel, type DrawKind, type Currency, FUEL_LEVELS, DRAW_LABEL, isApprovedDraw, isOpen, kmMoved, kmPerLitre,
+  type FuelIssuance, type IssuanceInput, type FuelConfig, type FuelRate, type FuelReceipt, type GenFuel, type DrawKind, type Currency, DRAW_LABEL, isApprovedDraw, isOpen, kmMoved, kmPerLitre,
   computeStock, summariseByVehicle, pricePerLitre, money,
 } from '@/lib/fuel/types'
 import { parseIssuances, downloadIssuanceTemplate, exportIssuances, exportReceipts, type IssuanceImport } from '@/lib/fuel/excel'
@@ -326,6 +326,7 @@ function PeopleHeader({ fleet, reg, driver, attendant, onFleet, setReg, setDrive
 function AddIssuancesModal({ open, onClose, branch, vehicles, drivers, routes, attendants, me }: { open: boolean; onClose: () => void; branch: BranchCode; vehicles: any[]; drivers: any[]; routes: any[]; attendants: any[]; me: string }) {
   const [fleet, setFleet] = useState(''); const [reg, setReg] = useState(''); const [driver, setDriver] = useState(''); const [attendant, setAttendant] = useState('')
   const [rows, setRows] = useState<Draft[]>([draft('2026-06-19'), draft(), draft()])
+  const levels = useFuelLevels()
   const [wasOpen, setWasOpen] = useState(false)
   if (open && !wasOpen) { setWasOpen(true); setFleet(''); setReg(''); setDriver(''); setAttendant(me); setRows([draft('2026-06-19'), draft(), draft()]) }
   if (!open && wasOpen) setWasOpen(false)
@@ -366,8 +367,8 @@ function AddIssuancesModal({ open, onClose, branch, vehicles, drivers, routes, a
                 <td className="px-1.5 py-1"><input type="date" className={cellCls} value={r.date} onChange={(e) => setRow(i, { date: e.target.value })} /></td>
                 <td className="px-1.5 py-1"><input className={cellCls} value={r.trip_number} onChange={(e) => setRow(i, { trip_number: e.target.value })} /></td>
                 <td className="px-1.5 py-1"><select className={cellCls} value={r.route} onChange={(e) => setRow(i, { route: e.target.value })}><option value="">Route…</option>{routes.map((x: any) => <option key={x.id} value={x.name}>{x.name}</option>)}</select></td>
-                <td className="px-1.5 py-1"><select className={cellCls} value={r.opening_fuel_level} onChange={(e) => setRow(i, { opening_fuel_level: e.target.value })}><option value="">—</option>{FUEL_LEVELS.map((l) => <option key={l} value={l}>{l}</option>)}</select></td>
-                <td className="px-1.5 py-1"><select className={cellCls} value={r.closing_fuel_level} onChange={(e) => setRow(i, { closing_fuel_level: e.target.value })}><option value="">—</option>{FUEL_LEVELS.map((l) => <option key={l} value={l}>{l}</option>)}</select></td>
+                <td className="px-1.5 py-1"><select className={cellCls} value={r.opening_fuel_level} onChange={(e) => setRow(i, { opening_fuel_level: e.target.value })}><option value="">—</option>{levels.map((l) => <option key={l} value={l}>{l}</option>)}</select></td>
+                <td className="px-1.5 py-1"><select className={cellCls} value={r.closing_fuel_level} onChange={(e) => setRow(i, { closing_fuel_level: e.target.value })}><option value="">—</option>{levels.map((l) => <option key={l} value={l}>{l}</option>)}</select></td>
                 <td className="px-1.5 py-1"><input type="number" className={cellCls} value={r.opening_mileage} onChange={(e) => setRow(i, { opening_mileage: e.target.value })} /></td>
                 <td className="px-1.5 py-1"><input type="number" className={cellCls} value={r.liters_given} onChange={(e) => setRow(i, { liters_given: e.target.value })} /></td>
                 <td className="px-1.5 py-1"><button onClick={() => setRows((rs) => rs.filter((_, idx) => idx !== i))} className="rounded p-1 text-status-neutral hover:bg-status-critical/10 hover:text-status-critical"><Trash2 size={13} /></button></td>
@@ -385,6 +386,7 @@ function AddIssuancesModal({ open, onClose, branch, vehicles, drivers, routes, a
 
 // ── Quick refuel (mobile-first, one bus) — for the attendant at the pump ─
 function QuickRefuelModal({ open, onClose, branch, vehicles, drivers, routes, attendants, me }: { open: boolean; onClose: () => void; branch: BranchCode; vehicles: any[]; drivers: any[]; routes: any[]; attendants: any[]; me: string }) {
+  const levels = useFuelLevels()
   const todayStr = new Date().toISOString().slice(0, 10)
   const [date, setDate] = useState(todayStr)
   const [fleet, setFleet] = useState(''); const [reg, setReg] = useState(''); const [driver, setDriver] = useState(''); const [attendant, setAttendant] = useState('')
@@ -423,8 +425,8 @@ function QuickRefuelModal({ open, onClose, branch, vehicles, drivers, routes, at
           <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Litres given</span><input type="number" inputMode="decimal" className={bigCls} placeholder="L" value={litres} onChange={(e) => setLitres(e.target.value)} /></label>
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Tank before</span><select className={inputCls} value={before} onChange={(e) => setBefore(e.target.value)}><option value="">—</option>{FUEL_LEVELS.map((l) => <option key={l} value={l}>{l}</option>)}</select></label>
-          <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Tank after</span><select className={inputCls} value={after} onChange={(e) => setAfter(e.target.value)}>{FUEL_LEVELS.map((l) => <option key={l} value={l}>{l}</option>)}</select></label>
+          <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Tank before</span><select className={inputCls} value={before} onChange={(e) => setBefore(e.target.value)}><option value="">—</option>{levels.map((l) => <option key={l} value={l}>{l}</option>)}</select></label>
+          <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Tank after</span><select className={inputCls} value={after} onChange={(e) => setAfter(e.target.value)}>{levels.map((l) => <option key={l} value={l}>{l}</option>)}</select></label>
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Driver</span>
@@ -454,6 +456,7 @@ function QuickRefuelModal({ open, onClose, branch, vehicles, drivers, routes, at
 // ── Edit a single issuance (full fields, incl. closing) ────────────────
 function EditIssuanceModal({ editing, onClose, vehicles, drivers, routes, attendants }: { editing: FuelIssuance | null; onClose: () => void; vehicles: any[]; drivers: any[]; routes: any[]; attendants: any[] }) {
   const [f, setF] = useState<FuelIssuance | null>(null)
+  const levels = useFuelLevels()
   const [lastKey, setLastKey] = useState('')
   const key = editing?.id ?? ''
   if (key !== lastKey) { setLastKey(key); setF(editing ? { ...editing } : null) }
@@ -482,8 +485,8 @@ function EditIssuanceModal({ editing, onClose, vehicles, drivers, routes, attend
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Route</span><select className={inputCls} value={f.route} onChange={(e) => set('route', e.target.value)}><option value="">—</option>{routes.map((x: any) => <option key={x.id} value={x.name}>{x.name}</option>)}{f.route && !routes.some((x: any) => x.name === f.route) && <option value={f.route}>{f.route}</option>}</select></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Litres</span><input type="number" className={inputCls} value={f.liters_given || ''} onChange={(e) => set('liters_given', Number(e.target.value))} /></label>
         <div />
-        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Level before refuel</span><select className={inputCls} value={f.opening_fuel_level} onChange={(e) => set('opening_fuel_level', e.target.value)}><option value="">—</option>{FUEL_LEVELS.map((l) => <option key={l} value={l}>{l}</option>)}</select></label>
-        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Level after refuel</span><select className={inputCls} value={f.closing_fuel_level} onChange={(e) => set('closing_fuel_level', e.target.value)}><option value="">—</option>{FUEL_LEVELS.map((l) => <option key={l} value={l}>{l}</option>)}</select></label>
+        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Level before refuel</span><select className={inputCls} value={f.opening_fuel_level} onChange={(e) => set('opening_fuel_level', e.target.value)}><option value="">—</option>{levels.map((l) => <option key={l} value={l}>{l}</option>)}</select></label>
+        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Level after refuel</span><select className={inputCls} value={f.closing_fuel_level} onChange={(e) => set('closing_fuel_level', e.target.value)}><option value="">—</option>{levels.map((l) => <option key={l} value={l}>{l}</option>)}</select></label>
         <div />
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Opening mileage</span><input type="number" className={inputCls} value={f.opening_mileage || ''} onChange={(e) => set('opening_mileage', Number(e.target.value))} /></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Closing mileage <span className="text-status-neutral">(0 = open, set at next refuel)</span></span><input type="number" className={inputCls} value={f.closing_mileage || ''} onChange={(e) => set('closing_mileage', Number(e.target.value))} /></label>
@@ -716,6 +719,8 @@ function StockTab({ issuances, receipts, genFuel, cfg, branch, canManage }: { is
 
 function SettingsModal({ open, onClose, branch, cfg }: { open: boolean; onClose: () => void; branch: BranchCode; cfg: FuelConfig }) {
   const [f, setF] = useState<FuelConfig>(cfg)
+  const levels = useFuelLevels()
+  const [newLevel, setNewLevel] = useState('')
   const [wasOpen, setWasOpen] = useState(false)
   if (open && !wasOpen) { setWasOpen(true); setF(cfg) }
   if (!open && wasOpen) setWasOpen(false)
@@ -728,6 +733,30 @@ function SettingsModal({ open, onClose, branch, cfg }: { open: boolean; onClose:
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Tank capacity (L)</span><input type="number" className={inputCls} value={f.capacity ?? 0} onChange={(e) => setF({ ...f, capacity: Number(e.target.value) })} /></label>
       </div>
       <p className="mt-3 rounded-lg bg-canvas px-3 py-2 text-[11px] text-status-neutral">The tank gauge fills against <b>capacity</b> and drops as fuel is issued. Set 0 for auto (opening stock + everything received). Dead stock is the unpumpable reserve — excluded from "available fuel". Diesel price and the USD↔ZMW rate are set per month in the Summary tab.</p>
+
+      {/* Editable tank readings — the before/after options in every refuel form */}
+      <div className="mt-5 border-t border-black/10 pt-4">
+        <div className="mb-1.5 flex items-center justify-between">
+          <span className="text-sm font-semibold text-navy">Tank readings <span className="font-normal text-status-neutral">· before &amp; after options</span></span>
+          <button onClick={() => confirm('Reset tank readings to the built-in defaults?') && fuelLevelsStore.reset()} className="text-[11px] font-medium text-status-neutral hover:text-status-critical">Reset to defaults</button>
+        </div>
+        <div className="max-h-56 divide-y divide-black/5 overflow-auto rounded-lg border border-black/10">
+          {levels.map((l, i) => (
+            <div key={l} className="flex items-center gap-1 px-3 py-1.5 text-sm">
+              <span className="flex-1 text-navy">{l}</span>
+              <button onClick={() => fuelLevelsStore.move(l, -1)} disabled={i === 0} className="rounded p-1 text-status-neutral hover:bg-canvas disabled:opacity-30" title="Move up"><ChevronUp size={14} /></button>
+              <button onClick={() => fuelLevelsStore.move(l, 1)} disabled={i === levels.length - 1} className="rounded p-1 text-status-neutral hover:bg-canvas disabled:opacity-30" title="Move down"><ChevronDown size={14} /></button>
+              <button onClick={() => fuelLevelsStore.remove(l)} className="rounded p-1 text-status-neutral hover:bg-status-critical/10 hover:text-status-critical" title="Remove"><Trash2 size={14} /></button>
+            </div>
+          ))}
+          {levels.length === 0 && <div className="px-3 py-3 text-center text-xs text-status-neutral">No readings yet — add one below.</div>}
+        </div>
+        <div className="mt-2 flex gap-2">
+          <input value={newLevel} onChange={(e) => setNewLevel(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); fuelLevelsStore.add(newLevel); setNewLevel('') } }} placeholder="Add a reading, e.g. Three-eighths" className={inputCls} />
+          <Button variant="secondary" type="button" onClick={() => { fuelLevelsStore.add(newLevel); setNewLevel('') }} disabled={!newLevel.trim()}><Plus size={15} /> Add</Button>
+        </div>
+        <p className="mt-1 text-[11px] text-status-neutral">These are the before/after tank options in every refuel form. Add, remove or reorder them — changes save immediately and sync to all devices.</p>
+      </div>
     </Modal>
   )
 }
