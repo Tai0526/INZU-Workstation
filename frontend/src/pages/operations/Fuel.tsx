@@ -603,8 +603,8 @@ function StockTab({ issuances, receipts, genFuel, cfg, branch, canManage }: { is
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6">
         <KpiCard label="Available fuel" value={`${Math.round(stock.usable).toLocaleString()} L`} highlight info="Real usable fuel — what's in the tank minus the dead-stock reserve." sub="excludes dead stock" />
-        <KpiCard label="Days left" value={stock.daysLeft == null ? '—' : Math.floor(stock.daysLeft)} tone={daysTone} info="Available fuel ÷ rolling 30-day average usage." sub="rolling 30-day" />
-        <KpiCard label="Avg daily use" value={`${Math.round(stock.avgDailyUsage).toLocaleString()} L`} sub="last 30 days" />
+        <KpiCard label="Days left" value={stock.daysLeft == null ? '—' : Math.floor(stock.daysLeft)} tone={daysTone} info="Available fuel ÷ rolling average daily usage (total consumed ÷ days in operation)." sub="at current burn rate" />
+        <KpiCard label="Avg daily use" value={`${Math.round(stock.avgDailyUsage).toLocaleString()} L`} info="Total fuel consumed (vehicles + draws) ÷ the days it was used over — recalculated continuously, not a fixed 30-day window." sub="rolling average" />
         <KpiCard label="Tank total" value={`${Math.round(stock.current).toLocaleString()} L`} info="Everything in the tank, including dead stock." />
         <KpiCard label="Dead stock" value={`${cfg.dead_stock.toLocaleString()} L`} sub="reserve, not usable" />
         <KpiCard label="Received" value={`${Math.round(stock.totalReceived).toLocaleString()} L`} tone="good" />

@@ -134,15 +134,16 @@ export function computeStock(issuances: FuelIssuance[], receipts: FuelReceipt[],
   const current = cfg.opening_stock + totalReceived - totalIssued
   const usable = current - cfg.dead_stock // real available fuel (excludes dead stock)
 
-  // Rolling 30-day average usage, anchored at the most recent issuance date.
-  const dates = issuances.map((i) => new Date(i.date + 'T00:00:00').getTime()).filter((t) => !isNaN(t))
-  const end = dates.length ? Math.max(...dates) : Date.now()
-  const start = end - 30 * DAY
-  const rolling = issuances.reduce((s, i) => {
-    const t = new Date(i.date + 'T00:00:00').getTime()
-    return t > start && t <= end ? s + i.liters_given : s
-  }, 0)
-  const avgDailyUsage = rolling / 30
+  // Rolling average daily usage: everything consumed (vehicle fuel + approved
+  // draws) spread over the actual span of days it was used over — first issuance
+  // to the most recent — so it keeps recalculating as fuel is consumed and isn't
+  // pinned to a fixed 30-day window. This makes "days left" track the real burn rate.
+  const times = issuances.map((i) => new Date(i.date + 'T00:00:00').getTime()).filter((t) => !isNaN(t))
+  let avgDailyUsage = 0
+  if (times.length) {
+    const spanDays = Math.max(1, Math.round((Math.max(...times) - Math.min(...times)) / DAY) + 1) // inclusive day count
+    avgDailyUsage = totalIssued / spanDays
+  }
   const daysLeft = avgDailyUsage > 0 ? Math.max(0, usable / avgDailyUsage) : null
   return { current, usable, totalReceived, totalIssued, avgDailyUsage, daysLeft }
 }
