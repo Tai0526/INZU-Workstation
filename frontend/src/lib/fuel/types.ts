@@ -2,13 +2,16 @@ import type { BranchCode } from '@/lib/roles'
 import type { Audited } from '@/lib/operations/types'
 
 // Descriptive tank levels recorded at fuelling — full → empty, with the finer
-// quarter steps so attendants can record exactly what the gauge shows.
+// "slightly above/below" steps so attendants can record exactly what the gauge
+// shows. Listed strictly top (Full) to bottom (Empty).
 export const FUEL_LEVELS = [
   'Full',
   'Above three-quarters',
   'Three-quarters',
   'Above half',
+  'Slightly above half',
   'Half tank',
+  'Slightly below half',
   'Below half',
   'Slightly above quarter',
   'Quarter tank',

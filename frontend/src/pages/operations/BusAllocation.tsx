@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import {
   Plus, Pencil, Trash2, Upload, Download, CheckCircle2, AlertTriangle, UploadCloud, FileText, FileType, Mail,
-  Clock, Users, Bus, Check, Minus, ArrowRightLeft,
+  Clock, Users, Bus, Check, Minus, ArrowRightLeft, Lock,
 } from 'lucide-react'
 import { useAuth } from '@/auth/AuthContext'
 import { ROLES, BRANCHES, type BranchCode } from '@/lib/roles'
@@ -27,15 +27,22 @@ const nowHM = () => { const d = new Date(); return `${String(d.getHours()).padSt
 // Mine entry points — the fixed end of every run (the other end is a searchable place).
 const GATES = [DEFAULT_TO_LOCATION, 'TWE']
 const joinRoute = (from: string, to: string) => [from.trim(), to.trim()].filter(Boolean).join(' → ')
+// A run is "planned" when it fulfils a Daily Plan trip that still exists.
+const isPlannedRun = (a: Allocation, planIds: Set<string>) => !!a.plan_trip_id && planIds.has(a.plan_trip_id)
+// Quick-pick reasons offered when logging a run (free text is still allowed).
+const RUN_REASONS = ['Breakdown', 'Tyre puncture', 'Delay', 'Traffic', 'No passengers', 'Late driver']
 
 // ── Reports (PDF + Word + email) — built from the actuals ─────────────────────
-function allocReport(date: string, branchLabel: string, pickups: Allocation[], knockoffs: Allocation[]): ReportInput {
+function allocReport(date: string, branchLabel: string, pickups: Allocation[], knockoffs: Allocation[], planIds: Set<string>): ReportInput {
   const group = (label: string, runs: Allocation[]) => {
     const pax = runs.reduce((s, r) => s + (r.passengers ?? 0), 0)
-    const rows = runs.map((r) => `<tr><td>${esc(r.driver_name || '—')}</td><td>${esc(r.fleet_no)}</td><td>${esc(r.reg_no)}</td><td>${esc(r.location)}</td><td>${esc(r.departure_time || '—')}</td><td class="num">${r.passengers ?? '—'}</td></tr>`).join('')
-    const head = '<tr><th>Driver</th><th>Fleet No</th><th>Reg No</th><th>Route</th><th>Time</th><th class="num">Pax</th></tr>'
-    const empty = '<tr><td colspan="6" style="text-align:center;color:#6B7280">None</td></tr>'
-    const total = runs.length ? `<tr class="tot"><td colspan="5">Total passengers</td><td class="num">${pax}</td></tr>` : ''
+    const rows = runs.map((r) => {
+      const tag = isPlannedRun(r, planIds) ? 'Planned' : 'Unplanned'
+      return `<tr><td>${esc(r.driver_name || '—')}</td><td>${esc(r.fleet_no)}</td><td>${esc(r.reg_no)}</td><td>${esc(r.location)}</td><td>${esc(r.departure_time || '—')}</td><td class="num">${r.passengers ?? '—'}</td><td>${tag}</td><td>${esc(r.notes || '')}</td></tr>`
+    }).join('')
+    const head = '<tr><th>Driver</th><th>Fleet No</th><th>Reg No</th><th>Route</th><th>Time</th><th class="num">Pax</th><th>Status</th><th>Notes</th></tr>'
+    const empty = '<tr><td colspan="8" style="text-align:center;color:#6B7280">None</td></tr>'
+    const total = runs.length ? `<tr class="tot"><td colspan="5">Total passengers</td><td class="num">${pax}</td><td colspan="2"></td></tr>` : ''
     return `<h2>${label} — ${runs.length} run${runs.length === 1 ? '' : 's'}</h2><table><thead>${head}</thead><tbody>${rows || empty}${total}</tbody></table>`
   }
   const totalPax = pickups.concat(knockoffs).reduce((s, r) => s + (r.passengers ?? 0), 0)
@@ -47,18 +54,19 @@ function allocReport(date: string, branchLabel: string, pickups: Allocation[], k
     filenameBase: `Bus Allocation - ${branchLabel} - ${date}`,
   }
 }
-function allocPdf(date: string, branchLabel: string, pickups: Allocation[], knockoffs: Allocation[]) {
-  const head = ['Driver', 'Fleet No', 'Reg No', 'Route', 'Time', 'Pax']
-  const rowsOf = (runs: Allocation[]) => runs.map((r) => [r.driver_name || '-', r.fleet_no, r.reg_no, r.location, r.departure_time || '-', r.passengers ?? '-'])
+function allocPdf(date: string, branchLabel: string, pickups: Allocation[], knockoffs: Allocation[], planIds: Set<string>) {
+  const head = ['Driver', 'Fleet No', 'Reg No', 'Route', 'Time', 'Pax', 'Status', 'Notes']
+  const rowsOf = (runs: Allocation[]) => runs.map((r) => [r.driver_name || '-', r.fleet_no, r.reg_no, r.location, r.departure_time || '-', r.passengers ?? '-', isPlannedRun(r, planIds) ? 'Planned' : 'Unplanned', r.notes || ''])
   const totalPax = pickups.concat(knockoffs).reduce((s, r) => s + (r.passengers ?? 0), 0)
+  const colStyles = { 5: { halign: 'right' as const } }
   const tables: PdfTable[] = [
-    { heading: `Pickups (${pickups.length})`, head, rows: rowsOf(pickups) },
-    { heading: `Knock-offs (${knockoffs.length})`, head, rows: rowsOf(knockoffs) },
+    { heading: `Pickups (${pickups.length})`, head, rows: rowsOf(pickups), columnStyles: colStyles },
+    { heading: `Knock-offs (${knockoffs.length})`, head, rows: rowsOf(knockoffs), columnStyles: colStyles },
   ]
   return {
     title: `Daily Bus Allocation — ${branchLabel}`,
-    subtitle: `${date} · ${pickups.length + knockoffs.length} runs · ${totalPax} passengers`,
-    tables, landscape: true,
+    subtitle: `${date} · ${pickups.length + knockoffs.length} runs · ${totalPax} passengers · planned vs unplanned tagged`,
+    tables, landscape: true, dense: true,
     filename: `Bus Allocation - ${branchLabel} - ${date}.pdf`,
   }
 }
@@ -69,6 +77,7 @@ export default function BusAllocation() {
   const branch = user!.branch
   const branchLabel = BRANCHES.find((b) => b.code === branch)!.short
   const canPlan = canEdit(role, 'operations') || role === 'route_supervisor'
+  const isAdmin = role === 'administrator' // only the admin can re-open a finalised run
 
   const allocations = useAllocations()
   const dailyPlan = useDailyPlan()
@@ -136,8 +145,8 @@ export default function BusAllocation() {
         {canPlan && <Button variant="secondary" onClick={() => setMultiOpen(true)}><Plus size={15} /> Add many</Button>}
         {canPlan && <Button variant="secondary" onClick={() => setImportOpen(true)}><Upload size={15} /> Upload</Button>}
         <Button variant="secondary" onClick={() => exportAllocations(dayRuns, branchLabel)}><Download size={15} /> Excel</Button>
-        <Button variant="secondary" onClick={() => downloadTablePdf(allocPdf(date, branchLabel, pickups, knockoffs))}><FileText size={15} /> PDF</Button>
-        <Button variant="secondary" onClick={() => exportReportWord(allocReport(date, branchLabel, pickups, knockoffs))}><FileType size={15} /> Word</Button>
+        <Button variant="secondary" onClick={() => downloadTablePdf(allocPdf(date, branchLabel, pickups, knockoffs, planIds))}><FileText size={15} /> PDF</Button>
+        <Button variant="secondary" onClick={() => exportReportWord(allocReport(date, branchLabel, pickups, knockoffs, planIds))}><FileType size={15} /> Word</Button>
         <Button variant="secondary" onClick={() => setEmailOpen(true)}><Mail size={15} /> Email</Button>
       </div>
 
@@ -153,7 +162,7 @@ export default function BusAllocation() {
           {dayPlan.length > 0 && (
             <Section title="Planned runs" hint={`${loggedCount}/${dayPlan.length} logged`}>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {dayPlan.map((t) => <PlanCard key={t.id} trip={t} actual={actualByPlan.get(t.id)} canPlan={canPlan} branch={branch} date={date} vehicles={vehicles} drivers={drivers} />)}
+                {dayPlan.map((t) => <PlanCard key={t.id} trip={t} actual={actualByPlan.get(t.id)} canPlan={canPlan} isAdmin={isAdmin} branch={branch} date={date} vehicles={vehicles} drivers={drivers} />)}
               </div>
             </Section>
           )}
@@ -173,7 +182,7 @@ export default function BusAllocation() {
       <MultiRunModal open={multiOpen} onClose={() => setMultiOpen(false)} branch={branch} date={date} vehicles={vehicles} drivers={drivers} locations={locations} />
       <RunModal state={runModal} onClose={() => setRunModal({ open: false, editing: null })} branch={branch} date={date} vehicles={vehicles} drivers={drivers} locations={locations} />
       <AllocImportModal open={importOpen} onClose={() => setImportOpen(false)} branch={branch} />
-      <AllocEmailModal open={emailOpen} onClose={() => setEmailOpen(false)} date={date} branchLabel={branchLabel} pickups={pickups} knockoffs={knockoffs} />
+      <AllocEmailModal open={emailOpen} onClose={() => setEmailOpen(false)} date={date} branchLabel={branchLabel} pickups={pickups} knockoffs={knockoffs} planIds={planIds} />
 
       {!ROLES[role].canToggleBranch && <p className="text-xs text-status-neutral">Showing {branchLabel} only.</p>}
     </div>
@@ -194,20 +203,26 @@ function TypePill({ type }: { type: TripType }) {
 }
 
 // A planned trip with inline passenger logging — the core mobile action.
-function PlanCard({ trip, actual, canPlan, branch, date, vehicles, drivers }: { trip: DailyPlanTrip; actual?: Allocation; canPlan: boolean; branch: BranchCode; date: string; vehicles: any[]; drivers: any[] }) {
+// Once logged a run is FINAL (locked); only an administrator can re-open it.
+function PlanCard({ trip, actual, canPlan, isAdmin, branch, date, vehicles, drivers }: { trip: DailyPlanTrip; actual?: Allocation; canPlan: boolean; isAdmin: boolean; branch: BranchCode; date: string; vehicles: any[]; drivers: any[] }) {
   const [open, setOpen] = useState(false)
   const [pax, setPax] = useState('')
   const [time, setTime] = useState('')
   const [fleet, setFleet] = useState('')
   const [driver, setDriver] = useState('')
+  const [reason, setReason] = useState('')
   const [showChange, setShowChange] = useState(false)
+
+  const busChanged = actual && actual.fleet_no && actual.fleet_no !== trip.fleet_no
+  const driverChanged = actual && actual.driver_name && trip.driver_name && actual.driver_name !== trip.driver_name
 
   function begin() {
     setPax(actual?.passengers != null ? String(actual.passengers) : '')
     setTime(actual?.departure_time || nowHM())
     setFleet(actual?.fleet_no || trip.fleet_no)
     setDriver(actual?.driver_name || trip.driver_name)
-    setShowChange(false)
+    setReason(actual?.notes || '')
+    setShowChange(!!(busChanged || driverChanged))
     setOpen(true)
   }
   function save() {
@@ -215,15 +230,12 @@ function PlanCard({ trip, actual, canPlan, branch, date, vehicles, drivers }: { 
     const payload = {
       branch, date, trip_type: trip.trip_type, driver_name: driver.trim(), fleet_no: fleet.trim(), reg_no: veh ? veh.reg_plate : trip.reg_no,
       route_id: '', location: joinRoute(trip.from_location, trip.to_location), planned_km: 0,
-      departure_time: time, passengers: pax === '' ? null : Number(pax), notes: '', plan_trip_id: trip.id,
+      departure_time: time, passengers: pax === '' ? null : Number(pax), notes: reason.trim(), plan_trip_id: trip.id,
     }
     if (actual) allocationsStore.update(actual.id, payload)
     else allocationsStore.add(payload)
     setOpen(false)
   }
-
-  const busChanged = actual && actual.fleet_no && actual.fleet_no !== trip.fleet_no
-  const driverChanged = actual && actual.driver_name && trip.driver_name && actual.driver_name !== trip.driver_name
 
   return (
     <div className={`rounded-xl border p-3 ${actual ? 'border-status-good/40 bg-status-good/[0.04]' : 'border-black/10 bg-white'}`}>
@@ -239,12 +251,18 @@ function PlanCard({ trip, actual, canPlan, branch, date, vehicles, drivers }: { 
       <div className="mt-0.5 text-xs text-status-neutral">{trip.from_location || '—'} → {trip.to_location || '—'}</div>
 
       {actual && !open && (
-        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-black/5 pt-2 text-sm">
-          <span className="inline-flex items-center gap-1 font-semibold text-navy"><Users size={14} className="text-status-neutral" /> {actual.passengers ?? '—'} pax</span>
-          <span className="inline-flex items-center gap-1 text-status-neutral"><Clock size={12} /> {actual.departure_time || '—'}</span>
-          {busChanged && <span className="inline-flex items-center gap-1 rounded bg-status-warning/15 px-1.5 py-0.5 text-[11px] text-[#8a6d10]"><ArrowRightLeft size={11} /> bus {actual.fleet_no} (planned {trip.fleet_no})</span>}
-          {driverChanged && <span className="rounded bg-status-warning/15 px-1.5 py-0.5 text-[11px] text-[#8a6d10]">driver changed</span>}
-          {canPlan && <button onClick={begin} className="ml-auto text-xs font-medium text-brand hover:underline">Edit</button>}
+        <div className="mt-2 space-y-1.5 border-t border-black/5 pt-2">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+            <span className="inline-flex items-center gap-1 font-semibold text-navy"><Users size={14} className="text-status-neutral" /> {actual.passengers ?? '—'} pax</span>
+            <span className="inline-flex items-center gap-1 text-status-neutral"><Clock size={12} /> {actual.departure_time || '—'}</span>
+            {busChanged && <span className="inline-flex items-center gap-1 rounded bg-status-warning/15 px-1.5 py-0.5 text-[11px] text-[#8a6d10]"><ArrowRightLeft size={11} /> bus {actual.fleet_no} (planned {trip.fleet_no})</span>}
+            {driverChanged && <span className="rounded bg-status-warning/15 px-1.5 py-0.5 text-[11px] text-[#8a6d10]">driver {actual.driver_name}</span>}
+          </div>
+          {actual.notes && <div className="text-xs text-status-neutral">Reason: <span className="font-medium text-navy">{actual.notes}</span></div>}
+          <div className="flex items-center gap-2 pt-0.5">
+            <span className="inline-flex items-center gap-1 rounded-full bg-navy/5 px-2 py-0.5 text-[11px] font-medium text-navy"><Lock size={11} /> Final</span>
+            {isAdmin && <button onClick={begin} className="ml-auto text-xs font-medium text-brand hover:underline">Correct (admin)</button>}
+          </div>
         </div>
       )}
 
@@ -273,10 +291,21 @@ function PlanCard({ trip, actual, canPlan, branch, date, vehicles, drivers }: { 
               <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Driver</span><select value={driver} onChange={(e) => setDriver(e.target.value)} className={inputCls}><option value="">—</option>{withCurrent(driver, drivers.map((d) => d.full_name)).map((n) => <option key={n} value={n}>{n}</option>)}</select></label>
             </div>
           )}
+          <div>
+            <span className="mb-1 block text-xs font-medium text-navy">Reason / note <span className="font-normal text-status-neutral">(optional)</span></span>
+            <div className="mb-1.5 flex flex-wrap gap-1">
+              {RUN_REASONS.map((r) => (
+                <button key={r} type="button" onClick={() => setReason((cur) => (cur === r ? '' : r))}
+                  className={`rounded-full border px-2 py-0.5 text-[11px] ${reason === r ? 'border-brand bg-brand-tint text-brand' : 'border-black/15 text-status-neutral hover:border-brand'}`}>{r}</button>
+              ))}
+            </div>
+            <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. breakdown, puncture, delay…" className={inputCls} />
+          </div>
           <div className="flex gap-2 pt-0.5">
             <Button variant="secondary" className="flex-1" onClick={() => setOpen(false)}>Cancel</Button>
-            <Button className="flex-1" onClick={save}><Check size={15} /> Save</Button>
+            <Button className="flex-1" onClick={save}><Check size={15} /> Save &amp; finalise</Button>
           </div>
+          <p className="text-[11px] text-status-neutral">Once saved, this run is final{isAdmin ? ' — you can still correct it as admin' : ''}.</p>
         </div>
       )}
     </div>
@@ -439,6 +468,17 @@ function RunModal({ state, onClose, branch, date, vehicles, drivers, locations }
 
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">From{isPickup ? '' : ' (mine gate)'}</span>{isPickup ? otherSelect : gateSelect}</label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">To{isPickup ? ' (mine gate)' : ''}</span>{isPickup ? gateSelect : otherSelect}</label>
+
+        <div className="sm:col-span-2">
+          <span className="mb-1 block text-xs font-medium text-navy">Reason / note <span className="font-normal text-status-neutral">(optional)</span></span>
+          <div className="mb-1.5 flex flex-wrap gap-1">
+            {RUN_REASONS.map((r) => (
+              <button key={r} type="button" onClick={() => set('notes', f.notes === r ? '' : r)}
+                className={`rounded-full border px-2 py-0.5 text-[11px] ${f.notes === r ? 'border-brand bg-brand-tint text-brand' : 'border-black/15 text-status-neutral hover:border-brand'}`}>{r}</button>
+            ))}
+          </div>
+          <input value={f.notes} onChange={(ev) => set('notes', ev.target.value)} placeholder="e.g. extra trip, breakdown cover…" className={inputCls} />
+        </div>
       </div>
       <p className="mt-2 text-[11px] text-status-neutral">{isPickup
         ? 'Pickup: workers travel to the mine — search where you collect them; the destination defaults to Main Mine Gate (switchable to TWE).'
@@ -451,7 +491,7 @@ function blank(branch: BranchCode, date: string): AllocationInput {
   return { branch, date, trip_type: 'pickup', driver_name: '', fleet_no: '', reg_no: '', route_id: '', location: '', departure_time: '', passengers: null, planned_km: 0, notes: '' }
 }
 
-function AllocEmailModal({ open, onClose, date, branchLabel, pickups, knockoffs }: { open: boolean; onClose: () => void; date: string; branchLabel: string; pickups: Allocation[]; knockoffs: Allocation[] }) {
+function AllocEmailModal({ open, onClose, date, branchLabel, pickups, knockoffs, planIds }: { open: boolean; onClose: () => void; date: string; branchLabel: string; pickups: Allocation[]; knockoffs: Allocation[]; planIds: Set<string> }) {
   const recipients = useRecipients()
   const [sel, setSel] = useState<Set<string>>(new Set())
   const [name, setName] = useState(''); const [email, setEmail] = useState('')
@@ -468,7 +508,7 @@ function AllocEmailModal({ open, onClose, date, branchLabel, pickups, knockoffs 
   function send() {
     const chosen = recipients.filter((r) => sel.has(r.id))
     if (!chosen.length) return
-    downloadTablePdf(allocPdf(date, branchLabel, pickups, knockoffs))
+    downloadTablePdf(allocPdf(date, branchLabel, pickups, knockoffs, planIds))
     const to = chosen.map((r) => r.email).join(',')
     const subject = `Bus Allocation — ${branchLabel} — ${date}`
     const body = `Good day,\n\nPlease find attached the bus allocation for ${date} (${branchLabel}).\n\nKind regards,`

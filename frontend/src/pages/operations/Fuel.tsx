@@ -61,6 +61,22 @@ const inputCls = 'w-full rounded-lg border border-black/15 bg-white px-3 py-2 te
 const monthKey = (d: string) => d.slice(0, 7)
 const monthLabel = (k: string) => { const [y, m] = k.split('-').map(Number); return new Date(y, m - 1, 1).toLocaleDateString('en', { month: 'short', year: 'numeric' }) }
 
+// Match the signed-in user to a fuel attendant/controller so the refuel form can
+// default the attendant to whoever is entering the fuel (e.g. Asford, Rudo). Tries
+// an exact full-name match first, then a first-name / partial match.
+function matchSelf(attendants: { full_name: string }[], fullName?: string): string {
+  const n = (fullName ?? '').trim().toLowerCase()
+  if (!n) return ''
+  const exact = attendants.find((a) => a.full_name.trim().toLowerCase() === n)
+  if (exact) return exact.full_name
+  const first = n.split(/\s+/)[0]
+  const partial = attendants.find((a) => {
+    const an = a.full_name.trim().toLowerCase()
+    return an.includes(n) || n.includes(an) || an.split(/\s+/)[0] === first
+  })
+  return partial ? partial.full_name : ''
+}
+
 type Tab = 'issuances' | 'stock' | 'deliveries' | 'summary'
 
 export default function Fuel() {
@@ -81,6 +97,9 @@ export default function Fuel() {
   // Fuel attendants AND fuel controllers (both dispense fuel) for this branch.
   // Reactive — a newly added attendant/controller shows up in the form at once.
   const attendants = useEmployees().filter((e) => e.branch === branch && e.status === 'active' && FUEL_HANDLER_ROLES.includes(e.job_role))
+  // The attendant who is entering the fuel = the signed-in user (if they're a
+  // fuel attendant/controller). Used to default the form's attendant field.
+  const me = useMemo(() => matchSelf(attendants, user!.fullName), [attendants, user])
 
   const [tab, setTab] = useState<Tab>('issuances')
 
@@ -99,7 +118,7 @@ export default function Fuel() {
         ))}
       </div>
 
-      {tab === 'issuances' && <IssuancesTab issuances={issuances} genFuel={genFuel} branch={branch} branchLabel={branchLabel} vehicles={vehicles} drivers={drivers} routes={routes} attendants={attendants} canManage={canManage} canAuthorize={canAuthorize} />}
+      {tab === 'issuances' && <IssuancesTab issuances={issuances} genFuel={genFuel} branch={branch} branchLabel={branchLabel} vehicles={vehicles} drivers={drivers} routes={routes} attendants={attendants} me={me} canManage={canManage} canAuthorize={canAuthorize} />}
       {tab === 'stock' && <StockTab issuances={issuances} receipts={receipts} genFuel={genFuel} cfg={cfg} branch={branch} canManage={canManage} />}
       {tab === 'deliveries' && <DeliveriesTab receipts={receipts} branch={branch} branchLabel={branchLabel} canManage={canManage} />}
       {tab === 'summary' && <SummaryTab issuances={issuances} genFuel={genFuel} branch={branch} canManage={canManage} />}
@@ -110,7 +129,7 @@ export default function Fuel() {
 }
 
 // ── Issuances tab ──────────────────────────────────────────────────────
-function IssuancesTab({ issuances, genFuel, branch, branchLabel, vehicles, drivers, routes, attendants, canManage, canAuthorize }: { issuances: FuelIssuance[]; genFuel: GenFuel[]; branch: BranchCode; branchLabel: string; vehicles: any[]; drivers: any[]; routes: any[]; attendants: any[]; canManage: boolean; canAuthorize: boolean }) {
+function IssuancesTab({ issuances, genFuel, branch, branchLabel, vehicles, drivers, routes, attendants, me, canManage, canAuthorize }: { issuances: FuelIssuance[]; genFuel: GenFuel[]; branch: BranchCode; branchLabel: string; vehicles: any[]; drivers: any[]; routes: any[]; attendants: any[]; me: string; canManage: boolean; canAuthorize: boolean }) {
   const [vehicleFilter, setVehicleFilter] = useState('all')
   const [quickOpen, setQuickOpen] = useState(false)
   const [addOpen, setAddOpen] = useState(false)
@@ -234,10 +253,10 @@ function IssuancesTab({ issuances, genFuel, branch, branchLabel, vehicles, drive
         </div>
       )}
 
-      <QuickRefuelModal open={quickOpen} onClose={() => setQuickOpen(false)} branch={branch} vehicles={vehicles} drivers={drivers} routes={routes} attendants={attendants} />
-      <AddIssuancesModal open={addOpen} onClose={() => setAddOpen(false)} branch={branch} vehicles={vehicles} drivers={drivers} routes={routes} attendants={attendants} />
+      <QuickRefuelModal open={quickOpen} onClose={() => setQuickOpen(false)} branch={branch} vehicles={vehicles} drivers={drivers} routes={routes} attendants={attendants} me={me} />
+      <AddIssuancesModal open={addOpen} onClose={() => setAddOpen(false)} branch={branch} vehicles={vehicles} drivers={drivers} routes={routes} attendants={attendants} me={me} />
       <EditIssuanceModal editing={editing} onClose={() => setEditing(null)} vehicles={vehicles} drivers={drivers} routes={routes} attendants={attendants} />
-      <ImportModal open={importOpen} onClose={() => setImportOpen(false)} branch={branch} vehicles={vehicles} attendants={attendants} />
+      <ImportModal open={importOpen} onClose={() => setImportOpen(false)} branch={branch} vehicles={vehicles} attendants={attendants} me={me} />
       <OtherDrawModal state={genModal} onClose={() => setGenModal({ open: false, editing: null, kind: 'generator' })} branch={branch} />
     </div>
   )
@@ -304,11 +323,11 @@ function PeopleHeader({ fleet, reg, driver, attendant, onFleet, setReg, setDrive
   )
 }
 
-function AddIssuancesModal({ open, onClose, branch, vehicles, drivers, routes, attendants }: { open: boolean; onClose: () => void; branch: BranchCode; vehicles: any[]; drivers: any[]; routes: any[]; attendants: any[] }) {
+function AddIssuancesModal({ open, onClose, branch, vehicles, drivers, routes, attendants, me }: { open: boolean; onClose: () => void; branch: BranchCode; vehicles: any[]; drivers: any[]; routes: any[]; attendants: any[]; me: string }) {
   const [fleet, setFleet] = useState(''); const [reg, setReg] = useState(''); const [driver, setDriver] = useState(''); const [attendant, setAttendant] = useState('')
   const [rows, setRows] = useState<Draft[]>([draft('2026-06-19'), draft(), draft()])
   const [wasOpen, setWasOpen] = useState(false)
-  if (open && !wasOpen) { setWasOpen(true); setFleet(''); setReg(''); setDriver(''); setAttendant(''); setRows([draft('2026-06-19'), draft(), draft()]) }
+  if (open && !wasOpen) { setWasOpen(true); setFleet(''); setReg(''); setDriver(''); setAttendant(me); setRows([draft('2026-06-19'), draft(), draft()]) }
   if (!open && wasOpen) setWasOpen(false)
 
   function onFleet(v: string) { setFleet(v); const veh = vehicles.find((x: any) => x.fleet_no.toLowerCase() === v.toLowerCase()); if (veh) setReg(veh.reg_plate) }
@@ -365,7 +384,7 @@ function AddIssuancesModal({ open, onClose, branch, vehicles, drivers, routes, a
 }
 
 // ── Quick refuel (mobile-first, one bus) — for the attendant at the pump ─
-function QuickRefuelModal({ open, onClose, branch, vehicles, drivers, routes, attendants }: { open: boolean; onClose: () => void; branch: BranchCode; vehicles: any[]; drivers: any[]; routes: any[]; attendants: any[] }) {
+function QuickRefuelModal({ open, onClose, branch, vehicles, drivers, routes, attendants, me }: { open: boolean; onClose: () => void; branch: BranchCode; vehicles: any[]; drivers: any[]; routes: any[]; attendants: any[]; me: string }) {
   const todayStr = new Date().toISOString().slice(0, 10)
   const [date, setDate] = useState(todayStr)
   const [fleet, setFleet] = useState(''); const [reg, setReg] = useState(''); const [driver, setDriver] = useState(''); const [attendant, setAttendant] = useState('')
@@ -373,7 +392,7 @@ function QuickRefuelModal({ open, onClose, branch, vehicles, drivers, routes, at
   const [before, setBefore] = useState(''); const [after, setAfter] = useState('Full')
   const [route, setRoute] = useState(''); const [trips, setTrips] = useState('')
   const [wasOpen, setWasOpen] = useState(false)
-  if (open && !wasOpen) { setWasOpen(true); setDate(todayStr); setFleet(''); setReg(''); setDriver(''); setAttendant(''); setOdo(''); setLitres(''); setBefore(''); setAfter('Full'); setRoute(''); setTrips('') }
+  if (open && !wasOpen) { setWasOpen(true); setDate(todayStr); setFleet(''); setReg(''); setDriver(''); setAttendant(me); setOdo(''); setLitres(''); setBefore(''); setAfter('Full'); setRoute(''); setTrips('') }
   if (!open && wasOpen) setWasOpen(false)
 
   function onFleet(v: string) { setFleet(v); const veh = vehicles.find((x: any) => x.fleet_no.toLowerCase() === v.toLowerCase()); if (veh) setReg(veh.reg_plate) }
@@ -476,10 +495,13 @@ function EditIssuanceModal({ editing, onClose, vehicles, drivers, routes, attend
 }
 
 // ── Bulk import ────────────────────────────────────────────────────────
-function ImportModal({ open, onClose, branch, vehicles, attendants }: { open: boolean; onClose: () => void; branch: BranchCode; vehicles: any[]; attendants: any[] }) {
+function ImportModal({ open, onClose, branch, vehicles, attendants, me }: { open: boolean; onClose: () => void; branch: BranchCode; vehicles: any[]; attendants: any[]; me: string }) {
   const [fleet, setFleet] = useState(''); const [reg, setReg] = useState(''); const [attendant, setAttendant] = useState('')
   const [parsed, setParsed] = useState<IssuanceImport | null>(null)
   const [done, setDone] = useState<number | null>(null)
+  const [wasOpen, setWasOpen] = useState(false)
+  if (open && !wasOpen) { setWasOpen(true); setAttendant(me) }
+  if (!open && wasOpen) setWasOpen(false)
   function close() { setFleet(''); setReg(''); setAttendant(''); setParsed(null); setDone(null); onClose() }
   function onFleet(v: string) { setFleet(v); const veh = vehicles.find((x) => x.fleet_no.toLowerCase() === v.toLowerCase()); if (veh) setReg(veh.reg_plate) }
   async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
