@@ -4,7 +4,7 @@ import {
   type Audited, type OpRoute, type Allocation, type MileageEntry,
   type DailyPlanTrip, type WeeklyAssignment, DEFAULT_TO_LOCATION,
 } from './types'
-import { createSyncTable } from '@/lib/supabase/syncTable'
+import { createSyncTable, createSyncConfig } from '@/lib/supabase/syncTable'
 
 function newId() {
   return typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `o_${Date.now()}_${Math.round(Math.random() * 1e6)}`
@@ -132,3 +132,19 @@ export const dailyPlanStore = makeStore<DailyPlanTrip>('inzu_op_daily_plan', DAI
 export const weeklyAssignStore = makeStore<WeeklyAssignment>('inzu_op_weekly_assign', WEEKLY_SEED)
 export const useDailyPlan = () => useSyncExternalStore(dailyPlanStore.subscribe, dailyPlanStore.snapshot, dailyPlanStore.snapshot)
 export const useWeeklyAssign = () => useSyncExternalStore(weeklyAssignStore.subscribe, weeklyAssignStore.snapshot, weeklyAssignStore.snapshot)
+
+// ── Bus-run ↔ Daily-Plan link (migration-free) ──────────────────────────
+// Maps a logged allocation id → the Daily Plan trip id it fulfils. Stored in
+// app_config rather than an op_allocations column, so logging a planned run
+// persists regardless of whether the optional `plan_trip_id` column exists on
+// the live database. (Writing an unknown column would make the upsert fail and
+// the optimistic row would be reverted on the next hydrate.)
+const allocPlanLinkCfg = createSyncConfig<Record<string, string>>({ key: 'alloc_plan_links', lsKey: 'inzu_alloc_plan_links', default: {} })
+export const allocPlanLinks = {
+  get: () => allocPlanLinkCfg.get(),
+  subscribe: allocPlanLinkCfg.subscribe,
+  for: (allocId: string) => allocPlanLinkCfg.get()[allocId],
+  set(allocId: string, planTripId: string) { allocPlanLinkCfg.set({ ...allocPlanLinkCfg.get(), [allocId]: planTripId }) },
+  clear(allocId: string) { const m = { ...allocPlanLinkCfg.get() }; delete m[allocId]; allocPlanLinkCfg.set(m) },
+}
+export const useAllocPlanLinks = () => useSyncExternalStore(allocPlanLinkCfg.subscribe, allocPlanLinkCfg.get, allocPlanLinkCfg.get)

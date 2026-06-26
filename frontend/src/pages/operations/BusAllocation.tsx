@@ -11,7 +11,7 @@ import Button from '@/components/ui/Button'
 import SearchableSelect from '@/components/ui/SearchableSelect'
 import { useVehicles } from '@/lib/fleet/store'
 import { useDrivers } from '@/lib/drivers/store'
-import { useAllocations, allocationsStore, useDailyPlan } from '@/lib/operations/store'
+import { useAllocations, allocationsStore, useDailyPlan, useAllocPlanLinks, allocPlanLinks } from '@/lib/operations/store'
 import { type Allocation, type AllocationInput, type DailyPlanTrip, type TripType, TRIP_LABEL, DEFAULT_TO_LOCATION } from '@/lib/operations/types'
 import { useLocations } from '@/lib/operations/locations'
 import { downloadAllocTemplate, parseAllocations, exportAllocations, type AllocImportResult } from '@/lib/operations/excel'
@@ -28,16 +28,17 @@ const nowHM = () => { const d = new Date(); return `${String(d.getHours()).padSt
 const GATES = [DEFAULT_TO_LOCATION, 'TWE']
 const joinRoute = (from: string, to: string) => [from.trim(), to.trim()].filter(Boolean).join(' → ')
 // A run is "planned" when it fulfils a Daily Plan trip that still exists.
-const isPlannedRun = (a: Allocation, planIds: Set<string>) => !!a.plan_trip_id && planIds.has(a.plan_trip_id)
+// `plannedIds` is the set of allocation ids that are linked to a live plan trip.
+const isPlannedRun = (a: Allocation, plannedIds: Set<string>) => plannedIds.has(a.id)
 // Quick-pick reasons offered when logging a run (free text is still allowed).
 const RUN_REASONS = ['Breakdown', 'Tyre puncture', 'Delay', 'Traffic', 'No passengers', 'Late driver']
 
 // ── Reports (PDF + Word + email) — built from the actuals ─────────────────────
-function allocReport(date: string, branchLabel: string, pickups: Allocation[], knockoffs: Allocation[], planIds: Set<string>): ReportInput {
+function allocReport(date: string, branchLabel: string, pickups: Allocation[], knockoffs: Allocation[], plannedIds: Set<string>): ReportInput {
   const group = (label: string, runs: Allocation[]) => {
     const pax = runs.reduce((s, r) => s + (r.passengers ?? 0), 0)
     const rows = runs.map((r) => {
-      const tag = isPlannedRun(r, planIds) ? 'Planned' : 'Unplanned'
+      const tag = isPlannedRun(r, plannedIds) ? 'Planned' : 'Unplanned'
       return `<tr><td>${esc(r.driver_name || '—')}</td><td>${esc(r.fleet_no)}</td><td>${esc(r.reg_no)}</td><td>${esc(r.location)}</td><td>${esc(r.departure_time || '—')}</td><td class="num">${r.passengers ?? '—'}</td><td>${tag}</td><td>${esc(r.notes || '')}</td></tr>`
     }).join('')
     const head = '<tr><th>Driver</th><th>Fleet No</th><th>Reg No</th><th>Route</th><th>Time</th><th class="num">Pax</th><th>Status</th><th>Notes</th></tr>'
@@ -54,9 +55,9 @@ function allocReport(date: string, branchLabel: string, pickups: Allocation[], k
     filenameBase: `Bus Allocation - ${branchLabel} - ${date}`,
   }
 }
-function allocPdf(date: string, branchLabel: string, pickups: Allocation[], knockoffs: Allocation[], planIds: Set<string>) {
+function allocPdf(date: string, branchLabel: string, pickups: Allocation[], knockoffs: Allocation[], plannedIds: Set<string>) {
   const head = ['Driver', 'Fleet No', 'Reg No', 'Route', 'Time', 'Pax', 'Status', 'Notes']
-  const rowsOf = (runs: Allocation[]) => runs.map((r) => [r.driver_name || '-', r.fleet_no, r.reg_no, r.location, r.departure_time || '-', r.passengers ?? '-', isPlannedRun(r, planIds) ? 'Planned' : 'Unplanned', r.notes || ''])
+  const rowsOf = (runs: Allocation[]) => runs.map((r) => [r.driver_name || '-', r.fleet_no, r.reg_no, r.location, r.departure_time || '-', r.passengers ?? '-', isPlannedRun(r, plannedIds) ? 'Planned' : 'Unplanned', r.notes || ''])
   const totalPax = pickups.concat(knockoffs).reduce((s, r) => s + (r.passengers ?? 0), 0)
   const colStyles = { 5: { halign: 'right' as const } }
   const tables: PdfTable[] = [
@@ -81,6 +82,7 @@ export default function BusAllocation() {
 
   const allocations = useAllocations()
   const dailyPlan = useDailyPlan()
+  const links = useAllocPlanLinks() // allocation id → plan trip id (migration-free link)
   const vehicles = useVehicles().filter((v) => v.branch === branch)
   const drivers = useDrivers().filter((d) => d.branch === branch)
   const locations = useLocations(branch)
@@ -99,18 +101,27 @@ export default function BusAllocation() {
     () => dailyPlan.filter((t) => t.branch === branch && t.date === date).sort((a, b) => (a.departure_time || '').localeCompare(b.departure_time || '')),
     [dailyPlan, branch, date],
   )
+  // Resolve which plan trip a logged run fulfils: the app_config link first,
+  // falling back to a legacy plan_trip_id column if the DB happens to have one.
+  const planIds = useMemo(() => new Set(dayPlan.map((t) => t.id)), [dayPlan])
   const actualByPlan = useMemo(() => {
     const m = new Map<string, Allocation>()
-    for (const a of dayRuns) if (a.plan_trip_id) m.set(a.plan_trip_id, a)
+    for (const a of dayRuns) { const pid = links[a.id] ?? a.plan_trip_id; if (pid) m.set(pid, a) }
     return m
-  }, [dayRuns])
-  const planIds = new Set(dayPlan.map((t) => t.id))
-  const unplanned = dayRuns.filter((a) => !a.plan_trip_id || !planIds.has(a.plan_trip_id))
+  }, [dayRuns, links])
+  // A logged run is "planned" only if its linked plan trip still exists today.
+  const plannedIds = useMemo(
+    () => new Set(dayRuns.filter((a) => { const pid = links[a.id] ?? a.plan_trip_id; return !!pid && planIds.has(pid) }).map((a) => a.id)),
+    [dayRuns, links, planIds],
+  )
+  const unplanned = dayRuns.filter((a) => !plannedIds.has(a.id))
+  const pendingPlan = dayPlan.filter((t) => !actualByPlan.has(t.id))
+  const loggedPlan = dayPlan.filter((t) => actualByPlan.has(t.id))
   const pickups = dayRuns.filter((r) => r.trip_type === 'pickup')
   const knockoffs = dayRuns.filter((r) => r.trip_type === 'knockoff')
   const totalPax = dayRuns.reduce((s, r) => s + (r.passengers ?? 0), 0)
-  const loggedCount = dayPlan.filter((t) => actualByPlan.has(t.id)).length
-  const missingCount = dayPlan.length - loggedCount
+  const loggedCount = loggedPlan.length
+  const missingCount = pendingPlan.length
 
   const stat = (label: string, value: number | string, tone: 'neutral' | 'good' | 'warning' = 'neutral') => (
     <div className={`rounded-xl border px-3 py-2 ${tone === 'warning' ? 'border-status-warning/40 bg-status-warning/10' : tone === 'good' ? 'border-status-good/30 bg-status-good/5' : 'border-black/10 bg-white'}`}>
@@ -145,13 +156,13 @@ export default function BusAllocation() {
         {canPlan && <Button variant="secondary" onClick={() => setMultiOpen(true)}><Plus size={15} /> Add many</Button>}
         {canPlan && <Button variant="secondary" onClick={() => setImportOpen(true)}><Upload size={15} /> Upload</Button>}
         <Button variant="secondary" onClick={() => exportAllocations(dayRuns, branchLabel)}><Download size={15} /> Excel</Button>
-        <Button variant="secondary" onClick={() => downloadTablePdf(allocPdf(date, branchLabel, pickups, knockoffs, planIds))}><FileText size={15} /> PDF</Button>
-        <Button variant="secondary" onClick={() => exportReportWord(allocReport(date, branchLabel, pickups, knockoffs, planIds))}><FileType size={15} /> Word</Button>
+        <Button variant="secondary" onClick={() => downloadTablePdf(allocPdf(date, branchLabel, pickups, knockoffs, plannedIds))}><FileText size={15} /> PDF</Button>
+        <Button variant="secondary" onClick={() => exportReportWord(allocReport(date, branchLabel, pickups, knockoffs, plannedIds))}><FileType size={15} /> Word</Button>
         <Button variant="secondary" onClick={() => setEmailOpen(true)}><Mail size={15} /> Email</Button>
       </div>
 
-      {/* Plan-driven live board */}
-      {dayPlan.length === 0 && unplanned.length === 0 ? (
+      {/* Plan-driven live board: Planned (to log) → Unplanned → Logged */}
+      {dayPlan.length === 0 && dayRuns.length === 0 ? (
         <div className="card flex flex-col items-center gap-2 py-12 text-center text-sm text-status-neutral">
           <Bus size={26} className="text-status-neutral/60" />
           No plan for {date}. Set the day's intended trips in <span className="font-medium text-navy">Operations → Daily Plan</span>, then log them here as buses move
@@ -160,29 +171,41 @@ export default function BusAllocation() {
       ) : (
         <div className="space-y-5">
           {dayPlan.length > 0 && (
-            <Section title="Planned runs" hint={`${loggedCount}/${dayPlan.length} logged`}>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {dayPlan.map((t) => <PlanCard key={t.id} trip={t} actual={actualByPlan.get(t.id)} canPlan={canPlan} isAdmin={isAdmin} branch={branch} date={date} vehicles={vehicles} drivers={drivers} />)}
-              </div>
+            <Section title="Planned runs — to log" hint={pendingPlan.length ? `${pendingPlan.length} to log` : 'all logged'}>
+              {pendingPlan.length === 0 ? (
+                <p className="text-sm text-status-neutral">Every planned run is logged — see <span className="font-medium text-navy">Logged runs</span> below. {canPlan && 'Use "Add run" for any bus that ran but wasn\'t planned.'}</p>
+              ) : (
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {pendingPlan.map((t) => <PlanCard key={t.id} trip={t} actual={actualByPlan.get(t.id)} canPlan={canPlan} isAdmin={isAdmin} branch={branch} date={date} vehicles={vehicles} drivers={drivers} />)}
+                </div>
+              )}
             </Section>
           )}
 
           <Section title="Unplanned runs" hint={unplanned.length ? `${unplanned.length} extra` : 'none'}>
             {unplanned.length === 0 ? (
-              <p className="text-sm text-status-neutral">Every logged run matched the plan. {canPlan && 'Use "Add run" if a bus runs that wasn\'t planned.'}</p>
+              <p className="text-sm text-status-neutral">No unplanned runs. {canPlan && 'Use "Add run" if a bus runs that wasn\'t planned.'}</p>
             ) : (
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {unplanned.map((a) => <ActualCard key={a.id} run={a} canPlan={canPlan} onEdit={() => setRunModal({ open: true, editing: a })} />)}
               </div>
             )}
           </Section>
+
+          {loggedPlan.length > 0 && (
+            <Section title="Logged runs" hint={`${loggedPlan.length} final`}>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {loggedPlan.map((t) => <PlanCard key={t.id} trip={t} actual={actualByPlan.get(t.id)} canPlan={canPlan} isAdmin={isAdmin} branch={branch} date={date} vehicles={vehicles} drivers={drivers} />)}
+              </div>
+            </Section>
+          )}
         </div>
       )}
 
       <MultiRunModal open={multiOpen} onClose={() => setMultiOpen(false)} branch={branch} date={date} vehicles={vehicles} drivers={drivers} locations={locations} />
       <RunModal state={runModal} onClose={() => setRunModal({ open: false, editing: null })} branch={branch} date={date} vehicles={vehicles} drivers={drivers} locations={locations} />
       <AllocImportModal open={importOpen} onClose={() => setImportOpen(false)} branch={branch} />
-      <AllocEmailModal open={emailOpen} onClose={() => setEmailOpen(false)} date={date} branchLabel={branchLabel} pickups={pickups} knockoffs={knockoffs} planIds={planIds} />
+      <AllocEmailModal open={emailOpen} onClose={() => setEmailOpen(false)} date={date} branchLabel={branchLabel} pickups={pickups} knockoffs={knockoffs} plannedIds={plannedIds} />
 
       {!ROLES[role].canToggleBranch && <p className="text-xs text-status-neutral">Showing {branchLabel} only.</p>}
     </div>
@@ -230,10 +253,12 @@ function PlanCard({ trip, actual, canPlan, isAdmin, branch, date, vehicles, driv
     const payload = {
       branch, date, trip_type: trip.trip_type, driver_name: driver.trim(), fleet_no: fleet.trim(), reg_no: veh ? veh.reg_plate : trip.reg_no,
       route_id: '', location: joinRoute(trip.from_location, trip.to_location), planned_km: 0,
-      departure_time: time, passengers: pax === '' ? null : Number(pax), notes: reason.trim(), plan_trip_id: trip.id,
+      departure_time: time, passengers: pax === '' ? null : Number(pax), notes: reason.trim(),
     }
+    // Link the run to its plan via app_config (not a table column) so it persists
+    // even if the live DB lacks the optional plan_trip_id column.
     if (actual) allocationsStore.update(actual.id, payload)
-    else allocationsStore.add(payload)
+    else { const created = allocationsStore.add(payload); allocPlanLinks.set(created.id, trip.id) }
     setOpen(false)
   }
 
@@ -491,7 +516,7 @@ function blank(branch: BranchCode, date: string): AllocationInput {
   return { branch, date, trip_type: 'pickup', driver_name: '', fleet_no: '', reg_no: '', route_id: '', location: '', departure_time: '', passengers: null, planned_km: 0, notes: '' }
 }
 
-function AllocEmailModal({ open, onClose, date, branchLabel, pickups, knockoffs, planIds }: { open: boolean; onClose: () => void; date: string; branchLabel: string; pickups: Allocation[]; knockoffs: Allocation[]; planIds: Set<string> }) {
+function AllocEmailModal({ open, onClose, date, branchLabel, pickups, knockoffs, plannedIds }: { open: boolean; onClose: () => void; date: string; branchLabel: string; pickups: Allocation[]; knockoffs: Allocation[]; plannedIds: Set<string> }) {
   const recipients = useRecipients()
   const [sel, setSel] = useState<Set<string>>(new Set())
   const [name, setName] = useState(''); const [email, setEmail] = useState('')
@@ -508,7 +533,7 @@ function AllocEmailModal({ open, onClose, date, branchLabel, pickups, knockoffs,
   function send() {
     const chosen = recipients.filter((r) => sel.has(r.id))
     if (!chosen.length) return
-    downloadTablePdf(allocPdf(date, branchLabel, pickups, knockoffs, planIds))
+    downloadTablePdf(allocPdf(date, branchLabel, pickups, knockoffs, plannedIds))
     const to = chosen.map((r) => r.email).join(',')
     const subject = `Bus Allocation — ${branchLabel} — ${date}`
     const body = `Good day,\n\nPlease find attached the bus allocation for ${date} (${branchLabel}).\n\nKind regards,`
