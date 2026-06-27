@@ -167,14 +167,34 @@ export interface Rca {
 }
 export type RcaInput = Omit<Rca, 'id' | 'created_by' | 'created_at' | 'updated_by' | 'updated_at'>
 
-// ── Mechanics work / rest schedule (crew-based, like the drivers) ───────
-// Mechanics are grouped into crews; each crew works a shift on set weekdays.
-// A mechanic's month roster is derived from the crew they're assigned to.
+// ── Mechanics work / rest schedule (crew rotation, like the drivers) ────
+// Mechanics are grouped into crews; each crew runs a continuous rotation —
+// `onDays` worked then `offDays` rested (default 14 on / 7 off) — from a start
+// (anchor) date. The three default crews are staggered so all three overlap for
+// one full week each 21-day cycle (the "all-hands" week). A mechanic's month
+// roster is derived from the crew they're on.
 export type MechShiftKind = 'day' | 'night'
-export interface MechCrew { id: string; name: string; shift: MechShiftKind; workdays: number[] } // workdays: 0=Sun … 6=Sat
+export interface MechCrew {
+  id: string
+  name: string
+  shift: MechShiftKind
+  start: string // ISO date the crew's ON block began (rotation anchor)
+  onDays: number // consecutive days worked
+  offDays: number // consecutive days rested
+}
+// Offsets 0 / +4 / +7 days give a 7-day window where all three crews are on.
 export const DEFAULT_MECH_CREWS: MechCrew[] = [
-  { id: 'MA', name: 'Crew A', shift: 'day', workdays: [1, 2, 3, 4, 5, 6] },
-  { id: 'MB', name: 'Crew B', shift: 'night', workdays: [1, 2, 3, 4, 5, 6] },
+  { id: 'MA', name: 'Crew A', shift: 'day', start: '2026-06-01', onDays: 14, offDays: 7 },
+  { id: 'MB', name: 'Crew B', shift: 'night', start: '2026-06-05', onDays: 14, offDays: 7 },
+  { id: 'MC', name: 'Crew C', shift: 'day', start: '2026-06-08', onDays: 14, offDays: 7 },
 ]
-export const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 export const SHIFT_LABEL: Record<MechShiftKind, string> = { day: 'Day', night: 'Night' }
+
+/** Is a crew on shift on `dateISO`, per its on/off rotation from its start date? */
+export function crewOnDate(crew: MechCrew, dateISO: string): boolean {
+  const cycle = Math.max(1, (crew.onDays || 0) + (crew.offDays || 0))
+  const ms = new Date(`${dateISO}T00:00:00`).getTime() - new Date(`${crew.start || dateISO}T00:00:00`).getTime()
+  const diff = Math.floor(ms / 86_400_000)
+  const idx = ((diff % cycle) + cycle) % cycle
+  return idx < (crew.onDays || 0)
+}

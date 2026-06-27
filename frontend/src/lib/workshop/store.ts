@@ -5,7 +5,7 @@ import { vehiclesStore } from '@/lib/fleet/store'
 import {
   type JobCard, type JobCardInput, type JobSeverity, SEVERITY_META,
   type Checklist, type TyreRecord, type Spare, type Rca,
-  type PmConfig, DEFAULT_PM, type MechCrew, type MechShiftKind, DEFAULT_MECH_CREWS,
+  type PmConfig, DEFAULT_PM, type MechCrew, type MechShiftKind, DEFAULT_MECH_CREWS, crewOnDate,
 } from './types'
 
 function newId() {
@@ -151,14 +151,13 @@ export const mechRosterStore = {
     if (crewId) assign[empId] = crewId; else delete assign[empId]
     mechCfg.set({ ...r, assign })
   },
-  addCrew(name: string, shift: MechShiftKind, workdays: number[]) { const r = mechCfg.get(); mechCfg.set({ ...r, crews: [...r.crews, { id: newId(), name, shift, workdays }] }) },
+  addCrew(name: string, shift: MechShiftKind, start: string, onDays: number, offDays: number) { const r = mechCfg.get(); mechCfg.set({ ...r, crews: [...r.crews, { id: newId(), name, shift, start, onDays, offDays }] }) },
   updateCrew(id: string, patch: Partial<MechCrew>) { const r = mechCfg.get(); mechCfg.set({ ...r, crews: r.crews.map((c) => (c.id === id ? { ...c, ...patch } : c)) }) },
   removeCrew(id: string) { const r = mechCfg.get(); const assign = { ...r.assign }; for (const k of Object.keys(assign)) if (assign[k] === id) delete assign[k]; mechCfg.set({ crews: r.crews.filter((c) => c.id !== id), assign }) },
 }
 export const useMechRoster = () => useSyncExternalStore(mechCfg.subscribe, mechCfg.get, mechCfg.get)
-/** The shift a mechanic works on a date (per their crew), or null for rest / unassigned. */
-export function mechShiftOnDate(empId: string, date: Date): MechShiftKind | null {
+/** The shift a mechanic works on a date (per their crew rotation), or null for rest / unassigned. */
+export function mechShiftOnDate(empId: string, dateISO: string): MechShiftKind | null {
   const c = mechRosterStore.crewOf(empId)
-  if (!c) return null
-  return c.workdays.includes(date.getDay()) ? c.shift : null
+  return c && crewOnDate(c, dateISO) ? c.shift : null
 }

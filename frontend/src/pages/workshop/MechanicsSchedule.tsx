@@ -10,10 +10,11 @@ import Button from '@/components/ui/Button'
 import { useEmployees } from '@/lib/hr/store'
 import type { Employee } from '@/lib/hr/types'
 import { useMechRoster, mechRosterStore } from '@/lib/workshop/store'
-import { type MechShiftKind, WEEKDAYS, SHIFT_LABEL } from '@/lib/workshop/types'
+import { type MechShiftKind, SHIFT_LABEL, crewOnDate } from '@/lib/workshop/types'
 import { useEmployeeLeave, empOnLeave } from '@/lib/hr/leave'
 
 const pad = (n: number) => String(n).padStart(2, '0')
+const todayStr = () => new Date().toISOString().slice(0, 10)
 const KIND_CELL: Record<MechShiftKind, string> = { day: 'bg-[#FCEAD3] text-[#8a4513]', night: 'bg-[#DDE4F3] text-[#283a66]' }
 const REST_CELL = 'bg-white text-status-neutral/40'
 const LEAVE_CELL = 'bg-[#E7E0F5] text-[#5b4a86]'
@@ -37,12 +38,19 @@ export default function MechanicsSchedule() {
 
   const monthLabel = new Date(ym.y, ym.m, 1).toLocaleDateString('en', { month: 'long', year: 'numeric' })
   const daysInMonth = new Date(ym.y, ym.m + 1, 0).getDate()
-  const todayISO = new Date().toISOString().slice(0, 10)
+  const todayISO = todayStr()
   const days = useMemo(() => Array.from({ length: daysInMonth }, (_, i) => {
     const day = i + 1
     const dow = new Date(ym.y, ym.m, day).getDay()
-    return { day, dateISO: `${ym.y}-${pad(ym.m + 1)}-${pad(day)}`, dow, weekend: dow === 0 || dow === 6, label: ['S', 'M', 'T', 'W', 'T', 'F', 'S'][dow] }
+    return { day, dateISO: `${ym.y}-${pad(ym.m + 1)}-${pad(day)}`, weekend: dow === 0 || dow === 6, label: ['S', 'M', 'T', 'W', 'T', 'F', 'S'][dow] }
   }), [ym, daysInMonth])
+
+  // Precompute each crew's on/off across the month once.
+  const crewOn = useMemo(() => {
+    const map: Record<string, boolean[]> = {}
+    for (const c of crews) map[c.id] = days.map((d) => crewOnDate(c, d.dateISO))
+    return map
+  }, [crews, days])
 
   const mechanics = useMemo(() => {
     const term = q.trim().toLowerCase()
@@ -53,22 +61,22 @@ export default function MechanicsSchedule() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allMechs, q, roster])
 
-  const coverage = useMemo(() => days.map((d) => {
+  const coverage = useMemo(() => days.map((d, i) => {
     let day = 0, night = 0
     for (const { m, crew } of mechanics) {
-      if (empOnLeave(m.id, d.dateISO) || !crew || !crew.workdays.includes(d.dow)) continue
+      if (!crew || empOnLeave(m.id, d.dateISO) || !crewOn[crew.id]?.[i]) continue
       if (crew.shift === 'day') day++; else night++
     }
     return { day, night }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [days, mechanics])
+  }), [days, mechanics, crewOn])
 
   function shiftMonth(delta: number) { const d = new Date(ym.y, ym.m + delta, 1); setYm({ y: d.getFullYear(), m: d.getMonth() }) }
 
   return (
     <div className="page space-y-5">
       <p className="max-w-3xl text-sm text-status-neutral">
-        Mechanics' work/rest across the month for <span className="font-medium text-navy">{branchLabel}</span> — driven by the <span className="font-medium text-navy">crew</span> each is assigned to.
+        Mechanics' work/rest across the month for <span className="font-medium text-navy">{branchLabel}</span> — each crew runs a <span className="font-medium text-navy">14 on / 7 off</span> rotation.
         Mechanics come from <Link to="/hr/employees" className="font-medium text-brand hover:underline">HR → Employees</Link>; leave shows from HR. {canManage && 'Set up crews, then click a mechanic to put them on one.'}
       </p>
 
@@ -92,7 +100,7 @@ export default function MechanicsSchedule() {
         <span className="inline-flex items-center gap-1.5"><span className="h-3.5 w-3.5 rounded bg-[#DDE4F3]" /> <b className="text-navy">Night</b></span>
         <span className="inline-flex items-center gap-1.5"><span className="h-3.5 w-3.5 rounded border border-black/10 bg-white" /> <span className="text-status-neutral">Off / rest</span></span>
         <span className="inline-flex items-center gap-1.5"><span className="flex h-3.5 w-3.5 items-center justify-center rounded bg-[#E7E0F5] text-[7px] font-bold text-[#5b4a86]">L</span> <span className="text-status-neutral">On leave</span></span>
-        {crews.length > 0 && <span className="text-status-neutral">Crews: {crews.map((c) => `${c.name} (${SHIFT_LABEL[c.shift]})`).join(' · ')}</span>}
+        <span className="text-status-neutral">14 on / 7 off · the three crews overlap one week each cycle</span>
       </div>
 
       {allMechs.length === 0 ? (
@@ -123,9 +131,9 @@ export default function MechanicsSchedule() {
                         <span className="block truncate text-[10px] text-status-neutral">{crew ? `${crew.name} · ${SHIFT_LABEL[crew.shift]}` : 'Unassigned'}</span>
                       </button>
                     </td>
-                    {days.map((d) => {
+                    {days.map((d, i) => {
                       const onLeave = empOnLeave(m.id, d.dateISO)
-                      const works = !onLeave && crew && crew.workdays.includes(d.dow)
+                      const works = !onLeave && crew && crewOn[crew.id]?.[i]
                       const cell = onLeave ? 'L' : works ? (crew!.shift === 'day' ? 'D' : 'N') : '·'
                       const cls = onLeave ? LEAVE_CELL : works ? KIND_CELL[crew!.shift] : REST_CELL
                       const tip = `${m.full_name} · ${d.dateISO} — ${onLeave ? 'On leave' : works ? `${crew!.name} ${SHIFT_LABEL[crew!.shift]}` : 'Rest'}`
@@ -168,12 +176,12 @@ function CoverageRow({ label, kind, cov }: { label: string; kind: 'day' | 'night
   )
 }
 
+const cellCls = 'rounded-lg border border-black/15 bg-white px-2 py-1.5 text-sm text-navy outline-none focus:border-brand'
 function SetupCrewsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const roster = useMechRoster()
   const crews = roster.crews
-  const toggleDay = (id: string, days: number[], d: number) => mechRosterStore.updateCrew(id, { workdays: days.includes(d) ? days.filter((x) => x !== d) : [...days, d].sort((a, b) => a - b) })
   return (
-    <Modal open={open} onClose={onClose} size="lg" title="Set up crews" subtitle="Each crew works a shift on the days you pick. Assign mechanics to a crew on the schedule."
+    <Modal open={open} onClose={onClose} size="lg" title="Set up crews" subtitle="Each crew runs a continuous rotation — days on, then days off — from its start date. Assign mechanics to a crew on the schedule."
       footer={<Button onClick={onClose}>Done</Button>}>
       <div className="space-y-3">
         {crews.map((c) => (
@@ -187,15 +195,16 @@ function SetupCrewsModal({ open, onClose }: { open: boolean; onClose: () => void
               </div>
               <button onClick={() => confirm(`Remove ${c.name}?`) && mechRosterStore.removeCrew(c.id)} className="rounded-md p-1.5 text-status-neutral hover:bg-status-critical/10 hover:text-status-critical"><Trash2 size={15} /></button>
             </div>
-            <div className="mt-2 flex flex-wrap gap-1">
-              {WEEKDAYS.map((w, d) => (
-                <button key={w} type="button" onClick={() => toggleDay(c.id, c.workdays, d)} className={clsx('h-8 w-10 rounded-lg border text-xs font-medium', c.workdays.includes(d) ? 'border-brand bg-brand-tint text-[#8a4513]' : 'border-black/15 text-status-neutral hover:border-brand')}>{w}</button>
-              ))}
+            <div className="mt-2 grid grid-cols-3 gap-2">
+              <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">Rotation start</span><input type="date" value={c.start} onChange={(e) => mechRosterStore.updateCrew(c.id, { start: e.target.value })} className={`${cellCls} w-full`} /></label>
+              <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">Days on</span><input type="number" min={1} value={c.onDays} onChange={(e) => mechRosterStore.updateCrew(c.id, { onDays: Math.max(1, Number(e.target.value) || 0) })} className={`${cellCls} w-full`} /></label>
+              <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">Days off</span><input type="number" min={0} value={c.offDays} onChange={(e) => mechRosterStore.updateCrew(c.id, { offDays: Math.max(0, Number(e.target.value) || 0) })} className={`${cellCls} w-full`} /></label>
             </div>
           </div>
         ))}
         {crews.length === 0 && <p className="rounded-lg bg-canvas px-3 py-3 text-center text-sm text-status-neutral">No crews yet — add one below.</p>}
-        <button onClick={() => mechRosterStore.addCrew(`Crew ${String.fromCharCode(65 + crews.length)}`, 'day', [1, 2, 3, 4, 5, 6])} className="inline-flex items-center gap-1 rounded-lg border border-dashed border-navy/25 px-3 py-1.5 text-sm font-medium text-brand hover:border-brand"><Plus size={15} /> Add crew</button>
+        <button onClick={() => mechRosterStore.addCrew(`Crew ${String.fromCharCode(65 + crews.length)}`, 'day', todayStr(), 14, 7)} className="inline-flex items-center gap-1 rounded-lg border border-dashed border-navy/25 px-3 py-1.5 text-sm font-medium text-brand hover:border-brand"><Plus size={15} /> Add crew</button>
+        <p className="text-[11px] text-status-neutral">Stagger the crews' start dates to control when they overlap. The defaults (start, +4 days, +7 days on a 14/7 rotation) give one week where all three are on together.</p>
       </div>
     </Modal>
   )
@@ -209,13 +218,13 @@ function AssignCrewModal({ mech, onClose }: { mech: Employee | null; onClose: ()
   if (!mech) return null
   function save() { mechRosterStore.assign(mech!.id, sel); onClose() }
   return (
-    <Modal open={!!mech} onClose={onClose} title={`Crew — ${mech.full_name}`} subtitle="Put this mechanic on a crew; their month roster follows the crew's shift & days."
+    <Modal open={!!mech} onClose={onClose} title={`Crew — ${mech.full_name}`} subtitle="Put this mechanic on a crew; their month roster follows the crew's rotation."
       footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={save}>Save</Button></>}>
       <div className="space-y-2">
         {roster.crews.map((c) => (
           <label key={c.id} className={clsx('flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2.5 text-sm', sel === c.id ? 'border-brand bg-brand-tint/40' : 'border-black/10 hover:bg-canvas')}>
             <input type="radio" name="crew" checked={sel === c.id} onChange={() => setSel(c.id)} className="accent-brand" />
-            <span className="flex-1"><span className="font-medium text-navy">{c.name}</span> <span className="text-status-neutral">· {SHIFT_LABEL[c.shift]} · {c.workdays.length === 7 ? 'every day' : c.workdays.map((d) => WEEKDAYS[d]).join(', ') || 'no days'}</span></span>
+            <span className="flex-1"><span className="font-medium text-navy">{c.name}</span> <span className="text-status-neutral">· {SHIFT_LABEL[c.shift]} · {c.onDays} on / {c.offDays} off · from {c.start}</span></span>
           </label>
         ))}
         <label className={clsx('flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2.5 text-sm', sel === '' ? 'border-brand bg-brand-tint/40' : 'border-black/10 hover:bg-canvas')}>
