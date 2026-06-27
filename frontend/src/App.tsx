@@ -29,6 +29,10 @@ import ToolInspections from '@/pages/safety/ToolInspections'
 import WorkshopOverview from '@/pages/workshop/WorkshopOverview'
 import JobCards from '@/pages/workshop/JobCards'
 import MechanicsSchedule from '@/pages/workshop/MechanicsSchedule'
+import HrOverview from '@/pages/hr/HrOverview'
+import Employees from '@/pages/hr/Employees'
+import HrLeave from '@/pages/hr/Leave'
+import HrReports from '@/pages/hr/HrReports'
 import DocumentsLibrary from '@/pages/documents/DocumentsLibrary'
 import Messages from '@/pages/messages/Messages'
 import Admin from '@/pages/admin/Admin'
@@ -65,6 +69,10 @@ const REAL_PAGES: Record<string, React.ComponentType> = {
   '/workshop': WorkshopOverview,
   '/workshop/jobcards': JobCards,
   '/workshop/mechanics': MechanicsSchedule,
+  '/hr': HrOverview,
+  '/hr/employees': Employees,
+  '/hr/leave': HrLeave,
+  '/hr/reports': HrReports,
   '/documents': DocumentsLibrary,
   '/admin': Admin,
 }

@@ -1,13 +1,15 @@
 import { useSyncExternalStore } from 'react'
 import { createSyncConfig } from '@/lib/supabase/syncTable'
+import { getActor } from '@/lib/audit/actor'
 
 /**
  * Driver leave — a date-bounded period per driver, set by Ops / Route Supervisors
  * from the driver profile. Stored migration-free in app_config (driverId → period),
  * so it syncs everywhere and a driver auto-returns from leave once it ends. Leave
  * applies to WORKING days only — a driver isn't "on leave" on a rotation rest day.
+ * `by`/`at` record who approved the leave and when (shown in HR → Leave).
  */
-export interface LeavePeriod { start: string; end: string } // ISO yyyy-mm-dd, inclusive
+export interface LeavePeriod { start: string; end: string; by?: string; at?: string } // ISO yyyy-mm-dd, inclusive
 
 const cfg = createSyncConfig<Record<string, LeavePeriod>>({ key: 'driver_leave', lsKey: 'inzu_driver_leave', default: {} })
 
@@ -16,7 +18,7 @@ export const leaveStore = {
   subscribe: cfg.subscribe,
   for: (driverId: string): LeavePeriod | undefined => cfg.get()[driverId],
   set(driverId: string, start: string, end: string) {
-    cfg.set({ ...cfg.get(), [driverId]: { start, end } })
+    cfg.set({ ...cfg.get(), [driverId]: { start, end, by: getActor().name, at: new Date().toISOString() } })
   },
   clear(driverId: string) {
     const cur = { ...cfg.get() }

@@ -16,7 +16,7 @@ import { useDrivers } from '@/lib/drivers/store'
 import { driverShiftState } from '@/lib/drivers/types'
 import { buildAssignmentIndex, dutyOn } from '@/lib/drivers/duty'
 import { useDriverLeave } from '@/lib/drivers/leave'
-import { useEmployees } from '@/lib/hr/store'
+import { useHrPeople } from '@/lib/hr/directory'
 import { useAllocations, useWeeklyAssign } from '@/lib/operations/store'
 import { useDocuments } from '@/lib/documents/store'
 import { docStatus, LICENSING_CATEGORIES } from '@/lib/documents/types'
@@ -128,7 +128,6 @@ export default function Dashboard() {
   const receipts = useReceipts().filter((rr) => rr.branch === branch)
   const fuelCfg = useFuelConfig(branch)
   const mileage = useMileage().filter((mm) => mm.branch === branch)
-  const employees = useEmployees().filter((e) => e.branch === branch)
   const allocations = useAllocations().filter((a) => a.branch === branch)
   const fleet = vehicles.filter((v) => v.branch === branch)
   const branchDocs = docs.filter((d) => d.branch === branch && !d.superseded)
@@ -162,7 +161,8 @@ export default function Dashboard() {
     const todays = allocations.filter((a) => a.date === today)
     return { runsToday: todays.length, busesToday: new Set(todays.map((a) => a.fleet_no)).size }
   }, [allocations, today])
-  const hr = { headcount: employees.length }
+  // HR headcount is the consolidated directory (employees + drivers + staff accounts).
+  const hr = { headcount: useHrPeople(branch).length }
 
   const real = useMemo(() => {
     const activeV = fleet.filter((v) => v.status === 'active')
