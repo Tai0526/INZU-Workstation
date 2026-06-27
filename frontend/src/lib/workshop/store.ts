@@ -2,39 +2,47 @@ import { useSyncExternalStore } from 'react'
 import { getActor } from '@/lib/audit/actor'
 import { createSyncConfig } from '@/lib/supabase/syncTable'
 import { vehiclesStore } from '@/lib/fleet/store'
-import { type JobCard, type JobCardInput, type MechShift, DEFAULT_MECH_SHIFT } from './types'
+import {
+  type JobCard, type JobCardInput, type JobSeverity, SEVERITY_META,
+  type Checklist, type TyreRecord, type Spare, type Rca,
+  type PmConfig, DEFAULT_PM, type MechShift, DEFAULT_MECH_SHIFT,
+} from './types'
 
 function newId() {
-  return typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `jc_${Date.now()}_${Math.round(Math.random() * 1e6)}`
+  return typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `wk_${Date.now()}_${Math.round(Math.random() * 1e6)}`
 }
 const stampNow = () => new Date().toISOString()
 const who = () => getActor().name
 
-// Job cards live in app_config (a single jsonb list), NOT a dedicated table —
-// the live DB has no workshop_jobcards table, and writing to a missing table
-// would fail the upsert and silently revert. (See the sync-schema gotcha.)
-const jcCfg = createSyncConfig<JobCard[]>({ key: 'workshop_jobcards', lsKey: 'inzu_workshop_jobcards', default: [] })
-
-export const jobCardsStore = {
-  list: () => jcCfg.get(),
-  subscribe: jcCfg.subscribe,
-  snapshot: () => jcCfg.get(),
-  add(data: JobCardInput): JobCard {
-    const now = stampNow()
-    const jc: JobCard = { ...data, id: newId(), created_by: who(), created_at: now, updated_by: who(), updated_at: now }
-    jcCfg.set([...jcCfg.get(), jc])
-    return jc
-  },
-  update(id: string, patch: Partial<JobCard>) {
-    jcCfg.set(jcCfg.get().map((x) => (x.id === id ? { ...x, ...patch, id: x.id, updated_by: who(), updated_at: stampNow() } : x)))
-  },
-  remove(id: string) { jcCfg.set(jcCfg.get().filter((x) => x.id !== id)) },
+// All workshop records live in app_config (single jsonb lists / maps), NOT
+// dedicated tables — the live DB has none, and writing to a missing table would
+// fail the upsert and silently revert. (See the sync-schema gotcha.)
+type WithAudit = { id: string; created_by: string; created_at: string; updated_by: string; updated_at: string }
+function makeConfigList<T extends WithAudit>(key: string, lsKey: string) {
+  const cfg = createSyncConfig<T[]>({ key, lsKey, default: [] })
+  return {
+    get: cfg.get,
+    subscribe: cfg.subscribe,
+    list: () => cfg.get(),
+    add(data: Omit<T, keyof WithAudit>): T {
+      const now = stampNow()
+      const item = { ...(data as object), id: newId(), created_by: who(), created_at: now, updated_by: who(), updated_at: now } as T
+      cfg.set([...cfg.get(), item]); return item
+    },
+    update(id: string, patch: Partial<T>) {
+      cfg.set(cfg.get().map((x) => (x.id === id ? { ...x, ...patch, id: x.id, updated_by: who(), updated_at: stampNow() } : x)))
+    },
+    remove(id: string) { cfg.set(cfg.get().filter((x) => x.id !== id)) },
+  }
 }
-export const useJobCards = () => useSyncExternalStore(jcCfg.subscribe, jcCfg.get, jcCfg.get)
+
+// ── Job cards ───────────────────────────────────────────────────────────
+export const jobCardsStore = makeConfigList<JobCard>('workshop_jobcards', 'inzu_workshop_jobcards')
+export const useJobCards = () => useSyncExternalStore(jobCardsStore.subscribe, jobCardsStore.get, jobCardsStore.get)
 
 // Set a vehicle's status by fleet number within a branch. `vehicles.status` is a
-// real column on the existing table, so this persists (and the notifications
-// feed already alerts planners/everyone when a bus is under repair / grounded).
+// real column on the existing table, so this persists (and the notifications feed
+// alerts planners/everyone when a bus is under repair / grounded).
 function setVehicleStatus(branch: string, fleet_no: string, status: 'active' | 'under_repair' | 'grounded') {
   const v = vehiclesStore.list().find((x) => x.branch === branch && x.fleet_no === fleet_no)
   if (v && v.status !== status) vehiclesStore.update(v.id, { status })
@@ -44,6 +52,23 @@ function setVehicleStatus(branch: string, fleet_no: string, status: 'active' | '
 export function raiseJobCard(input: JobCardInput): JobCard {
   const jc = jobCardsStore.add({ ...input, status: 'open', reported_by: who(), reported_at: stampNow() })
   setVehicleStatus(input.branch, input.fleet_no, input.vehicle_status)
+  return jc
+}
+
+/** Raise a job card straight from a driver's checklist faults; links the two. */
+export function raiseJobFromChecklist(c: Checklist, opts: { severity?: JobSeverity; mechanics?: string[] } = {}): JobCard {
+  const faults = c.items.filter((i) => !i.ok)
+  const tyre = faults.some((i) => i.tyre)
+  const faultText = faults.map((i) => (i.note ? `${i.label}: ${i.note}` : i.label)).join('; ') || 'Checklist faults'
+  const severity = opts.severity ?? 'major'
+  const jc = raiseJobCard({
+    branch: c.branch, fleet_no: c.fleet_no, reg_no: c.reg_no, driver_name: c.driver_name,
+    fault: faultText, severity, category: tyre ? 'tyre' : 'mechanical',
+    vehicle_status: SEVERITY_META[severity].grounds ? 'grounded' : 'under_repair',
+    mechanics: opts.mechanics ?? [], status: 'open', work_done: '', reported_by: '', reported_at: '',
+    completed_by: '', completed_at: '', approved_by: '', approved_at: '', rejected_note: '', notes: '', checklist_id: c.id,
+  })
+  checklistsStore.update(c.id, { job_ids: [...c.job_ids, jc.id] })
   return jc
 }
 
@@ -79,6 +104,37 @@ export function removeJob(id: string) {
   jobCardsStore.remove(id)
 }
 
+// ── Daily checklists ────────────────────────────────────────────────────
+export const checklistsStore = makeConfigList<Checklist>('workshop_checklists', 'inzu_workshop_checklists')
+export const useChecklists = () => useSyncExternalStore(checklistsStore.subscribe, checklistsStore.get, checklistsStore.get)
+
+// ── Tyre management ─────────────────────────────────────────────────────
+export const tyresStore = makeConfigList<TyreRecord>('workshop_tyres', 'inzu_workshop_tyres')
+export const useTyres = () => useSyncExternalStore(tyresStore.subscribe, tyresStore.get, tyresStore.get)
+
+// ── Critical spares ─────────────────────────────────────────────────────
+export const sparesStore = makeConfigList<Spare>('workshop_spares', 'inzu_workshop_spares')
+export const useSpares = () => useSyncExternalStore(sparesStore.subscribe, sparesStore.get, sparesStore.get)
+
+// ── Failure / RCA log ───────────────────────────────────────────────────
+export const rcaStore = makeConfigList<Rca>('workshop_rca', 'inzu_workshop_rca')
+export const useRca = () => useSyncExternalStore(rcaStore.subscribe, rcaStore.get, rcaStore.get)
+
+// ── PM / service schedules (per vehicle fleet_no) ───────────────────────
+const pmCfg = createSyncConfig<Record<string, PmConfig>>({ key: 'workshop_pm', lsKey: 'inzu_workshop_pm', default: {} })
+export const pmStore = {
+  get: () => pmCfg.get(),
+  subscribe: pmCfg.subscribe,
+  for: (fleet_no: string): PmConfig => pmCfg.get()[fleet_no] ?? DEFAULT_PM,
+  set(fleet_no: string, cfg: PmConfig) { pmCfg.set({ ...pmCfg.get(), [fleet_no]: cfg }) },
+}
+export const usePm = () => useSyncExternalStore(pmCfg.subscribe, pmCfg.get, pmCfg.get)
+/** Record that a service was done (resets the clock). */
+export function logService(fleet_no: string, date: string, odo: number, intervalDays?: number, notes = '') {
+  const cur = pmStore.for(fleet_no)
+  pmStore.set(fleet_no, { interval_days: intervalDays || cur.interval_days, last_service_date: date, last_service_odo: odo, notes })
+}
+
 // ── Mechanics work / rest schedule (per employee id) ────────────────────
 const mechCfg = createSyncConfig<Record<string, MechShift>>({ key: 'mechanic_schedules', lsKey: 'inzu_mechanic_schedules', default: {} })
 export const mechScheduleStore = {
@@ -88,8 +144,6 @@ export const mechScheduleStore = {
   set(empId: string, shift: MechShift) { mechCfg.set({ ...mechCfg.get(), [empId]: shift }) },
 }
 export const useMechSchedules = () => useSyncExternalStore(mechCfg.subscribe, mechCfg.get, mechCfg.get)
-
-/** Is a mechanic working on a given date, per their weekly pattern? */
 export function mechWorksOn(empId: string, date: Date): boolean {
   return mechScheduleStore.for(empId).workdays.includes(date.getDay())
 }

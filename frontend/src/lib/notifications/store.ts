@@ -12,7 +12,8 @@ import { overBy, isGlitch } from '@/lib/speed/types'
 import { useGenFuel } from '@/lib/fuel/store'
 import { DRAW_LABEL } from '@/lib/fuel/types'
 import { useMileage } from '@/lib/operations/store'
-import { useJobCards } from '@/lib/workshop/store'
+import { useJobCards, useChecklists, useSpares, usePm } from '@/lib/workshop/store'
+import { checklistFaults, spareLow, pmStatus, DEFAULT_PM } from '@/lib/workshop/types'
 import { registerCrossTabSync } from '@/lib/storage/sync'
 
 /**
@@ -93,7 +94,11 @@ export function useNotifications(branch: BranchCode, role?: RoleKey): {
   const draws = useGenFuel()
   const mileage = useMileage()
   const jobCards = useJobCards()
+  const checklists = useChecklists()
+  const spares = useSpares()
+  const pm = usePm()
   const read = useSyncExternalStore(subscribe, snapshot, snapshot)
+  const today = new Date().toISOString().slice(0, 10)
 
   const items: AppNotification[] = []
 
@@ -268,6 +273,26 @@ export function useNotifications(branch: BranchCode, role?: RoleKey): {
       })
     }
   }
+
+  // ── Workshop: checklist faults to action, service overdue, low spares ──
+  const unactioned = checklists.filter((c) => c.branch === branch && checklistFaults(c).length > 0 && c.job_ids.length === 0).length
+  if (unactioned > 0) items.push({
+    id: `chk:unactioned:${unactioned}`, severity: 'warning', audience: WORKSHOP_ACTORS,
+    title: `${unactioned} checklist${unactioned === 1 ? '' : 's'} with faults to action`,
+    detail: 'Driver-reported faults waiting for a job card.', date: today, link: '/workshop/checklists',
+  })
+  const overdueSvc = vehicles.filter((v) => v.branch === branch && pmStatus(pm[v.fleet_no] ?? DEFAULT_PM, today).state === 'overdue').length
+  if (overdueSvc > 0) items.push({
+    id: `pm:overdue:${overdueSvc}`, severity: 'warning', audience: WORKSHOP_ACTORS,
+    title: `${overdueSvc} bus${overdueSvc === 1 ? '' : 'es'} overdue for service`,
+    detail: 'Schedule a service in PM Schedules.', date: today, link: '/workshop/pm',
+  })
+  const lowSpares = spares.filter((s) => s.branch === branch && spareLow(s)).length
+  if (lowSpares > 0) items.push({
+    id: `spares:low:${lowSpares}`, severity: 'warning', audience: WORKSHOP_ACTORS,
+    title: `${lowSpares} critical spare${lowSpares === 1 ? '' : 's'} below minimum`,
+    detail: 'Reorder before they run out.', date: today, link: '/workshop/spares',
+  })
 
   // Keep only items meant for this role. Admins (MD, Ops Manager) see everything
   // for oversight; if no role is supplied, fall back to showing all.

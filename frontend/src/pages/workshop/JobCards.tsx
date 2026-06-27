@@ -14,10 +14,11 @@ import { STATUS_META, type VehicleStatus } from '@/lib/fleet/types'
 import { useDrivers } from '@/lib/drivers/store'
 import { useEmployees } from '@/lib/hr/store'
 import {
-  useJobCards, raiseJobCard, submitForSignoff, decideJob, reopenJob, removeJob,
+  useJobCards, raiseJobCard, submitForSignoff, decideJob, reopenJob, removeJob, tyresStore,
 } from '@/lib/workshop/store'
 import {
-  type JobCard, type JobCardInput, type JobSeverity, JOB_STATUS_META, SEVERITY_META,
+  type JobCard, type JobCardInput, type JobSeverity, type JobCategory,
+  JOB_STATUS_META, SEVERITY_META, JOB_CATEGORY_LABEL, TYRE_POSITIONS,
 } from '@/lib/workshop/types'
 
 const inputCls = 'w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand'
@@ -107,6 +108,12 @@ export default function JobCards() {
                   </td>
                   <td className="px-3 py-2 align-top text-navy">
                     <div className="max-w-[20rem]">{j.fault}</div>
+                    {((j.category && j.category !== 'mechanical') || j.checklist_id) && (
+                      <div className="mt-0.5 flex flex-wrap items-center gap-1 text-[10px]">
+                        {j.category && j.category !== 'mechanical' && <span className="rounded bg-navy/5 px-1.5 py-0.5 font-medium text-navy">{JOB_CATEGORY_LABEL[j.category]}</span>}
+                        {j.checklist_id && <span className="rounded bg-brand-tint px-1.5 py-0.5 font-medium text-[#8a4513]">from checklist</span>}
+                      </div>
+                    )}
                     {j.driver_name && <div className="text-[11px] text-status-neutral">reported by {j.driver_name}</div>}
                     {j.rejected_note && <div className="mt-0.5 text-[11px] text-status-critical">Sent back: {j.rejected_note}</div>}
                     {j.status === 'closed' && j.work_done && <div className="mt-0.5 text-[11px] text-status-good">Done: {j.work_done}</div>}
@@ -162,9 +169,9 @@ export default function JobCards() {
 
 function RaiseModal({ open, onClose, branch, vehicles, drivers, mechanics }: { open: boolean; onClose: () => void; branch: BranchCode; vehicles: any[]; drivers: any[]; mechanics: any[] }) {
   const blank = (): JobCardInput => ({
-    branch, fleet_no: '', reg_no: '', driver_name: '', fault: '', severity: 'major', vehicle_status: 'under_repair',
+    branch, fleet_no: '', reg_no: '', driver_name: '', fault: '', severity: 'major', category: 'mechanical', vehicle_status: 'under_repair',
     mechanics: [], status: 'open', work_done: '', reported_by: '', reported_at: '', completed_by: '', completed_at: '',
-    approved_by: '', approved_at: '', rejected_note: '', notes: '',
+    approved_by: '', approved_at: '', rejected_note: '', notes: '', checklist_id: '',
   })
   const [f, setF] = useState<JobCardInput>(blank)
   const [wasOpen, setWasOpen] = useState(false)
@@ -194,7 +201,11 @@ function RaiseModal({ open, onClose, branch, vehicles, drivers, mechanics }: { o
           <select className={inputCls} value={f.severity} onChange={(e) => onSeverity(e.target.value as JobSeverity)}>
             {(['minor', 'major', 'critical'] as JobSeverity[]).map((s) => <option key={s} value={s}>{SEVERITY_META[s].label}</option>)}
           </select></label>
-        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Driver (reported by)</span>
+        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Category</span>
+          <select className={inputCls} value={f.category} onChange={(e) => set('category', e.target.value as JobCategory)}>
+            {(Object.keys(JOB_CATEGORY_LABEL) as JobCategory[]).map((c) => <option key={c} value={c}>{JOB_CATEGORY_LABEL[c]}</option>)}
+          </select></label>
+        <label className="block sm:col-span-2"><span className="mb-1 block text-xs font-medium text-navy">Driver (reported by)</span>
           <SearchableSelect className={inputCls} value={f.driver_name} onChange={(v) => set('driver_name', v)} placeholder="Search driver…"
             options={drivers.map((d) => ({ value: d.full_name, label: d.full_name, sub: d.section }))} /></label>
 
@@ -216,17 +227,48 @@ function RaiseModal({ open, onClose, branch, vehicles, drivers, mechanics }: { o
   )
 }
 
+const emptyTyre = () => ({ position: TYRE_POSITIONS[0], brand: '', serial: '', odometer: '', cost: '' })
 function SignoffModal({ job, onClose }: { job: JobCard | null; onClose: () => void }) {
   const [work, setWork] = useState('')
+  const [tyre, setTyre] = useState(emptyTyre())
   const [key, setKey] = useState('')
-  if (job && key !== job.id) { setKey(job.id); setWork(job.work_done || '') }
+  if (job && key !== job.id) { setKey(job.id); setWork(job.work_done || ''); setTyre(emptyTyre()) }
   if (!job) return null
-  function save() { submitForSignoff(job!.id, work); onClose() }
+  const isTyre = job.category === 'tyre'
+  function save() {
+    submitForSignoff(job!.id, work)
+    if (isTyre && tyre.brand.trim()) {
+      tyresStore.add({
+        branch: job!.branch, fleet_no: job!.fleet_no, reg_no: job!.reg_no, position: tyre.position,
+        brand: tyre.brand.trim(), serial: tyre.serial.trim(), fitted_date: new Date().toISOString().slice(0, 10),
+        odometer: Number(tyre.odometer) || 0, cost_usd: tyre.cost ? Number(tyre.cost) : null,
+        reason: 'Replaced via job card', job_id: job!.id, notes: '',
+      })
+    }
+    onClose()
+  }
+  const setT = (patch: Partial<ReturnType<typeof emptyTyre>>) => setTyre((p) => ({ ...p, ...patch }))
   return (
     <Modal open={!!job} onClose={onClose} title={`Mark repaired — ${job.fleet_no}`} subtitle="Describe the work done. This sends the bus to the Asst Operations Manager to sign back into service."
       footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={save} disabled={!work.trim()}><CheckCircle2 size={15} /> Submit for sign-off</Button></>}>
       <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Work done</span>
         <textarea className={inputCls} rows={3} placeholder="e.g. Replaced front brake pads, bled the system, road-tested" value={work} onChange={(e) => setWork(e.target.value)} autoFocus /></label>
+
+      {isTyre && (
+        <div className="mt-3 rounded-lg border border-black/10 p-3">
+          <div className="mb-2 text-xs font-semibold text-navy">Log tyre change <span className="font-normal text-status-neutral">(optional — writes to Tyre Management)</span></div>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">Position</span>
+              <select className={inputCls} value={tyre.position} onChange={(e) => setT({ position: e.target.value })}>{TYRE_POSITIONS.map((p) => <option key={p} value={p}>{p}</option>)}</select></label>
+            <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">Brand</span><input className={inputCls} placeholder="e.g. Bridgestone" value={tyre.brand} onChange={(e) => setT({ brand: e.target.value })} /></label>
+            <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">Serial / DOT</span><input className={inputCls} value={tyre.serial} onChange={(e) => setT({ serial: e.target.value })} /></label>
+            <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">Odometer</span><input type="number" className={inputCls} value={tyre.odometer} onChange={(e) => setT({ odometer: e.target.value })} /></label>
+            <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">Cost (USD)</span><input type="number" step="0.01" className={inputCls} value={tyre.cost} onChange={(e) => setT({ cost: e.target.value })} /></label>
+          </div>
+          <p className="mt-1.5 text-[11px] text-status-neutral">Fill the brand to record a tyre fitting. Add the other tyres in Tyre Management.</p>
+        </div>
+      )}
+
       <p className="mt-2 inline-flex items-center gap-1.5 text-[11px] text-status-neutral"><AlertTriangle size={12} /> The bus stays in the workshop until the Asst Ops Manager approves.</p>
     </Modal>
   )

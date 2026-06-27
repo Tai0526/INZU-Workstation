@@ -29,6 +29,11 @@ import ToolInspections from '@/pages/safety/ToolInspections'
 import WorkshopOverview from '@/pages/workshop/WorkshopOverview'
 import JobCards from '@/pages/workshop/JobCards'
 import MechanicsSchedule from '@/pages/workshop/MechanicsSchedule'
+import DailyChecklists from '@/pages/workshop/DailyChecklists'
+import PmSchedules from '@/pages/workshop/PmSchedules'
+import TyreManagement from '@/pages/workshop/TyreManagement'
+import CriticalSpares from '@/pages/workshop/CriticalSpares'
+import RcaLog from '@/pages/workshop/RcaLog'
 import HrOverview from '@/pages/hr/HrOverview'
 import Employees from '@/pages/hr/Employees'
 import HrLeave from '@/pages/hr/Leave'
@@ -67,8 +72,13 @@ const REAL_PAGES: Record<string, React.ComponentType> = {
   '/safety/loto': LotoRegister,
   '/safety/tools': ToolInspections,
   '/workshop': WorkshopOverview,
+  '/workshop/checklists': DailyChecklists,
+  '/workshop/pm': PmSchedules,
   '/workshop/jobcards': JobCards,
   '/workshop/mechanics': MechanicsSchedule,
+  '/workshop/tyres': TyreManagement,
+  '/workshop/spares': CriticalSpares,
+  '/workshop/rca': RcaLog,
   '/hr': HrOverview,
   '/hr/employees': Employees,
   '/hr/leave': HrLeave,
