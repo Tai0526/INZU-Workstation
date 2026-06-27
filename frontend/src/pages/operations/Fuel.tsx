@@ -45,12 +45,21 @@ function fuelReport(opts: { branchLabel: string; monthLbl: string; cur: Currency
   const rows = perVehicle.map((v, i) => `<tr><td class="num">${i + 1}</td><td>${esc(v.vehicle_reg)}</td><td>${esc(v.fleet_no)}</td><td class="num">${v.litres.toLocaleString()}</td><td class="num">${v.km.toLocaleString()}</td><td class="num">${v.kmPerL != null ? v.kmPerL.toFixed(2) : '—'}</td><td class="num">${esc(money(v.litres * price, cur))}</td></tr>`).join('')
   const totVehKm = perVehicle.reduce((s, v) => s + v.km, 0)
   const tbl = `<h2>Consumption by vehicle</h2><table><thead><tr><th class="num">#</th><th>Vehicle Reg</th><th>Fleet #</th><th class="num">Litres</th><th class="num">KM</th><th class="num">Avg km/L</th><th class="num">Cost</th></tr></thead><tbody>${rows || '<tr><td colspan="7" style="text-align:center;color:#6B7280">No issuances</td></tr>'}<tr class="tot"><td colspan="3">Total</td><td class="num">${vehicleLitres.toLocaleString()}</td><td class="num">${totVehKm.toLocaleString()}</td><td></td><td class="num">${esc(money(vehicleLitres * price, cur))}</td></tr></tbody></table>`
-  const drawRows = draws.map((g) => `<tr><td>${esc(g.date)}</td><td>${esc(DRAW_LABEL[g.kind])}</td><td>${esc(g.recipient)}${g.vehicle_reg ? ` (${esc(g.vehicle_reg)})` : ''}</td><td class="num">${g.litres.toLocaleString()}</td><td class="num">${esc(money(g.litres * price, cur))}</td></tr>`).join('')
-  const drawTbl = draws.length ? `<h2>Non-vehicle fuel (generator &amp; visitor)</h2><table><thead><tr><th>Date</th><th>Type</th><th>Recipient</th><th class="num">Litres</th><th class="num">Cost</th></tr></thead><tbody>${drawRows}<tr class="tot"><td colspan="3">Total</td><td class="num">${drawLitres.toLocaleString()}</td><td class="num">${esc(money(drawLitres * price, cur))}</td></tr></tbody></table>` : ''
+  // Generators (auto-approved) and authorised vehicles (Ops/MD-approved) are
+  // reported separately — the authorised-vehicle table shows the vehicle, the
+  // reason and WHO authorised it, with totals, for accountability.
+  const gens = draws.filter((g) => g.kind === 'generator')
+  const visitors = draws.filter((g) => g.kind === 'visitor')
+  const genLitres = gens.reduce((s, g) => s + g.litres, 0)
+  const visLitres = visitors.reduce((s, g) => s + g.litres, 0)
+  const genRows = gens.map((g) => `<tr><td>${esc(g.date)}</td><td>${esc(g.recipient)}</td><td class="num">${g.litres.toLocaleString()}</td><td class="num">${esc(money(g.litres * price, cur))}</td></tr>`).join('')
+  const genTbl = gens.length ? `<h2>Generator fuel</h2><table><thead><tr><th>Date</th><th>Generator</th><th class="num">Litres</th><th class="num">Cost</th></tr></thead><tbody>${genRows}<tr class="tot"><td colspan="2">Total</td><td class="num">${genLitres.toLocaleString()}</td><td class="num">${esc(money(genLitres * price, cur))}</td></tr></tbody></table>` : ''
+  const visRows = visitors.map((g) => `<tr><td>${esc(g.date)}</td><td>${esc(g.recipient)}${g.vehicle_reg ? ` — ${esc(g.vehicle_reg)}` : ''}</td><td>${esc(g.notes || '—')}</td><td class="num">${g.litres.toLocaleString()}</td><td class="num">${esc(money(g.litres * price, cur))}</td><td>${esc(g.authorized_by || '—')}</td></tr>`).join('')
+  const visTbl = visitors.length ? `<h2>Authorised vehicle fuel — who authorised &amp; why</h2><table><thead><tr><th>Date</th><th>Vehicle / authority</th><th>Reason</th><th class="num">Litres</th><th class="num">Cost</th><th>Authorised by</th></tr></thead><tbody>${visRows}<tr class="tot"><td colspan="3">Total</td><td class="num">${visLitres.toLocaleString()}</td><td class="num">${esc(money(visLitres * price, cur))}</td><td></td></tr></tbody></table>` : ''
   return {
     title: `Monthly Fuel Report — ${branchLabel}`,
     subtitle: `${monthLbl} · all amounts in ${cur}`,
-    body: rateLine + summary + tbl + drawTbl,
+    body: rateLine + summary + tbl + genTbl + visTbl,
     landscape: false,
     filenameBase: `Fuel Report - ${branchLabel} - ${monthLbl}`,
   }
@@ -60,22 +69,6 @@ const cellCls = 'w-full rounded-md border border-black/15 bg-white px-2 py-1 tex
 const inputCls = 'w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand'
 const monthKey = (d: string) => d.slice(0, 7)
 const monthLabel = (k: string) => { const [y, m] = k.split('-').map(Number); return new Date(y, m - 1, 1).toLocaleDateString('en', { month: 'short', year: 'numeric' }) }
-
-// Match the signed-in user to a fuel attendant/controller so the refuel form can
-// default the attendant to whoever is entering the fuel (e.g. Asford, Rudo). Tries
-// an exact full-name match first, then a first-name / partial match.
-function matchSelf(attendants: { full_name: string }[], fullName?: string): string {
-  const n = (fullName ?? '').trim().toLowerCase()
-  if (!n) return ''
-  const exact = attendants.find((a) => a.full_name.trim().toLowerCase() === n)
-  if (exact) return exact.full_name
-  const first = n.split(/\s+/)[0]
-  const partial = attendants.find((a) => {
-    const an = a.full_name.trim().toLowerCase()
-    return an.includes(n) || n.includes(an) || an.split(/\s+/)[0] === first
-  })
-  return partial ? partial.full_name : ''
-}
 
 type Tab = 'issuances' | 'stock' | 'deliveries' | 'summary'
 
@@ -99,9 +92,9 @@ export default function Fuel() {
   // Fuel attendants AND fuel controllers (both dispense fuel) for this branch.
   // Reactive — a newly added attendant/controller shows up in the form at once.
   const attendants = useEmployees().filter((e) => e.branch === branch && e.status === 'active' && FUEL_HANDLER_ROLES.includes(e.job_role))
-  // The attendant who is entering the fuel = the signed-in user (if they're a
-  // fuel attendant/controller). Used to default the form's attendant field.
-  const me = useMemo(() => matchSelf(attendants, user!.fullName), [attendants, user])
+  // The attendant giving out the fuel IS whoever is signed in entering it (the
+  // fuel controller is an attendant). Shown read-only on the refuel forms.
+  const me = user!.fullName
 
   const [tab, setTab] = useState<Tab>('issuances')
 
@@ -317,9 +310,7 @@ function PeopleHeader({ fleet, reg, driver, attendant, onFleet, setReg, setDrive
         <SearchableSelect className={inputCls} value={driver} onChange={setDriver} placeholder="Select driver…"
           options={drivers.map((d: any) => ({ value: d.full_name, label: d.full_name, sub: d.section }))} /></label>
       <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Fuel attendant</span>
-        <SearchableSelect className={inputCls} value={attendant} onChange={setAttendant} placeholder="Select attendant…"
-          options={attendants.map((a: any) => ({ value: a.full_name, label: a.full_name }))} />
-        {attendants.length === 0 && <span className="mt-1 block text-[11px] text-status-neutral">No fuel attendants or controllers in HR for this branch.</span>}
+        <div className="flex h-[38px] items-center justify-between rounded-lg border border-black/10 bg-canvas px-3 text-sm font-medium text-navy">{attendant || '—'}<span className="rounded bg-brand-tint px-1.5 py-0.5 text-[10px] text-[#8a4513]">you</span></div>
       </label>
     </div>
   )
@@ -435,8 +426,7 @@ function QuickRefuelModal({ open, onClose, branch, vehicles, drivers, routes, at
             <SearchableSelect className={inputCls} value={driver} onChange={setDriver} placeholder="Select driver…"
               options={drivers.map((d: any) => ({ value: d.full_name, label: d.full_name, sub: d.section }))} /></label>
           <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Attendant</span>
-            <SearchableSelect className={inputCls} value={attendant} onChange={setAttendant} placeholder="Select attendant…"
-              options={attendants.map((a: any) => ({ value: a.full_name, label: a.full_name }))} /></label>
+            <div className="flex h-[38px] items-center justify-between rounded-lg border border-black/10 bg-canvas px-3 text-sm font-medium text-navy">{attendant || '—'}<span className="rounded bg-brand-tint px-1.5 py-0.5 text-[10px] text-[#8a4513]">you</span></div></label>
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Date</span><input type="date" className={inputCls} value={date} onChange={(e) => setDate(e.target.value)} /></label>
@@ -523,10 +513,7 @@ function ImportModal({ open, onClose, branch, vehicles, attendants, me }: { open
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Default Fleet No</span><input list="dl-fuel-fleet2" className={inputCls} value={fleet} onChange={(e) => onFleet(e.target.value)} /></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Default Reg</span><input className={inputCls} value={reg} onChange={(e) => setReg(e.target.value)} /></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Default attendant</span>
-          <select className={inputCls} value={attendant} onChange={(e) => setAttendant(e.target.value)}>
-            <option value="">Select…</option>
-            {attendants.map((a) => <option key={a.id} value={a.full_name}>{a.full_name}</option>)}
-          </select></label>
+          <div className="flex h-[38px] items-center justify-between rounded-lg border border-black/10 bg-canvas px-3 text-sm font-medium text-navy">{attendant || '—'}<span className="rounded bg-brand-tint px-1.5 py-0.5 text-[10px] text-[#8a4513]">you</span></div></label>
       </div>
       <datalist id="dl-fuel-fleet2">{vehicles.map((v) => <option key={v.id} value={v.fleet_no} />)}</datalist>
       <div className="mb-3 flex items-center justify-between rounded-lg bg-canvas px-4 py-3">
