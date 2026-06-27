@@ -5,7 +5,7 @@ import { vehiclesStore } from '@/lib/fleet/store'
 import {
   type JobCard, type JobCardInput, type JobSeverity, SEVERITY_META,
   type Checklist, type TyreRecord, type Spare, type Rca,
-  type PmConfig, DEFAULT_PM, type MechShift, DEFAULT_MECH_SHIFT,
+  type PmConfig, DEFAULT_PM, type MechCrew, type MechShiftKind, DEFAULT_MECH_CREWS,
 } from './types'
 
 function newId() {
@@ -135,15 +135,30 @@ export function logService(fleet_no: string, date: string, odo: number, interval
   pmStore.set(fleet_no, { interval_days: intervalDays || cur.interval_days, last_service_date: date, last_service_odo: odo, notes })
 }
 
-// ── Mechanics work / rest schedule (per employee id) ────────────────────
-const mechCfg = createSyncConfig<Record<string, MechShift>>({ key: 'mechanic_schedules', lsKey: 'inzu_mechanic_schedules', default: {} })
-export const mechScheduleStore = {
+// ── Mechanics crews & roster (crew-based work/rest, like the drivers) ────
+interface MechRoster { crews: MechCrew[]; assign: Record<string, string> } // employee id → crew id
+const mechCfg = createSyncConfig<MechRoster>({
+  key: 'mech_roster', lsKey: 'inzu_mech_roster', default: { crews: DEFAULT_MECH_CREWS, assign: {} },
+  merge: (s) => ({ crews: s && Array.isArray(s.crews) && s.crews.length ? s.crews : DEFAULT_MECH_CREWS, assign: (s && s.assign) || {} }),
+})
+export const mechRosterStore = {
   get: () => mechCfg.get(),
   subscribe: mechCfg.subscribe,
-  for: (empId: string): MechShift => mechCfg.get()[empId] ?? DEFAULT_MECH_SHIFT,
-  set(empId: string, shift: MechShift) { mechCfg.set({ ...mechCfg.get(), [empId]: shift }) },
+  crews: () => mechCfg.get().crews,
+  crewOf(empId: string): MechCrew | undefined { const r = mechCfg.get(); return r.crews.find((c) => c.id === r.assign[empId]) },
+  assign(empId: string, crewId: string) {
+    const r = mechCfg.get(); const assign = { ...r.assign }
+    if (crewId) assign[empId] = crewId; else delete assign[empId]
+    mechCfg.set({ ...r, assign })
+  },
+  addCrew(name: string, shift: MechShiftKind, workdays: number[]) { const r = mechCfg.get(); mechCfg.set({ ...r, crews: [...r.crews, { id: newId(), name, shift, workdays }] }) },
+  updateCrew(id: string, patch: Partial<MechCrew>) { const r = mechCfg.get(); mechCfg.set({ ...r, crews: r.crews.map((c) => (c.id === id ? { ...c, ...patch } : c)) }) },
+  removeCrew(id: string) { const r = mechCfg.get(); const assign = { ...r.assign }; for (const k of Object.keys(assign)) if (assign[k] === id) delete assign[k]; mechCfg.set({ crews: r.crews.filter((c) => c.id !== id), assign }) },
 }
-export const useMechSchedules = () => useSyncExternalStore(mechCfg.subscribe, mechCfg.get, mechCfg.get)
-export function mechWorksOn(empId: string, date: Date): boolean {
-  return mechScheduleStore.for(empId).workdays.includes(date.getDay())
+export const useMechRoster = () => useSyncExternalStore(mechCfg.subscribe, mechCfg.get, mechCfg.get)
+/** The shift a mechanic works on a date (per their crew), or null for rest / unassigned. */
+export function mechShiftOnDate(empId: string, date: Date): MechShiftKind | null {
+  const c = mechRosterStore.crewOf(empId)
+  if (!c) return null
+  return c.workdays.includes(date.getDay()) ? c.shift : null
 }

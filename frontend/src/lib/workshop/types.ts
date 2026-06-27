@@ -167,8 +167,14 @@ export interface Rca {
 }
 export type RcaInput = Omit<Rca, 'id' | 'created_by' | 'created_at' | 'updated_by' | 'updated_at'>
 
-// ── Mechanics work / rest schedule ──────────────────────────────────────
-export interface MechShift { workdays: number[]; shift: 'day' | 'night' }
-export const DEFAULT_MECH_SHIFT: MechShift = { workdays: [1, 2, 3, 4, 5, 6], shift: 'day' }
+// ── Mechanics work / rest schedule (crew-based, like the drivers) ───────
+// Mechanics are grouped into crews; each crew works a shift on set weekdays.
+// A mechanic's month roster is derived from the crew they're assigned to.
+export type MechShiftKind = 'day' | 'night'
+export interface MechCrew { id: string; name: string; shift: MechShiftKind; workdays: number[] } // workdays: 0=Sun … 6=Sat
+export const DEFAULT_MECH_CREWS: MechCrew[] = [
+  { id: 'MA', name: 'Crew A', shift: 'day', workdays: [1, 2, 3, 4, 5, 6] },
+  { id: 'MB', name: 'Crew B', shift: 'night', workdays: [1, 2, 3, 4, 5, 6] },
+]
 export const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-export const SHIFT_LABEL: Record<MechShift['shift'], string> = { day: 'Day', night: 'Night' }
+export const SHIFT_LABEL: Record<MechShiftKind, string> = { day: 'Day', night: 'Night' }
