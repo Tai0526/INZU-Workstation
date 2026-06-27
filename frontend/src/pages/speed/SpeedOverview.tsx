@@ -269,7 +269,7 @@ export default function SpeedOverview() {
             <h3 className="font-display text-sm font-bold text-navy">Repeat-offender leaderboard</h3>
           </div>
           {offence.length === 0 ? <p className="px-5 py-8 text-center text-sm text-status-neutral">No offences recorded.</p> : (
-            <div className="divide-y divide-black/5">
+            <div className="max-h-96 divide-y divide-black/5 overflow-y-auto">
               {offence.slice(0, 8).map((d, i) => (
                 <div key={d.name} className="flex items-center gap-3 px-5 py-2.5">
                   <span className="w-5 text-sm font-bold text-status-neutral">{i + 1}</span>
@@ -307,9 +307,9 @@ export default function SpeedOverview() {
           <p className="px-5 py-6 text-center text-sm text-status-neutral">No implausible readings in this period.</p>
         ) : (
           <>
-            <div className="overflow-x-auto">
+            <div className="max-h-80 overflow-auto">
               <table className="w-full text-left text-sm">
-                <thead className="bg-canvas text-status-neutral"><tr>
+                <thead className="sticky top-0 z-10 bg-canvas text-status-neutral"><tr>
                   <th className="px-5 py-2 font-medium">Date</th><th className="px-4 py-2 font-medium">Vehicle</th>
                   <th className="px-4 py-2 font-medium">Reported speed</th><th className="px-4 py-2 font-medium">Location</th>
                 </tr></thead>
@@ -342,8 +342,8 @@ function PerBusTable({ title, icon, rows, positive }: { title: string; icon: Rea
     <div className="card overflow-hidden">
       <div className="flex items-center gap-2 border-b border-black/5 px-5 py-3.5">{icon}<h3 className="font-display text-sm font-bold text-navy">{title}</h3></div>
       {rows.length === 0 ? <p className="px-5 py-8 text-center text-sm text-status-neutral">Nothing to show.</p> : (
-        <table className="w-full text-left text-sm">
-          <thead className="bg-canvas text-status-neutral"><tr>
+        <div className="max-h-80 overflow-auto"><table className="w-full text-left text-sm">
+          <thead className="sticky top-0 z-10 bg-canvas text-status-neutral"><tr>
             <th className="px-5 py-2 font-medium">Vehicle</th><th className="px-4 py-2 text-right font-medium">Last</th>
             <th className="px-4 py-2 text-right font-medium">This</th><th className="px-4 py-2 text-right font-medium">Change</th>
           </tr></thead>
@@ -357,7 +357,7 @@ function PerBusTable({ title, icon, rows, positive }: { title: string; icon: Rea
               </tr>
             ))}
           </tbody>
-        </table>
+        </table></div>
       )}
     </div>
   )

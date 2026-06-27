@@ -129,7 +129,7 @@ export default function FleetOverview() {
               <p className="text-sm">All licensing current for {branchLabel}.</p>
             </div>
           ) : (
-            <div className="divide-y divide-black/5">
+            <div className="max-h-96 divide-y divide-black/5 overflow-y-auto">
               {attention.map(({ d, st }) => (
                 <Link to="/fleet/licensing" key={d.id} className="flex items-center gap-3 px-5 py-3 hover:bg-canvas">
                   <StatusBadge tone={DOC_STATUS_META[st].tone}>{DOC_STATUS_META[st].label}</StatusBadge>
@@ -154,7 +154,7 @@ export default function FleetOverview() {
           {activity.length === 0 ? (
             <p className="px-5 py-8 text-center text-sm text-status-neutral">No activity yet.</p>
           ) : (
-            <div className="divide-y divide-black/5">
+            <div className="max-h-96 divide-y divide-black/5 overflow-y-auto">
               {activity.map((e, i) => (
                 <div key={i} className="px-5 py-2.5 text-sm">
                   <span className="font-medium text-navy">{e.who}</span>{' '}

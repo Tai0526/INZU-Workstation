@@ -157,7 +157,7 @@ export default function DriversOverview() {
             <p className="text-sm">Every driver’s licence and PSV are current.</p>
           </div>
         ) : (
-          <div className="divide-y divide-black/5">
+          <div className="max-h-96 divide-y divide-black/5 overflow-y-auto">
             {attention.map(({ d, items }) => (
               <button key={d.id} onClick={() => openDetail(d)} className="flex w-full items-center gap-3 px-5 py-3 text-left hover:bg-canvas">
                 <div className="min-w-0 flex-1">

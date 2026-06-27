@@ -408,7 +408,7 @@ export default function Dashboard() {
             <p className="text-xs text-status-neutral">{isExecView ? `Nothing is out of order in ${branchLabel} right now.` : `Nothing needs your action in ${branchLabel} right now.`}</p>
           </div>
         ) : (
-          <div className="divide-y divide-black/5">
+          <div className="max-h-96 divide-y divide-black/5 overflow-y-auto">
             {myItems.map((i) => {
               const s = SEV[i.severity]
               const Icon = i.icon
@@ -461,7 +461,7 @@ export default function Dashboard() {
               <p className="text-xs text-status-neutral">No outstanding ops tasks in {branchLabel} right now.</p>
             </div>
           ) : (
-            <div className="divide-y divide-black/5">
+            <div className="max-h-96 divide-y divide-black/5 overflow-y-auto">
               {opsOutstanding.map((i) => {
                 const s = SEV[i.severity]
                 const Icon = i.icon
@@ -554,7 +554,7 @@ export default function Dashboard() {
             <h3 className="font-display text-sm font-bold text-navy">Branch watch</h3>
             <span className="ml-auto text-[11px] text-status-neutral">for awareness</span>
           </div>
-          <div className="divide-y divide-black/5">
+          <div className="max-h-96 divide-y divide-black/5 overflow-y-auto">
             {watch.map((i) => {
               const s = SEV[i.severity]
               const Icon = i.icon
