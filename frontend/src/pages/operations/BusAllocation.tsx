@@ -27,6 +27,14 @@ const nowHM = () => { const d = new Date(); return `${String(d.getHours()).padSt
 // Mine entry points — the fixed end of every run (the other end is a searchable place).
 const GATES = [DEFAULT_TO_LOCATION, 'TWE']
 const joinRoute = (from: string, to: string) => [from.trim(), to.trim()].filter(Boolean).join(' → ')
+// Split a stored "From → To" route back into its two ends, for the PDF columns.
+// Older single-place rows default the mine-gate end by trip type.
+const splitRoute = (location: string, type: TripType): [string, string] => {
+  const parts = (location || '').split('→').map((s) => s.trim()).filter(Boolean)
+  if (parts.length >= 2) return [parts[0], parts[1]]
+  const single = parts[0] || ''
+  return type === 'pickup' ? [single, DEFAULT_TO_LOCATION] : [DEFAULT_TO_LOCATION, single]
+}
 // A run is "planned" when it fulfils a Daily Plan trip that still exists.
 // `plannedIds` is the set of allocation ids that are linked to a live plan trip.
 const isPlannedRun = (a: Allocation, plannedIds: Set<string>) => plannedIds.has(a.id)
@@ -56,18 +64,23 @@ function allocReport(date: string, branchLabel: string, pickups: Allocation[], k
   }
 }
 function allocPdf(date: string, branchLabel: string, pickups: Allocation[], knockoffs: Allocation[], plannedIds: Set<string>) {
-  const head = ['Driver', 'Fleet No', 'Reg No', 'Route', 'Time', 'Pax', 'Status', 'Notes']
-  const rowsOf = (runs: Allocation[]) => runs.map((r) => [r.driver_name || '-', r.fleet_no, r.reg_no, r.location, r.departure_time || '-', r.passengers ?? '-', isPlannedRun(r, plannedIds) ? 'Planned' : 'Unplanned', r.notes || ''])
+  const head = ['Driver', 'Fleet No', 'Reg No', 'From', 'To', 'Time', 'Pax', 'Status', 'Notes']
+  const rowsOf = (runs: Allocation[], type: TripType) => runs.map((r) => {
+    const [from, to] = splitRoute(r.location, type)
+    return [r.driver_name || '-', r.fleet_no, r.reg_no, from, to, r.departure_time || '-', r.passengers ?? '-', isPlannedRun(r, plannedIds) ? 'Planned' : 'Unplanned', r.notes || '']
+  })
   const totalPax = pickups.concat(knockoffs).reduce((s, r) => s + (r.passengers ?? 0), 0)
-  const colStyles = { 5: { halign: 'right' as const } }
+  // Fixed widths for the narrow columns; From/To/Notes share the rest — keeps the
+  // 9 columns fitting an A4 portrait page.
+  const colStyles = { 0: { cellWidth: 70 }, 1: { cellWidth: 44 }, 2: { cellWidth: 50 }, 5: { cellWidth: 30 }, 6: { cellWidth: 24, halign: 'right' as const }, 7: { cellWidth: 48 } }
   const tables: PdfTable[] = [
-    { heading: `Pickups (${pickups.length})`, head, rows: rowsOf(pickups), columnStyles: colStyles },
-    { heading: `Knock-offs (${knockoffs.length})`, head, rows: rowsOf(knockoffs), columnStyles: colStyles },
+    { heading: `Pickups (${pickups.length})`, head, rows: rowsOf(pickups, 'pickup'), columnStyles: colStyles },
+    { heading: `Knock-offs (${knockoffs.length})`, head, rows: rowsOf(knockoffs, 'knockoff'), columnStyles: colStyles, breakBefore: true },
   ]
   return {
     title: `Daily Bus Allocation — ${branchLabel}`,
-    subtitle: `${date} · ${pickups.length + knockoffs.length} runs · ${totalPax} passengers · planned vs unplanned tagged`,
-    tables, landscape: true, dense: true,
+    subtitle: `${date} · ${pickups.length + knockoffs.length} runs · ${totalPax} passengers · pickups & knock-offs on separate pages`,
+    tables, landscape: false, dense: true,
     filename: `Bus Allocation - ${branchLabel} - ${date}.pdf`,
   }
 }

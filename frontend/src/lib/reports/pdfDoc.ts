@@ -17,6 +17,8 @@ export interface PdfTable {
   rows: (string | number)[][]
   /** Optional per-column styling (keyed by column index). */
   columnStyles?: Record<number, PdfColStyle>
+  /** Start this table on a fresh page (e.g. knock-offs on their own page). */
+  breakBefore?: boolean
 }
 
 export function buildTablePdf(opts: { title: string; subtitle?: string; tables: PdfTable[]; landscape?: boolean; dense?: boolean }): jsPDF {
@@ -38,7 +40,8 @@ export function buildTablePdf(opts: { title: string; subtitle?: string; tables: 
 
   const fontSize = opts.dense ? 8 : 9
   const cellPadding = opts.dense ? 3 : 4
-  for (const t of opts.tables) {
+  opts.tables.forEach((t, ti) => {
+    if (t.breakBefore && ti > 0) { doc.addPage(); startY = 48 }
     if (t.heading) { doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.setTextColor(15, 27, 51); doc.text(t.heading, M, startY); startY += 4 }
     autoTable(doc, {
       startY: startY + 6,
@@ -52,7 +55,7 @@ export function buildTablePdf(opts: { title: string; subtitle?: string; tables: 
     })
     // @ts-expect-error lastAutoTable is added by the plugin
     startY = (doc.lastAutoTable.finalY as number) + 18
-  }
+  })
   return doc
 }
 
