@@ -255,7 +255,7 @@ export default function OperationsOverview() {
         <div className="card overflow-hidden">
           <div className="flex items-center gap-2 border-b border-black/5 px-5 py-3.5"><Gauge size={16} className="text-status-critical" /><h3 className="font-display text-sm font-bold text-navy">Buses to steer</h3></div>
           {worst.length === 0 ? <p className="px-5 py-8 text-center text-sm text-status-neutral">Every bus is billing most of what it drives. Nothing to flag.</p> : (
-            <div className="max-h-96 divide-y divide-black/5 overflow-y-auto">
+            <div className="h-64 divide-y divide-black/5 overflow-y-auto">
               {worst.map((b) => (
                 <div key={b.bus} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-2.5">
                   <span className="flex-1 text-sm font-medium text-navy">{b.bus}</span>

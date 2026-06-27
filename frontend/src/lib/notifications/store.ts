@@ -12,6 +12,7 @@ import { overBy, isGlitch } from '@/lib/speed/types'
 import { useGenFuel } from '@/lib/fuel/store'
 import { DRAW_LABEL } from '@/lib/fuel/types'
 import { useMileage } from '@/lib/operations/store'
+import { useJobCards } from '@/lib/workshop/store'
 import { registerCrossTabSync } from '@/lib/storage/sync'
 
 /**
@@ -91,6 +92,7 @@ export function useNotifications(branch: BranchCode, role?: RoleKey): {
   const speed = useSpeedEvents()
   const draws = useGenFuel()
   const mileage = useMileage()
+  const jobCards = useJobCards()
   const read = useSyncExternalStore(subscribe, snapshot, snapshot)
 
   const items: AppNotification[] = []
@@ -243,6 +245,26 @@ export function useNotifications(branch: BranchCode, role?: RoleKey): {
         title: `${v.fleet_no} is in the workshop`,
         detail: `${v.reg_plate} is under repair — not available to plan until it's back in service.`,
         date: v.updated_at, link: '/operations/weekly-plan',
+      })
+    }
+  }
+
+  // ── Workshop job cards: sign-off queue (Asst Ops) + sent-back work (Workshop) ──
+  for (const j of jobCards) {
+    if (j.branch !== branch) continue
+    if (j.status === 'awaiting_approval') {
+      items.push({
+        id: `job:${j.id}:signoff`, severity: 'warning', audience: OPS_DECIDERS,
+        title: `Job card needs sign-off: ${j.fleet_no}`,
+        detail: `${j.fault} — repaired${j.completed_by ? ` by ${j.completed_by}` : ''}. Approve to return it to service.`,
+        date: j.completed_at || j.updated_at, link: '/workshop/jobcards',
+      })
+    } else if (j.status === 'open' && j.rejected_note) {
+      items.push({
+        id: `job:${j.id}:sentback`, severity: 'warning', audience: WORKSHOP_ACTORS,
+        title: `Job card sent back: ${j.fleet_no}`,
+        detail: `Needs more work: ${j.rejected_note}`,
+        date: j.updated_at, link: '/workshop/jobcards',
       })
     }
   }
