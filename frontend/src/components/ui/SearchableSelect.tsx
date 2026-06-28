@@ -8,8 +8,20 @@ export interface SSOption { value: string; label: string; sub?: string }
  * A type-to-filter dropdown. Looks like a normal select but you can start typing
  * (e.g. "GIB") to narrow a long list of drivers / vehicles instead of scrolling.
  */
+/** Focus the next fillable control after `root` — so picking a value jumps you on. */
+function focusNextAfter(root: HTMLElement | null) {
+  if (!root) return
+  setTimeout(() => {
+    const all = Array.from(document.querySelectorAll<HTMLElement>('input:not([type=hidden]):not([readonly]), select, textarea, button'))
+      .filter((el) => !el.hasAttribute('disabled') && el.tabIndex !== -1 && el.offsetParent !== null)
+    const start = all.findIndex((el) => root.contains(el)) // the trigger button
+    if (start === -1) return
+    for (let i = start + 1; i < all.length; i++) { if (!root.contains(all[i])) { all[i].focus(); return } }
+  }, 0)
+}
+
 export default function SearchableSelect({
-  value, onChange, options, placeholder = 'Select…', className, disabled, allowClear = true, emptyText = 'No matches',
+  value, onChange, options, placeholder = 'Select…', className, disabled, allowClear = true, emptyText = 'No matches', advanceOnSelect = false,
 }: {
   value: string
   onChange: (v: string) => void
@@ -19,6 +31,8 @@ export default function SearchableSelect({
   disabled?: boolean
   allowClear?: boolean
   emptyText?: string
+  /** After picking an option, move focus to the next field (smooth mobile entry). */
+  advanceOnSelect?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const [q, setQ] = useState('')
@@ -72,7 +86,7 @@ export default function SearchableSelect({
               <button
                 key={o.value}
                 type="button"
-                onClick={() => { onChange(o.value); setOpen(false) }}
+                onClick={() => { onChange(o.value); setOpen(false); if (advanceOnSelect) focusNextAfter(ref.current) }}
                 className={clsx('flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-canvas', o.value === value && 'bg-brand-tint/40')}
               >
                 <span className="truncate text-navy">{o.label}</span>

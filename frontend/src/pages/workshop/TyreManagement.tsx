@@ -123,7 +123,7 @@ function TyreModal({ state, onClose, branch, vehicles }: { state: { open: boolea
       footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={save} disabled={!ready}>{e ? 'Save' : 'Log tyre'}</Button></>}>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Bus</span>
-          <SearchableSelect className={inputCls} value={f.fleet_no} onChange={onVehicle} placeholder="Search bus…" options={vehicles.map((v) => ({ value: v.fleet_no, label: v.fleet_no, sub: v.reg_plate }))} /></label>
+          <SearchableSelect className={inputCls} value={f.fleet_no} onChange={onVehicle} placeholder="Search bus…" advanceOnSelect options={vehicles.map((v) => ({ value: v.fleet_no, label: v.fleet_no, sub: v.reg_plate }))} /></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Position</span>
           <select className={inputCls} value={f.position} onChange={(ev) => set('position', ev.target.value)}>{TYRE_POSITIONS.map((p) => <option key={p} value={p}>{p}</option>)}</select></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Brand</span><input className={inputCls} placeholder="e.g. Bridgestone" value={f.brand} onChange={(ev) => set('brand', ev.target.value)} /></label>

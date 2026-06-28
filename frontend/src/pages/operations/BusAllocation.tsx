@@ -373,12 +373,13 @@ function ActualCard({ run, canPlan, onEdit }: { run: Allocation; canPlan: boolea
   )
 }
 
-// ── Power-user bulk entry (kept for the office) ───────────────────────────────
-interface DraftRow { trip_type: TripType; driver_name: string; fleet_no: string; reg_no: string; location: string; departure_time: string; passengers: string }
-const emptyRow = (): DraftRow => ({ trip_type: 'pickup', driver_name: '', fleet_no: '', reg_no: '', location: '', departure_time: '', passengers: '' })
-const cellCls = 'w-full rounded-md border border-black/15 bg-white px-2 py-1 text-xs text-navy outline-none focus:border-brand'
+// ── Power-user bulk entry — same fields as "Add run", as a sheet for PC ───────
+interface DraftRow { trip_type: TripType; fleet_no: string; reg_no: string; driver_name: string; gate: string; other: string; departure_time: string; passengers: string; notes: string }
+const emptyRow = (): DraftRow => ({ trip_type: 'pickup', fleet_no: '', reg_no: '', driver_name: '', gate: DEFAULT_TO_LOCATION, other: '', departure_time: '', passengers: '', notes: '' })
+const rowCls = 'w-full rounded-lg border border-black/15 bg-white px-2 py-1.5 text-sm text-navy outline-none focus:border-brand'
 
 function MultiRunModal({ open, onClose, branch, date, vehicles, drivers, locations }: { open: boolean; onClose: () => void; branch: BranchCode; date: string; vehicles: any[]; drivers: any[]; locations: string[] }) {
+  const otherOptions = useMemo(() => locations.filter((l) => !GATES.includes(l)).map((l) => ({ value: l, label: l })), [locations])
   const [d, setD] = useState(date)
   const [rows, setRows] = useState<DraftRow[]>([emptyRow(), emptyRow(), emptyRow()])
   const [wasOpen, setWasOpen] = useState(false)
@@ -386,54 +387,56 @@ function MultiRunModal({ open, onClose, branch, date, vehicles, drivers, locatio
   if (!open && wasOpen) setWasOpen(false)
 
   function setRow(i: number, patch: Partial<DraftRow>) { setRows((rs) => rs.map((r, idx) => (idx === i ? { ...r, ...patch } : r))) }
-  function onFleet(i: number, v: string) {
-    const veh = vehicles.find((x) => x.fleet_no === v)
-    setRows((rs) => rs.map((r, idx) => (idx === i ? { ...r, fleet_no: v, reg_no: veh ? veh.reg_plate : '' } : r)))
-  }
-  const readyCount = rows.filter((r) => r.fleet_no.trim() && r.location.trim()).length
+  function onFleet(i: number, v: string) { const veh = vehicles.find((x) => x.fleet_no === v); setRow(i, { fleet_no: v, reg_no: veh ? veh.reg_plate : '' }) }
+  const readyCount = rows.filter((r) => r.fleet_no.trim() && r.other.trim()).length
 
   function save() {
-    const valid = rows.filter((r) => r.fleet_no.trim() && r.location.trim()).map((r) => ({
-      branch, date: d, trip_type: r.trip_type, driver_name: r.driver_name.trim(), fleet_no: r.fleet_no.trim(),
-      reg_no: r.reg_no.trim(), route_id: '', location: r.location.trim(), planned_km: 0,
-      departure_time: r.departure_time, passengers: r.passengers ? Number(r.passengers) : null, notes: '',
-    }))
+    const valid = rows.filter((r) => r.fleet_no.trim() && r.other.trim()).map((r) => {
+      const from = r.trip_type === 'pickup' ? r.other : r.gate
+      const to = r.trip_type === 'pickup' ? r.gate : r.other
+      return {
+        branch, date: d, trip_type: r.trip_type, driver_name: r.driver_name.trim(), fleet_no: r.fleet_no.trim(),
+        reg_no: r.reg_no.trim(), route_id: '', location: joinRoute(from, to), planned_km: 0,
+        departure_time: r.departure_time, passengers: r.passengers ? Number(r.passengers) : null, notes: r.notes.trim(),
+      }
+    })
     if (valid.length) allocationsStore.bulkAdd(valid)
     onClose()
   }
 
   return (
-    <Modal open={open} onClose={onClose} size="xl" title="Add many runs" subtitle="Enter the day's runs like a sheet — bus, driver and location are picked from your lists. Save once."
+    <Modal open={open} onClose={onClose} size="xl" title="Add many runs" subtitle="Same as Add run, as a sheet for the office — searchable bus & driver, From/To and a reason per row. Save once."
       footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={save} disabled={readyCount === 0}>Save {readyCount} run{readyCount === 1 ? '' : 's'}</Button></>}>
       <div className="mb-3 flex items-center gap-2">
         <span className="text-xs font-medium text-navy">Date</span>
         <input type="date" value={d} onChange={(e) => setD(e.target.value)} className="rounded-lg border border-black/15 bg-white px-2.5 py-1.5 text-sm text-navy outline-none focus:border-brand" />
       </div>
-      <div className="overflow-x-auto rounded-lg border border-black/10">
-        <table className="w-full min-w-[760px] text-left">
-          <thead className="bg-canvas text-[10px] uppercase tracking-wide text-status-neutral">
-            <tr>
-              <th className="px-2 py-1.5 font-medium">Type</th><th className="px-2 py-1.5 font-medium">Bus</th>
-              <th className="px-2 py-1.5 font-medium">Reg</th><th className="px-2 py-1.5 font-medium">Driver</th>
-              <th className="px-2 py-1.5 font-medium">Location</th><th className="px-2 py-1.5 font-medium">Time</th>
-              <th className="px-2 py-1.5 font-medium">Pax</th><th className="px-2 py-1.5" />
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r, i) => (
-              <tr key={i} className="border-t border-black/5">
-                <td className="px-1.5 py-1"><select className={cellCls} value={r.trip_type} onChange={(e) => setRow(i, { trip_type: e.target.value as TripType })}><option value="pickup">Pickup</option><option value="knockoff">Knock-off</option></select></td>
-                <td className="px-1.5 py-1"><select className={cellCls} value={r.fleet_no} onChange={(e) => onFleet(i, e.target.value)}><option value="">Bus…</option>{vehicles.map((v) => <option key={v.id} value={v.fleet_no}>{v.fleet_no}</option>)}</select></td>
-                <td className="whitespace-nowrap px-2 py-1 text-xs text-status-neutral">{r.reg_no || '—'}</td>
-                <td className="px-1.5 py-1"><select className={cellCls} value={r.driver_name} onChange={(e) => setRow(i, { driver_name: e.target.value })}><option value="">Driver…</option>{drivers.map((dr) => <option key={dr.id} value={dr.full_name}>{dr.full_name}</option>)}</select></td>
-                <td className="px-1.5 py-1"><select className={cellCls} value={r.location} onChange={(e) => setRow(i, { location: e.target.value })}><option value="">Location…</option>{locations.map((n) => <option key={n} value={n}>{n}</option>)}</select></td>
-                <td className="px-1.5 py-1"><input type="time" className={cellCls} value={r.departure_time} onChange={(e) => setRow(i, { departure_time: e.target.value })} /></td>
-                <td className="px-1.5 py-1"><input type="number" className={cellCls} value={r.passengers} onChange={(e) => setRow(i, { passengers: e.target.value })} /></td>
-                <td className="px-1.5 py-1"><button onClick={() => setRows((rs) => rs.filter((_, idx) => idx !== i))} className="rounded p-1 text-status-neutral hover:bg-status-critical/10 hover:text-status-critical"><Trash2 size={13} /></button></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="space-y-2">
+        {rows.map((r, i) => {
+          const isPickup = r.trip_type === 'pickup'
+          const gateSel = <select className={rowCls} value={r.gate} onChange={(e) => setRow(i, { gate: e.target.value })}>{GATES.map((g) => <option key={g} value={g}>{g}</option>)}</select>
+          const placeSel = <SearchableSelect className={rowCls} value={r.other} onChange={(v) => setRow(i, { other: v })} placeholder="Search place…" options={otherOptions} emptyText="No places — add them in Daily Plan" />
+          return (
+            <div key={i} className="rounded-lg border border-black/10 p-2.5">
+              <div className="grid grid-cols-2 gap-2 xl:grid-cols-12 xl:items-end">
+                <label className="block xl:col-span-2"><span className="mb-1 block text-[11px] font-medium text-navy">Type</span>
+                  <select className={rowCls} value={r.trip_type} onChange={(e) => setRow(i, { trip_type: e.target.value as TripType })}><option value="pickup">Pickup</option><option value="knockoff">Knock-off</option></select></label>
+                <label className="block xl:col-span-2"><span className="mb-1 block text-[11px] font-medium text-navy">Bus{r.reg_no ? <span className="font-normal text-status-neutral"> · {r.reg_no}</span> : ''}</span>
+                  <SearchableSelect className={rowCls} value={r.fleet_no} onChange={(v) => onFleet(i, v)} placeholder="Search bus…" advanceOnSelect options={vehicles.map((v) => ({ value: v.fleet_no, label: v.fleet_no, sub: v.reg_plate }))} /></label>
+                <label className="block xl:col-span-2"><span className="mb-1 block text-[11px] font-medium text-navy">Driver</span>
+                  <SearchableSelect className={rowCls} value={r.driver_name} onChange={(v) => setRow(i, { driver_name: v })} placeholder="Search driver…" options={drivers.map((dr) => ({ value: dr.full_name, label: dr.full_name, sub: dr.section }))} /></label>
+                <label className="block xl:col-span-2"><span className="mb-1 block text-[11px] font-medium text-navy">From{isPickup ? '' : ' (gate)'}</span>{isPickup ? placeSel : gateSel}</label>
+                <label className="block xl:col-span-2"><span className="mb-1 block text-[11px] font-medium text-navy">To{isPickup ? ' (gate)' : ''}</span>{isPickup ? gateSel : placeSel}</label>
+                <label className="block xl:col-span-1"><span className="mb-1 block text-[11px] font-medium text-navy">Time</span><input type="time" className={rowCls} value={r.departure_time} onChange={(e) => setRow(i, { departure_time: e.target.value })} /></label>
+                <label className="block xl:col-span-1"><span className="mb-1 block text-[11px] font-medium text-navy">Pax</span><input type="number" className={rowCls} value={r.passengers} onChange={(e) => setRow(i, { passengers: e.target.value })} /></label>
+              </div>
+              <div className="mt-2 flex items-center gap-2">
+                <input value={r.notes} onChange={(e) => setRow(i, { notes: e.target.value })} placeholder="Reason / note (optional)" className={`${rowCls} flex-1`} />
+                <button onClick={() => setRows((rs) => rs.filter((_, idx) => idx !== i))} className="rounded-md p-1.5 text-status-neutral hover:bg-status-critical/10 hover:text-status-critical" title="Remove row"><Trash2 size={15} /></button>
+              </div>
+            </div>
+          )
+        })}
       </div>
       <button onClick={() => setRows((rs) => [...rs, emptyRow()])} className="mt-2 inline-flex items-center gap-1 rounded-lg border border-dashed border-navy/25 px-3 py-1.5 text-xs font-medium text-brand hover:border-brand">
         <Plus size={14} /> Add row
@@ -495,7 +498,7 @@ function RunModal({ state, onClose, branch, date, vehicles, drivers, locations }
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Departure time</span><input type="time" className={inputCls} value={f.departure_time} onChange={(ev) => set('departure_time', ev.target.value)} /></label>
 
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Bus</span>
-          <SearchableSelect className={inputCls} value={f.fleet_no} onChange={onVehicle} placeholder="Search bus…"
+          <SearchableSelect className={inputCls} value={f.fleet_no} onChange={onVehicle} placeholder="Search bus…" advanceOnSelect
             options={vehicles.map((v) => ({ value: v.fleet_no, label: v.fleet_no, sub: v.reg_plate }))} /></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Reg No</span><div className="flex h-[38px] items-center rounded-lg border border-black/10 bg-canvas px-3 text-sm text-navy">{f.reg_no || '—'}</div></label>
 

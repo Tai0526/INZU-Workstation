@@ -190,7 +190,7 @@ function RaiseModal({ open, onClose, branch, vehicles, drivers, mechanics }: { o
       footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={save} disabled={!ready}><Wrench size={15} /> Raise &amp; pull from service</Button></>}>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Bus</span>
-          <SearchableSelect className={inputCls} value={f.fleet_no} onChange={onVehicle} placeholder="Search bus…"
+          <SearchableSelect className={inputCls} value={f.fleet_no} onChange={onVehicle} placeholder="Search bus…" advanceOnSelect
             options={vehicles.map((v) => ({ value: v.fleet_no, label: v.fleet_no, sub: `${v.reg_plate} · ${STATUS_META[v.status as VehicleStatus].label}` }))} /></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Reg No</span><div className="flex h-[38px] items-center rounded-lg border border-black/10 bg-canvas px-3 text-sm text-navy">{f.reg_no || '—'}</div></label>
 

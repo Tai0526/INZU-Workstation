@@ -101,7 +101,7 @@ function RcaModal({ state, onClose, branch, vehicles }: { state: { open: boolean
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <label className="block sm:col-span-2"><span className="mb-1 block text-xs font-medium text-navy">Title</span><input className={inputCls} placeholder="e.g. Repeated gearbox failure" value={f.title} onChange={(ev) => set('title', ev.target.value)} autoFocus /></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Bus (optional)</span>
-          <SearchableSelect className={inputCls} value={f.fleet_no} onChange={(v) => set('fleet_no', v)} placeholder="Search bus…" options={vehicles.map((v) => ({ value: v.fleet_no, label: v.fleet_no, sub: v.reg_plate }))} /></label>
+          <SearchableSelect className={inputCls} value={f.fleet_no} onChange={(v) => set('fleet_no', v)} placeholder="Search bus…" advanceOnSelect options={vehicles.map((v) => ({ value: v.fleet_no, label: v.fleet_no, sub: v.reg_plate }))} /></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Date</span><input type="date" className={inputCls} value={f.date} onChange={(ev) => set('date', ev.target.value)} /></label>
         <label className="block sm:col-span-2"><span className="mb-1 block text-xs font-medium text-navy">What failed</span><textarea className={inputCls} rows={2} value={f.failure} onChange={(ev) => set('failure', ev.target.value)} /></label>
         <label className="block sm:col-span-2"><span className="mb-1 block text-xs font-medium text-navy">Root cause</span><textarea className={inputCls} rows={2} value={f.root_cause} onChange={(ev) => set('root_cause', ev.target.value)} /></label>

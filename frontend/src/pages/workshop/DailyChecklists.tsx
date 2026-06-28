@@ -134,7 +134,7 @@ function NewChecklistModal({ open, onClose, branch, vehicles, drivers }: { open:
       footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={save} disabled={!ready}>Save checklist{faults ? ` · ${faults} fault${faults === 1 ? '' : 's'}` : ''}</Button></>}>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Bus</span>
-          <SearchableSelect className={inputCls} value={f.fleet_no} onChange={onVehicle} placeholder="Search bus…" options={vehicles.map((v) => ({ value: v.fleet_no, label: v.fleet_no, sub: v.reg_plate }))} /></label>
+          <SearchableSelect className={inputCls} value={f.fleet_no} onChange={onVehicle} placeholder="Search bus…" advanceOnSelect options={vehicles.map((v) => ({ value: v.fleet_no, label: v.fleet_no, sub: v.reg_plate }))} /></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Driver</span>
           <SearchableSelect className={inputCls} value={f.driver_name} onChange={(v) => setF((p) => ({ ...p, driver_name: v }))} placeholder="Search driver…" options={drivers.map((d) => ({ value: d.full_name, label: d.full_name, sub: d.section }))} /></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Date</span><input type="date" className={inputCls} value={f.date} onChange={(e) => setF((p) => ({ ...p, date: e.target.value }))} /></label>

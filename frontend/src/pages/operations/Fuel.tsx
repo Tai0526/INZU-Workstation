@@ -303,12 +303,13 @@ function PeopleHeader({ fleet, reg, driver, attendant, onFleet, setReg, setDrive
   return (
     <div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
       <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Vehicle (fleet)</span>
-        <SearchableSelect className={inputCls} value={fleet} onChange={onFleet} placeholder="Select bus…"
+        <SearchableSelect className={inputCls} value={fleet} onChange={onFleet} placeholder="Select bus…" advanceOnSelect
           options={vehicles.map((v: any) => ({ value: v.fleet_no, label: v.fleet_no, sub: v.reg_plate }))} /></label>
-      <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Reg No</span><input className={inputCls} placeholder="BCG 4270" value={reg} onChange={(e) => setReg(e.target.value)} /></label>
-      <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Driver</span>
-        <SearchableSelect className={inputCls} value={driver} onChange={setDriver} placeholder="Select driver…"
-          options={drivers.map((d: any) => ({ value: d.full_name, label: d.full_name, sub: d.section }))} /></label>
+      <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Reg No</span><div className="flex h-[38px] items-center rounded-lg border border-black/10 bg-canvas px-3 text-sm text-navy">{reg || '—'}</div></label>
+      <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Driver(s)</span>
+        <SearchableMultiSelect className={inputCls} placeholder="Search driver(s)…"
+          values={driver ? driver.split(',').map((s: string) => s.trim()).filter(Boolean) : []} onChange={(arr: string[]) => setDriver(arr.join(', '))}
+          options={drivers.map((d: any) => ({ value: d.full_name, label: d.full_name, sub: d.section }))} emptyText="No drivers" /></label>
       <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Fuel attendant</span>
         <div className="flex h-[38px] items-center justify-between rounded-lg border border-black/10 bg-canvas px-3 text-sm font-medium text-navy">{attendant || '—'}<span className="rounded bg-brand-tint px-1.5 py-0.5 text-[10px] text-[#8a4513]">you</span></div>
       </label>
@@ -409,9 +410,9 @@ function QuickRefuelModal({ open, onClose, branch, vehicles, drivers, routes, at
       <div className="space-y-3">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Vehicle (fleet)</span>
-            <SearchableSelect className={inputCls} value={fleet} onChange={onFleet} placeholder="Select bus…"
+            <SearchableSelect className={inputCls} value={fleet} onChange={onFleet} placeholder="Select bus…" advanceOnSelect
               options={vehicles.map((v: any) => ({ value: v.fleet_no, label: v.fleet_no, sub: v.reg_plate }))} /></label>
-          <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Reg No</span><input className={inputCls} placeholder="BCG 4270" value={reg} onChange={(e) => setReg(e.target.value)} /></label>
+          <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Reg No</span><div className="flex h-[38px] items-center rounded-lg border border-black/10 bg-canvas px-3 text-sm text-navy">{reg || '—'}</div></label>
         </div>
         <div className="grid grid-cols-2 gap-3">
           <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Odometer now</span><input type="number" inputMode="numeric" className={bigCls} placeholder="km" value={odo} onChange={(e) => setOdo(e.target.value)} /></label>
@@ -422,9 +423,10 @@ function QuickRefuelModal({ open, onClose, branch, vehicles, drivers, routes, at
           <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Tank after</span><select className={inputCls} value={after} onChange={(e) => setAfter(e.target.value)}>{levels.map((l) => <option key={l} value={l}>{l}</option>)}</select></label>
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Driver</span>
-            <SearchableSelect className={inputCls} value={driver} onChange={setDriver} placeholder="Select driver…"
-              options={drivers.map((d: any) => ({ value: d.full_name, label: d.full_name, sub: d.section }))} /></label>
+          <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Driver(s)</span>
+            <SearchableMultiSelect className={inputCls} placeholder="Search driver(s)…"
+              values={driver ? driver.split(',').map((s: string) => s.trim()).filter(Boolean) : []} onChange={(arr: string[]) => setDriver(arr.join(', '))}
+              options={drivers.map((d: any) => ({ value: d.full_name, label: d.full_name, sub: d.section }))} emptyText="No drivers" /></label>
           <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Attendant</span>
             <div className="flex h-[38px] items-center justify-between rounded-lg border border-black/10 bg-canvas px-3 text-sm font-medium text-navy">{attendant || '—'}<span className="rounded bg-brand-tint px-1.5 py-0.5 text-[10px] text-[#8a4513]">you</span></div></label>
         </div>
@@ -471,7 +473,10 @@ function EditIssuanceModal({ editing, onClose, vehicles, drivers, routes, attend
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Date</span><input type="date" className={inputCls} value={f.date} onChange={(e) => set('date', e.target.value)} /></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Fleet No</span><input list="dl-fuel-fleet-e" className={inputCls} value={f.fleet_no} onChange={(e) => onFleet(e.target.value)} /></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Reg No</span><input className={inputCls} value={f.vehicle_reg} onChange={(e) => set('vehicle_reg', e.target.value)} /></label>
-        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Driver</span><select className={inputCls} value={f.driver} onChange={(e) => set('driver', e.target.value)}><option value="">—</option>{drivers.map((d: any) => <option key={d.id} value={d.full_name}>{d.full_name}</option>)}{f.driver && !drivers.some((d: any) => d.full_name === f.driver) && <option value={f.driver}>{f.driver}</option>}</select></label>
+        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Driver(s)</span>
+          <SearchableMultiSelect className={inputCls} placeholder="Search driver(s)…"
+            values={f.driver ? f.driver.split(',').map((s) => s.trim()).filter(Boolean) : []} onChange={(arr) => set('driver', arr.join(', '))}
+            options={drivers.map((d: any) => ({ value: d.full_name, label: d.full_name, sub: d.section }))} emptyText="No drivers" /></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Attendant</span><select className={inputCls} value={f.fuel_attendant} onChange={(e) => set('fuel_attendant', e.target.value)}><option value="">—</option>{attendants.map((a: any) => <option key={a.id} value={a.full_name}>{a.full_name}</option>)}{f.fuel_attendant && !attendants.some((a: any) => a.full_name === f.fuel_attendant) && <option value={f.fuel_attendant}>{f.fuel_attendant}</option>}</select></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Trips</span><input type="number" className={inputCls} value={f.trip_number ?? ''} onChange={(e) => set('trip_number', e.target.value ? Number(e.target.value) : null)} /></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Route</span><select className={inputCls} value={f.route} onChange={(e) => set('route', e.target.value)}><option value="">—</option>{routes.map((x: any) => <option key={x.id} value={x.name}>{x.name}</option>)}{f.route && !routes.some((x: any) => x.name === f.route) && <option value={f.route}>{f.route}</option>}</select></label>
