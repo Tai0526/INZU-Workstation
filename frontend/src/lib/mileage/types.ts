@@ -229,7 +229,17 @@ export function vehicleSheet(trips: MileageTrip[], fleet_no: string): VehicleShe
   const dayMap = new Map<string, VehicleDay>()
   for (const t of ts) {
     const d = dayMap.get(t.date) ?? { date: t.date, shifts: {}, internal: 0, external: 0, total: 0 }
-    d.shifts[t.shift] = { route: t.route, internal: t.internal_km, external: t.external_km }
+    // Several trips can share a shift on the same day. Combine them so the row's
+    // arithmetic adds up: join the routes with " / " (skipping duplicates) and
+    // sum the internal & external kilometres, rather than overwriting the cell.
+    const cur = d.shifts[t.shift]
+    if (cur) {
+      if (t.route && !cur.route.split(' / ').includes(t.route)) cur.route = [cur.route, t.route].filter(Boolean).join(' / ')
+      cur.internal += t.internal_km
+      cur.external += t.external_km
+    } else {
+      d.shifts[t.shift] = { route: t.route, internal: t.internal_km, external: t.external_km }
+    }
     d.internal += t.internal_km
     d.external += t.external_km
     d.total += tripKm(t)
