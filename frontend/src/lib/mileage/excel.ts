@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx'
+import * as XS from 'xlsx-js-style'
 import type { BranchCode } from '@/lib/roles'
 import {
   type MileageTrip, type MileageTripInput, type MileageSummary, type MileageRates, type Signatories,
@@ -95,6 +96,35 @@ export function exportTrips(trips: MileageTrip[], project: string) {
   XLSX.writeFile(wb, `Mileage log - ${project}.xlsx`)
 }
 
+// ── Workbook styling (xlsx-js-style) — branded, presentable for stakeholders ──
+const CLR = { navy: '0F1B33', brand: 'D16B21', tint: 'F8E7D7', grey: 'EEF1F5', zebra: 'F7F8FA', border: 'D7DBE3', white: 'FFFFFF', text: '0F1B33' }
+const FMT = { km: '#,##0', usd: '"$"#,##0.00', rate: '"$"#,##0.0000', int: '#,##0' }
+const BD = { style: 'thin', color: { rgb: CLR.border } }
+const ALL_BD = { top: BD, bottom: BD, left: BD, right: BD }
+const baseFont = { name: 'Calibri', sz: 10, color: { rgb: CLR.text } }
+const ST = {
+  title: { font: { name: 'Calibri', sz: 14, bold: true, color: { rgb: CLR.white } }, fill: { fgColor: { rgb: CLR.navy } }, alignment: { horizontal: 'left', vertical: 'center' } },
+  subtitle: { font: { name: 'Calibri', sz: 10, italic: true, color: { rgb: CLR.white } }, fill: { fgColor: { rgb: CLR.brand } }, alignment: { horizontal: 'left', vertical: 'center' } },
+  section: { font: { name: 'Calibri', sz: 11, bold: true, color: { rgb: CLR.navy } }, fill: { fgColor: { rgb: CLR.grey } }, alignment: { horizontal: 'left', vertical: 'center' } },
+  header: { font: { ...baseFont, bold: true, color: { rgb: CLR.white } }, fill: { fgColor: { rgb: CLR.navy } }, alignment: { horizontal: 'center', vertical: 'center', wrapText: true }, border: ALL_BD },
+  label: { font: { ...baseFont, bold: true }, fill: { fgColor: { rgb: CLR.grey } }, alignment: { horizontal: 'left', vertical: 'center' }, border: ALL_BD },
+  totalLabel: { font: { ...baseFont, bold: true }, fill: { fgColor: { rgb: CLR.tint } }, alignment: { horizontal: 'left', vertical: 'center' }, border: ALL_BD },
+  left: { font: baseFont, alignment: { horizontal: 'left', vertical: 'center' }, border: ALL_BD },
+  center: { font: baseFont, alignment: { horizontal: 'center', vertical: 'center' }, border: ALL_BD },
+  tint: { font: baseFont, fill: { fgColor: { rgb: CLR.tint } }, border: ALL_BD },
+  orgL: { font: { ...baseFont, bold: true, sz: 11, color: { rgb: CLR.brand } } },
+  sigLbl: { font: { ...baseFont, bold: true } },
+  sigName: { font: baseFont },
+}
+const numCell = (fmt: string) => ({ font: baseFont, alignment: { horizontal: 'right', vertical: 'center' }, border: ALL_BD, numFmt: fmt })
+const totCell = (fmt: string) => ({ font: { ...baseFont, bold: true }, fill: { fgColor: { rgb: CLR.tint } }, alignment: { horizontal: 'right', vertical: 'center' }, border: ALL_BD, numFmt: fmt })
+function put(ws: any, r: number, c: number, s: any) {
+  const addr = XS.utils.encode_cell({ r, c })
+  if (!ws[addr]) ws[addr] = { t: 's', v: '' }
+  ws[addr].s = s
+}
+const span = (ws: any, r: number, c0: number, c1: number, s: any) => { for (let c = c0; c <= c1; c++) put(ws, r, c, s) }
+
 // ── Full reconciliation workbook (summary + per-vehicle sheets) ────────
 export function exportWorkbook(opts: {
   trips: MileageTrip[]
@@ -106,46 +136,55 @@ export function exportWorkbook(opts: {
 }) {
   const { trips, rates, signatories: sig, project, monthLabel, branchShort } = opts
   const summary = summarise(trips, rates)
-  const wb = XLSX.utils.book_new()
-
-  // ── Summary sheet ──
-  const A: any[][] = []
-  A.push([`INZU Route and Kilometer Reconciliation — ${project} Project — ${monthLabel}`])
-  A.push([`Billed to FQM ${branchShort} · all amounts in USD`])
-  A.push([])
+  const wb = XS.utils.book_new()
 
   const classLabels = summary.classes.map((c) => SEAT_LABEL[c.seat_class])
   const vatLabel = `VAT @${summary.vat_pct}%`
-  A.push(['', ...classLabels, 'Sub-Total', vatLabel, 'Total (VAT incl)'])
-  A.push(['QTY (buses)', ...summary.classes.map((c) => c.qty)])
+  const nC = summary.classes.length
+  const kmCols = summary.hasInternal ? 2 : 1
+  const csW = 1 + nC + 3 // class summary width
 
+  const A: any[][] = []
+  const ix: Record<string, number> = {}
+  const at = () => A.length - 1
+
+  A.push([`INZU Route & Kilometre Reconciliation — ${project} — ${monthLabel}`]); ix.title = at()
+  A.push([`Billed to FQM ${branchShort}  ·  all amounts in USD  ·  generated ${new Date().toLocaleDateString()}`]); ix.sub = at()
+  A.push([])
+
+  // ── Class summary ──
+  A.push(['', ...classLabels, 'Sub-Total', vatLabel, 'Total (VAT incl)']); ix.csHead = at()
+  A.push(['QTY (buses)', ...summary.classes.map((c) => c.qty)]); ix.csQty = at()
   const extSub = r2(summary.classes.reduce((s, c) => s + c.external_amt, 0))
   const extVat = r2(extSub * (summary.vat_pct / 100))
   const intSub = r2(summary.classes.reduce((s, c) => s + c.internal_amt, 0))
   const intVat = r2(intSub * (summary.vat_pct / 100))
-
-  A.push(['External mileage (km)', ...summary.classes.map((c) => c.external_km)])
-  A.push(['External amount (USD)', ...summary.classes.map((c) => r2(c.external_amt)), extSub, extVat, r2(extSub + extVat)])
+  A.push(['External mileage (km)', ...summary.classes.map((c) => c.external_km)]); ix.csExtKm = at()
+  A.push(['External amount (USD)', ...summary.classes.map((c) => r2(c.external_amt)), extSub, extVat, r2(extSub + extVat)]); ix.csExtAmt = at()
   if (summary.hasInternal) {
-    A.push(['Internal mileage (km)', ...summary.classes.map((c) => c.internal_km)])
-    A.push(['Internal amount (USD)', ...summary.classes.map((c) => r2(c.internal_amt)), intSub, intVat, r2(intSub + intVat)])
+    A.push(['Internal mileage (km)', ...summary.classes.map((c) => c.internal_km)]); ix.csIntKm = at()
+    A.push(['Internal amount (USD)', ...summary.classes.map((c) => r2(c.internal_amt)), intSub, intVat, r2(intSub + intVat)]); ix.csIntAmt = at()
   }
-  A.push(['Grand total (USD)', ...summary.classes.map(() => ''), r2(summary.subtotal), r2(summary.vat), r2(summary.total)])
+  A.push(['Grand total (USD)', ...summary.classes.map(() => ''), r2(summary.subtotal), r2(summary.vat), r2(summary.total)]); ix.csGrand = at()
   A.push([])
 
-  // Contract rates
-  A.push(['Contract rates (USD/km)'])
+  // ── Contract rates ──
+  A.push(['Contract rates (USD/km)']); ix.ratesTitle = at()
+  A.push(['Seat class', 'Rate (USD/km)']); ix.ratesHead = at()
+  ix.ratesStart = A.length
   summary.classes.forEach((c) => A.push([SEAT_LABEL[c.seat_class], rateFor(rates, c.seat_class)]))
+  ix.ratesEnd = at()
   A.push([])
 
-  // Daily breakdown by bus class — mileage + costed amount per class, per day
-  A.push(['Daily claimable & cost by bus class'])
+  // ── Daily claimable & cost by bus class ──
+  A.push(['Daily claimable & cost by bus class']); ix.dcTitle = at()
   const dcHead: any[] = ['Date']
   summary.classes.forEach((c) => { if (summary.hasInternal) dcHead.push(`${SEAT_LABEL[c.seat_class]} Int`, `${SEAT_LABEL[c.seat_class]} Ext`); else dcHead.push(`${SEAT_LABEL[c.seat_class]} Ext`) })
   dcHead.push('Claimable km')
   summary.classes.forEach((c) => dcHead.push(`${SEAT_LABEL[c.seat_class]} (USD)`))
   dcHead.push('Day Total (USD)')
-  A.push(dcHead)
+  A.push(dcHead); ix.dcHead = at()
+  ix.dcStart = A.length
   summary.dailyByClass.forEach((row) => {
     const r: any[] = [row.date]
     summary.classes.forEach((c) => { const cell = row.byClass[c.seat_class]; if (summary.hasInternal) r.push(cell?.internal ?? 0, cell?.external ?? 0); else r.push(cell?.external ?? 0) })
@@ -154,61 +193,129 @@ export function exportWorkbook(opts: {
     r.push(r2(row.amount))
     A.push(r)
   })
+  ix.dcEnd = at()
   const dcTot: any[] = ['Month Total']
   summary.classes.forEach((c) => { if (summary.hasInternal) dcTot.push(c.internal_km, c.external_km); else dcTot.push(c.external_km) })
   dcTot.push(summary.total_km)
   summary.classes.forEach((c) => dcTot.push(r2(c.subtotal)))
   dcTot.push(r2(summary.subtotal))
-  A.push(dcTot)
+  A.push(dcTot); ix.dcTot = at()
+  const dcW = dcHead.length
   A.push([])
 
-  // Daily grid
+  // ── Daily mileage by bus ──
   const fleetCols = summary.fleets.map((f) => f.fleet_no)
-  A.push(['Date', ...fleetCols, 'Internal', 'External', 'Claimable km', 'Amount (USD)'])
-  summary.days.forEach((d) => {
-    A.push([d.date, ...fleetCols.map((f) => d.perFleet[f] ?? 0), d.internal, d.external, d.claimable, r2(d.amount)])
-  })
+  const gridW = 1 + fleetCols.length + 4
+  A.push(['Daily mileage by bus']); ix.gridTitle = at()
+  A.push(['Date', ...fleetCols, 'Internal', 'External', 'Claimable km', 'Amount (USD)']); ix.gridHead = at()
+  ix.gridStart = A.length
+  summary.days.forEach((d) => A.push([d.date, ...fleetCols.map((f) => d.perFleet[f] ?? 0), d.internal, d.external, d.claimable, r2(d.amount)]))
+  ix.gridEnd = at()
   const fleetTotals = fleetCols.map((f) => summary.days.reduce((s, d) => s + (d.perFleet[f] ?? 0), 0))
-  A.push(['Total', ...fleetTotals, summary.internal_km, summary.external_km, summary.total_km, r2(summary.subtotal)])
+  A.push(['Total', ...fleetTotals, summary.internal_km, summary.external_km, summary.total_km, r2(summary.subtotal)]); ix.gridTot = at()
   A.push([])
+
+  // ── Signatures ──
+  A.push(['Authorisation']); ix.sigTitle = at()
+  A.push(['INZU MCS Limited', '', '', `FQM ${branchShort}`]); ix.sigOrg = at()
+  A.push(['Prepared By', sig.inzu_prepared, '', 'Checked By', sig.fqm_checked]); ix.sig1 = at()
+  A.push(['Checked By', sig.inzu_checked, '', 'Approved By', sig.fqm_approved]); ix.sig2 = at()
+  A.push(['Authorised By', sig.inzu_authorised]); ix.sig3 = at()
+  A.push(['Approved By', sig.inzu_approved]); ix.sig4 = at()
+
+  const maxCols = Math.max(csW, dcW, gridW, 5)
+  const ws: any = XS.utils.aoa_to_sheet(A)
+  ws['!ref'] = XS.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: A.length - 1, c: maxCols - 1 } })
+  ws['!cols'] = Array.from({ length: maxCols }, (_, c) => ({ wch: c === 0 ? 26 : 13 }))
+  ws['!rows'] = []; ws['!rows'][ix.title] = { hpt: 26 }; ws['!rows'][ix.sub] = { hpt: 18 }
+  const mrg = (r: number) => ({ s: { r, c: 0 }, e: { r, c: maxCols - 1 } })
+  ws['!merges'] = [mrg(ix.title), mrg(ix.sub), mrg(ix.ratesTitle), mrg(ix.dcTitle), mrg(ix.gridTitle), mrg(ix.sigTitle)]
+
+  // Banner + section bands
+  span(ws, ix.title, 0, maxCols - 1, ST.title)
+  span(ws, ix.sub, 0, maxCols - 1, ST.subtitle)
+  ;[ix.ratesTitle, ix.dcTitle, ix.gridTitle, ix.sigTitle].forEach((r) => span(ws, r, 0, maxCols - 1, ST.section))
+
+  // Class summary
+  span(ws, ix.csHead, 0, csW - 1, ST.header)
+  const csKm = [ix.csExtKm, ...(summary.hasInternal ? [ix.csIntKm] : [])]
+  const csAmt = [ix.csExtAmt, ...(summary.hasInternal ? [ix.csIntAmt] : [])]
+  put(ws, ix.csQty, 0, ST.label); span(ws, ix.csQty, 1, nC, numCell(FMT.int))
+  csKm.forEach((r) => { put(ws, r, 0, ST.label); span(ws, r, 1, nC, numCell(FMT.km)) })
+  csAmt.forEach((r) => { put(ws, r, 0, ST.label); span(ws, r, 1, csW - 1, numCell(FMT.usd)) })
+  put(ws, ix.csGrand, 0, ST.totalLabel); span(ws, ix.csGrand, 1, nC, ST.tint); span(ws, ix.csGrand, nC + 1, csW - 1, totCell(FMT.usd))
+
+  // Contract rates
+  span(ws, ix.ratesHead, 0, 1, ST.header)
+  for (let r = ix.ratesStart; r <= ix.ratesEnd; r++) { put(ws, r, 0, ST.label); put(ws, r, 1, numCell(FMT.rate)) }
+
+  // Daily-by-class column bands
+  const kmC0 = 1, kmC1 = nC * kmCols, claimC = kmC1 + 1, usdC0 = claimC + 1, usdC1 = usdC0 + nC - 1, dayC = dcW - 1
+  span(ws, ix.dcHead, 0, dcW - 1, ST.header)
+  for (let r = ix.dcStart; r <= ix.dcEnd; r++) {
+    put(ws, r, 0, ST.center); span(ws, r, kmC0, kmC1, numCell(FMT.km)); put(ws, r, claimC, numCell(FMT.km)); span(ws, r, usdC0, usdC1, numCell(FMT.usd)); put(ws, r, dayC, numCell(FMT.usd))
+  }
+  put(ws, ix.dcTot, 0, ST.totalLabel); span(ws, ix.dcTot, kmC0, claimC, totCell(FMT.km)); span(ws, ix.dcTot, usdC0, dayC, totCell(FMT.usd))
+
+  // Daily grid column bands
+  const nF = fleetCols.length, gInt = 1 + nF, gExt = gInt + 1, gClaim = gExt + 1, gAmt = gridW - 1
+  span(ws, ix.gridHead, 0, gridW - 1, ST.header)
+  for (let r = ix.gridStart; r <= ix.gridEnd; r++) {
+    put(ws, r, 0, ST.center); span(ws, r, 1, gClaim, numCell(FMT.km)); put(ws, r, gAmt, numCell(FMT.usd))
+  }
+  put(ws, ix.gridTot, 0, ST.totalLabel); span(ws, ix.gridTot, 1, gClaim, totCell(FMT.km)); put(ws, ix.gridTot, gAmt, totCell(FMT.usd))
 
   // Signatures
-  A.push([`INZU MCS Limited`, '', '', `FQM ${branchShort}`])
-  A.push(['Prepared By', sig.inzu_prepared, '', 'Checked By', sig.fqm_checked])
-  A.push(['Checked By', sig.inzu_checked, '', 'Approved By', sig.fqm_approved])
-  A.push(['Authorised By', sig.inzu_authorised])
-  A.push(['Approved By', sig.inzu_approved])
+  put(ws, ix.sigOrg, 0, ST.orgL); put(ws, ix.sigOrg, 3, ST.orgL)
+  ;[ix.sig1, ix.sig2, ix.sig3, ix.sig4].forEach((r) => { put(ws, r, 0, ST.sigLbl); put(ws, r, 1, ST.sigName); put(ws, r, 3, ST.sigLbl); put(ws, r, 4, ST.sigName) })
 
-  const ws = XLSX.utils.aoa_to_sheet(A)
-  ws['!cols'] = [{ wch: 26 }, ...fleetCols.map(() => ({ wch: 11 })), { wch: 12 }, { wch: 12 }, { wch: 13 }, { wch: 14 }]
-  XLSX.utils.book_append_sheet(wb, ws, 'Summary')
+  XS.utils.book_append_sheet(wb, ws, 'Summary')
 
   // ── Per-vehicle movement sheets ──
   summary.fleets.forEach((f) => {
     const sheet = vehicleSheet(trips, f.fleet_no)
+    const vW = 1 + SHIFTS.length * 3 + 1
     const V: any[][] = []
-    V.push([`${f.fleet_no} — ${f.vehicle_reg}`, `${SEAT_LABEL[f.seat_class]}`, project])
+    V.push([`${f.fleet_no} — ${f.vehicle_reg} · ${SEAT_LABEL[f.seat_class]} · ${project}`])
     V.push(['Internal Total', sheet.internal, 'External Total', sheet.external, 'Combined Total', sheet.total])
     V.push([])
     const head: any[] = ['Date']
     SHIFTS.forEach((s) => head.push(`${s} Route`, `${s} Int`, `${s} Ext`))
     head.push('Daily Total')
     V.push(head)
+    const vDataStart = V.length
     sheet.days.forEach((d) => {
       const row: any[] = [d.date]
       SHIFTS.forEach((s) => { const x = d.shifts[s]; row.push(x?.route ?? '', x?.internal ?? '', x?.external ?? '') })
       row.push(d.total)
       V.push(row)
     })
-    V.push(['Total', '', '', '', '', '', '', '', '', '', '', '', sheet.total])
-    const vws = XLSX.utils.aoa_to_sheet(V)
-    vws['!cols'] = [{ wch: 12 }, ...SHIFTS.flatMap(() => [{ wch: 22 }, { wch: 7 }, { wch: 7 }]), { wch: 11 }]
-    // sheet name max 31 chars, no special chars
+    const vDataEnd = V.length - 1
+    const totRow: any[] = ['Total']; for (let i = 1; i < vW - 1; i++) totRow.push(''); totRow.push(sheet.total)
+    V.push(totRow); const vTot = V.length - 1
+
+    const vws: any = XS.utils.aoa_to_sheet(V)
+    vws['!ref'] = XS.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: V.length - 1, c: vW - 1 } })
+    vws['!cols'] = [{ wch: 12 }, ...SHIFTS.flatMap(() => [{ wch: 22 }, { wch: 7 }, { wch: 7 }]), { wch: 12 }]
+    vws['!rows'] = []; vws['!rows'][0] = { hpt: 20 }
+    vws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: vW - 1 } }]
+    span(vws, 0, 0, vW - 1, ST.title)
+    // KPI line: label / value pairs
+    ;[0, 2, 4].forEach((c) => { put(vws, 1, c, ST.label) })
+    put(vws, 1, 1, numCell(FMT.km)); put(vws, 1, 3, numCell(FMT.km)); put(vws, 1, 5, totCell(FMT.km))
+    span(vws, 3, 0, vW - 1, ST.header)
+    for (let r = vDataStart; r <= vDataEnd; r++) {
+      put(vws, r, 0, ST.center)
+      SHIFTS.forEach((_s, si) => { const base = 1 + si * 3; put(vws, r, base, ST.left); put(vws, r, base + 1, numCell(FMT.km)); put(vws, r, base + 2, numCell(FMT.km)) })
+      put(vws, r, vW - 1, numCell(FMT.km))
+    }
+    put(vws, vTot, 0, ST.totalLabel); span(vws, vTot, 1, vW - 2, ST.tint); put(vws, vTot, vW - 1, totCell(FMT.km))
+
     const name = f.fleet_no.replace(/[\\/?*[\]:]/g, ' ').slice(0, 31)
-    XLSX.utils.book_append_sheet(wb, vws, name)
+    XS.utils.book_append_sheet(wb, vws, name)
   })
 
-  XLSX.writeFile(wb, `Mileage Report - ${project} (${monthLabel}).xlsx`)
+  XS.writeFile(wb, `Mileage Report - ${project} (${monthLabel}).xlsx`)
 }
 
 /** Fetch an asset and turn it into a data URL so it survives the detached print window. */
