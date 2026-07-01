@@ -3,7 +3,7 @@ import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
   ReferenceLine, ReferenceArea, Legend, CartesianGrid,
 } from 'recharts'
-import { TrendingDown, TrendingUp, Minus, Download, ShieldCheck, AlertTriangle, Trophy, Activity, ShieldAlert } from 'lucide-react'
+import { TrendingDown, TrendingUp, Minus, Download, ShieldCheck, AlertTriangle, Trophy, Activity, ShieldAlert, FileText } from 'lucide-react'
 import { useAuth } from '@/auth/AuthContext'
 import { ROLES, BRANCHES } from '@/lib/roles'
 import KpiCard from '@/components/ui/KpiCard'
@@ -13,6 +13,8 @@ import { useSpeedGeo } from '@/lib/speed/geo'
 import { useVehicles } from '@/lib/fleet/store'
 import { useDrivers } from '@/lib/drivers/store'
 import { computeSpeedAnalytics } from '@/lib/speed/analytics'
+import SpeedHotspotMap from '@/components/speed/SpeedHotspotMap'
+import { exportSpeedPdf, svgToPng } from '@/lib/speed/pdf'
 import { overBy, offenceNumberInBand, penaltyFor, countsAgainstDriver, isGlitch, ZONE_META, monthKey, monthLabel } from '@/lib/speed/types'
 import { exportEvents } from '@/lib/speed/excel'
 
@@ -40,18 +42,23 @@ export default function SpeedOverview() {
   const vehicles = useVehicles()
   const drivers = useDrivers().filter((d) => d.branch === branch)
 
-  // Month selector — months that have data for this branch, latest first.
+  // Month selector — months that have data for this branch, latest first. The
+  // current calendar month is offered too, but the default lands on the newest
+  // month that actually HAS data, so on the 1st the overview doesn't open empty.
+  const dataMonths = useMemo(
+    () => [...new Set(allEvents.filter((e) => e.branch === branch).map((e) => monthKey(e.event_datetime)))].sort().reverse(),
+    [allEvents, branch],
+  )
   const monthOptions = useMemo(() => {
-    const keys = new Set(allEvents.filter((e) => e.branch === branch).map((e) => monthKey(e.event_datetime)))
     const now = new Date()
-    keys.add(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`)
-    return [...keys].sort().reverse()
-  }, [allEvents, branch])
-  // Two-month comparison. "Compare" = month under review (defaults to the
-  // latest), "vs" = baseline (defaults to the month before it).
+    const cur = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+    return [...new Set([cur, ...dataMonths])].sort().reverse()
+  }, [dataMonths])
+  // Two-month comparison. "Compare" = month under review (defaults to the newest
+  // with data), "vs" = baseline (defaults to the month before it).
   const [cmpKey, setCmpKey] = useState('')
   const [baseKey, setBaseKey] = useState('')
-  const effCmp = monthOptions.includes(cmpKey) ? cmpKey : monthOptions[0]
+  const effCmp = monthOptions.includes(cmpKey) ? cmpKey : (dataMonths[0] ?? monthOptions[0])
   // monthOptions is latest-first, so the month right after effCmp in the list
   // is the chronologically previous one — the natural baseline.
   const effBase = monthOptions.includes(baseKey)
@@ -86,34 +93,86 @@ export default function SpeedOverview() {
       .filter((x): x is { e: typeof x.e; g: NonNullable<typeof x.g> } => !!x.g && (x.g.lat !== 0 || x.g.lng !== 0)),
     [allEvents, branch, effCmp, geo],
   )
+  const [geoBus, setGeoBus] = useState('all')
+  const geoBuses = useMemo(() => [...new Set(geoPts.map((p) => p.e.vehicle_label))].sort((x, y) => x.localeCompare(y, undefined, { numeric: true })), [geoPts])
+  const fgeoPts = useMemo(() => (geoBus === 'all' ? geoPts : geoPts.filter((p) => p.e.vehicle_label === geoBus)), [geoPts, geoBus])
+  const heatPoints = useMemo(
+    () => fgeoPts.map(({ e, g }) => ({ lat: g.lat, lng: g.lng, weight: Math.min(1, overBy(e) / 30), label: `${e.vehicle_label} · ${e.event_datetime.slice(0, 16).replace('T', ' ')} · +${overBy(e)} km/h · ${e.route || ''}` })),
+    [fgeoPts],
+  )
   const hotspots = useMemo(() => {
     const m = new Map<string, { name: string; count: number; overSum: number; buses: Set<string> }>()
-    for (const { e } of geoPts) {
+    for (const { e } of fgeoPts) {
       const key = e.route || 'Unknown location'
       const c = m.get(key) ?? { name: key, count: 0, overSum: 0, buses: new Set<string>() }
       c.count++; c.overSum += overBy(e); c.buses.add(e.vehicle_label)
       m.set(key, c)
     }
     return [...m.values()].map((h) => ({ name: h.name, count: h.count, avgOver: Math.round(h.overSum / h.count), buses: h.buses.size })).sort((x, y) => y.count - x.count)
-  }, [geoPts])
-  const bounds = useMemo(() => {
-    if (geoPts.length === 0) return null
-    const lats = geoPts.map((p) => p.g.lat), lngs = geoPts.map((p) => p.g.lng)
-    return { minLat: Math.min(...lats), maxLat: Math.max(...lats), minLng: Math.min(...lngs), maxLng: Math.max(...lngs) }
-  }, [geoPts])
+  }, [fgeoPts])
   const peakHour = useMemo(() => {
     const h = new Array(24).fill(0)
-    for (const { e } of geoPts) h[Number(e.event_datetime.slice(11, 13))]++
+    for (const { e } of fgeoPts) h[Number(e.event_datetime.slice(11, 13))]++
     let best = 0
     for (let i = 1; i < 24; i++) if (h[i] > h[best]) best = i
     return { hour: best, count: h[best] }
-  }, [geoPts])
+  }, [fgeoPts])
   const topGeoBus = useMemo(() => {
     const m = new Map<string, number>()
     for (const { e } of geoPts) m.set(e.vehicle_label, (m.get(e.vehicle_label) || 0) + 1)
     const arr = [...m.entries()].sort((a2, b2) => b2[1] - a2[1])
     return arr[0] ? { fleet: arr[0][0], count: arr[0][1] } : null
   }, [geoPts])
+
+  // ── Stakeholder PDF (verdict + KPIs + charts + hotspots + offenders) ──
+  const [exporting, setExporting] = useState(false)
+  async function exportPdf() {
+    setExporting(true)
+    try {
+      const specs: [string, string][] = [
+        ['spd-chart-trend', 'Events per month'],
+        ['spd-chart-rate', 'Speeding per bus, per day'],
+        ['spd-chart-hourly', 'Hourly pattern'],
+        ['spd-chart-zone', 'Where it happens — by speed zone'],
+      ]
+      const charts: { title: string; dataUrl: string; w: number; h: number }[] = []
+      for (const [id, title] of specs) {
+        const svg = document.getElementById(id)?.querySelector('svg') as SVGSVGElement | null
+        if (!svg) continue
+        const png = await svgToPng(svg)
+        if (png) charts.push({ title, ...png })
+      }
+      const verdict = a.same
+        ? `Speeding held steady in ${a.thisLabel}: ${a.rateThis.toFixed(2)} events per bus per day, unchanged from ${a.lastLabel}.`
+        : a.improving
+          ? `Speeding improved ${Math.abs(a.ratePct)}% in ${a.thisLabel}: ${a.rateThis.toFixed(2)} events per bus per day, down from ${a.rateLast.toFixed(2)} in ${a.lastLabel}.`
+          : `Speeding deteriorated ${a.ratePct}% in ${a.thisLabel}: ${a.rateThis.toFixed(2)} events per bus per day, up from ${a.rateLast.toFixed(2)} in ${a.lastLabel}.`
+      const suggestions: string[] = []
+      if (hotspots[0]) suggestions.push(`${hotspots[0].name} is the worst location (${hotspots[0].count} events) — prioritise signage and enforcement there.`)
+      if (peakHour.count > 0) suggestions.push(`Most breaches cluster around ${String(peakHour.hour).padStart(2, '0')}:00 — brief crews before that window.`)
+      if (topGeoBus) suggestions.push(`${topGeoBus.fleet} triggered the most events (${topGeoBus.count}) — focus coaching and review its route.`)
+      if (repeatOffenders.length) suggestions.push(`${repeatOffenders.length} repeat offender${repeatOffenders.length === 1 ? '' : 's'} — hold counselling sessions and apply the penalty ladder consistently.`)
+      exportSpeedPdf({
+        branchLabel,
+        periodLabel: `${a.thisLabel} vs ${a.lastLabel}`,
+        generated: new Date().toLocaleDateString('en', { day: '2-digit', month: 'short', year: 'numeric' }),
+        verdict,
+        kpis: [
+          { label: 'Speeding / bus / day', value: a.rateThis.toFixed(2), sub: `vs ${a.rateLast.toFixed(2)} last` },
+          { label: 'Valid events', value: String(a.countThis), sub: a.thisLabel },
+          { label: 'Avg over limit', value: `${a.avgSevThis.toFixed(1)} km/h`, sub: 'severity' },
+          { label: 'Repeat offenders', value: String(repeatOffenders.length), sub: '2+ events' },
+          { label: 'Buses speeding more', value: `${a.busesWorse}/${a.activeBuses}`, sub: `${a.busesImproved} improved` },
+          { label: 'Fines this month', value: `K${finesThisMonth.toLocaleString()}`, sub: 'confirmed' },
+        ],
+        charts,
+        hotspots: hotspots.slice(0, 8),
+        offenders: offence.slice(0, 8),
+        suggestions,
+        filename: `INZU_Speeding_Report_${branchLabel}_${a.thisKey}.pdf`,
+      })
+    } finally { setExporting(false) }
+  }
 
   const TrendIcon = a.same ? Minus : a.improving ? TrendingDown : TrendingUp
   const trendColor = a.same ? 'text-status-neutral' : a.improving ? 'text-status-good' : 'text-status-critical'
@@ -144,6 +203,7 @@ export default function SpeedOverview() {
           >
             {monthOptions.map((k) => <option key={k} value={k}>{monthLabel(k)}</option>)}
           </select>
+          <Button variant="secondary" onClick={exportPdf} disabled={exporting}><FileText size={15} /> {exporting ? 'Preparing…' : 'PDF report'}</Button>
           <Button variant="secondary" onClick={() => exportEvents(allEvents.filter((e) => e.branch === branch), branchLabel)}><Download size={15} /> Export</Button>
         </div>
       </div>
@@ -185,7 +245,7 @@ export default function SpeedOverview() {
       {/* Trend + normalized rate */}
       <div className="grid gap-4 lg:grid-cols-[1.6fr_1fr]">
         <Card title="Events per month" subtitle={`Raw valid events — ${a.thisLabel} (navy) and ${a.lastLabel} (orange) highlighted`}>
-          <div className="h-56">
+          <div id="spd-chart-trend" className="h-56">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={a.trend} margin={{ top: 8, right: 8, bottom: 0, left: -20 }}>
                 <CartesianGrid stroke={GRID} vertical={false} />
@@ -201,7 +261,7 @@ export default function SpeedOverview() {
         </Card>
 
         <Card title="Speeding per bus, per day" subtitle="The fair month-to-month number — adjusts for how many buses ran, so a bigger fleet isn't penalised.">
-          <div className="h-56">
+          <div id="spd-chart-rate" className="h-56">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={[{ name: a.lastLabel, rate: +a.rateLast.toFixed(2) }, { name: a.thisLabel, rate: +a.rateThis.toFixed(2) }]} margin={{ top: 8, right: 8, bottom: 0, left: -20 }}>
                 <CartesianGrid stroke={GRID} vertical={false} />
@@ -235,7 +295,7 @@ export default function SpeedOverview() {
         </Card>
 
         <Card title="Hourly pattern" subtitle="Shaded = shift-change windows (05–07, 17–19) — the usual hotspots">
-          <div className="h-52">
+          <div id="spd-chart-hourly" className="h-52">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={a.hourly} margin={{ top: 8, right: 10, bottom: 0, left: -22 }}>
                 <CartesianGrid stroke={GRID} vertical={false} />
@@ -272,7 +332,7 @@ export default function SpeedOverview() {
         </Card>
 
         <Card title="Where it happens — by speed zone" subtitle="Open-road breaches (>80) carry more risk than slow site-zone ones">
-          <div className="h-52">
+          <div id="spd-chart-zone" className="h-52">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={a.zoneMix} layout="vertical" margin={{ top: 8, right: 10, bottom: 0, left: 6 }}>
                 <XAxis type="number" tick={{ fontSize: 11, fill: '#6B7280' }} axisLine={false} tickLine={false} allowDecimals={false} />
@@ -336,34 +396,30 @@ export default function SpeedOverview() {
         </div>
       </div>
 
-      {/* Where it's happening — coordinate hotspots */}
+      {/* Where it's happening — coordinate hotspot map */}
       {geoPts.length > 0 && (
-        <Card title="Where it's happening — hotspot map" subtitle={`${geoPts.length} located speeding events in ${a.thisLabel}. Redder points are further over the limit.`}>
-          <div className="grid gap-4 lg:grid-cols-[1.5fr_1fr]">
-            <div className="rounded-lg border border-black/10 bg-canvas/40 p-1">
-              <svg viewBox="0 0 560 300" className="h-64 w-full">
-                {(() => {
-                  const W = 560, H = 300, pad = 18, b = bounds!
-                  const sx = (b.maxLng - b.minLng) || 1, sy = (b.maxLat - b.minLat) || 1
-                  const col = (o: number) => (o >= 20 ? '#B3261E' : o >= 10 ? '#C9A227' : '#0F1B33')
-                  return geoPts.map(({ e, g }, i) => {
-                    const x = pad + ((g.lng - b.minLng) / sx) * (W - 2 * pad)
-                    const y = pad + ((b.maxLat - g.lat) / sy) * (H - 2 * pad)
-                    return <circle key={i} cx={x} cy={y} r={4} fill={col(overBy(e))} fillOpacity={0.5} />
-                  })
-                })()}
-              </svg>
-            </div>
+        <Card title="Where it's happening — hotspot map" subtitle={`${fgeoPts.length} located speeding event${fgeoPts.length === 1 ? '' : 's'}${geoBus === 'all' ? '' : ` for ${geoBus}`} in ${a.thisLabel}. Warmer areas = more speeding.`}>
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <span className="text-xs text-status-neutral">Filter by bus</span>
+            <select value={geoBus} onChange={(e) => setGeoBus(e.target.value)} className="rounded-lg border border-black/15 bg-white px-3 py-1.5 text-sm font-medium text-navy outline-none focus:border-brand">
+              <option value="all">All buses ({geoPts.length})</option>
+              {geoBuses.map((b) => <option key={b} value={b}>{b}</option>)}
+            </select>
+            {geoBus !== 'all' && <button onClick={() => setGeoBus('all')} className="text-xs text-brand hover:underline">clear</button>}
+          </div>
+          <div className="grid gap-4 lg:grid-cols-[1.6fr_1fr]">
+            <SpeedHotspotMap points={heatPoints} />
             <div>
               <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-status-neutral">Top hotspots</div>
-              <div className="max-h-56 space-y-1 overflow-auto pr-1">
-                {hotspots.slice(0, 7).map((h) => (
+              <div className="max-h-64 space-y-1 overflow-auto pr-1">
+                {hotspots.slice(0, 8).map((h) => (
                   <div key={h.name} className="flex items-center gap-2 text-sm">
                     <span className="flex-1 truncate text-navy" title={h.name}>{h.name}</span>
                     <span className="text-[11px] text-status-neutral">{h.buses} bus{h.buses === 1 ? '' : 'es'} · +{h.avgOver}</span>
                     <span className="rounded-full bg-status-critical/10 px-2 py-0.5 text-xs font-bold text-status-critical">{h.count}</span>
                   </div>
                 ))}
+                {hotspots.length === 0 && <p className="py-6 text-center text-sm text-status-neutral">No located events for this bus.</p>}
               </div>
             </div>
           </div>
