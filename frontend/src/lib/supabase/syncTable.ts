@@ -30,25 +30,45 @@ function supabaseTable<T extends { id: string }>({ table }: { table: string; lsK
   let cache: T[] = []
   let hydrating = false
   let started = false
+  let lastHydrateAt = 0
+  // Un-acknowledged local changes: rows written but not yet confirmed by the
+  // server, and ids deleted locally but not yet confirmed. These are what stop a
+  // freshly-entered row from *disappearing*: a full-table hydrate() that lands
+  // while a save is still in flight must not overwrite work the server hasn't
+  // stored yet. (Root cause of the mileage "I have to re-enter it" data loss.)
+  const pending = new Map<string, T>()
+  const tombstoned = new Set<string>()
   const listeners = new Set<() => void>()
   const emit = () => listeners.forEach((l) => l())
+
+  // Merge server rows with any un-acknowledged local writes/deletes, so a reload
+  // never drops data that simply hasn't finished saving.
+  function reconcile(serverRows: T[]): T[] {
+    if (pending.size === 0 && tombstoned.size === 0) return serverRows
+    const byId = new Map(serverRows.map((r) => [r.id, r]))
+    for (const [id, row] of pending) byId.set(id, row) // local write wins until the server echoes it back
+    for (const id of tombstoned) byId.delete(id)        // keep local deletes until confirmed
+    return [...byId.values()]
+  }
 
   async function hydrate() {
     hydrating = true
     const { data, error } = await db.from(table).select('*')
     hydrating = false
-    if (!error && data) { cache = data as T[]; emit() }
+    lastHydrateAt = Date.now()
+    if (!error && data) { cache = reconcile(data as T[]); emit() }
     else if (error) console.error(`[sync:${table}] load failed:`, error.message)
   }
 
   function applyRealtime(payload: { eventType: string; new: Partial<T>; old: Partial<T> }) {
     if (payload.eventType === 'DELETE') {
       const id = payload.old?.id
-      if (id != null) { cache = cache.filter((r) => r.id !== id); emit() }
+      if (id != null) { tombstoned.delete(id); cache = cache.filter((r) => r.id !== id); emit() }
       return
     }
     const row = payload.new as T
     if (!row || row.id == null) return
+    pending.delete(row.id) // the server just echoed this row — our optimistic write is confirmed
     cache = cache.some((r) => r.id === row.id) ? cache.map((r) => (r.id === row.id ? row : r)) : [...cache, row]
     emit()
   }
@@ -59,7 +79,7 @@ function supabaseTable<T extends { id: string }>({ table }: { table: string; lsK
     // Re-load whenever we have an authenticated session; clear on sign-out.
     db.auth.onAuthStateChange((_e, session) => {
       if (session) void hydrate()
-      else { cache = []; emit() }
+      else { cache = []; pending.clear(); tombstoned.clear(); emit() }
     })
     // Live updates from other users / devices.
     db.channel(`rt-${table}`)
@@ -72,19 +92,37 @@ function supabaseTable<T extends { id: string }>({ table }: { table: string; lsK
     const prevById = new Map(prev.map((r) => [r.id, r]))
     const toUpsert = next.filter((r) => prevById.get(r.id) !== r) // new or changed (reference differs)
     const toDelete = prev.filter((r) => !nextIds.has(r.id)).map((r) => r.id)
+    // Register the optimistic change so a hydrate racing this save can't undo it.
+    for (const r of toUpsert) pending.set(r.id, r)
+    for (const id of toDelete) { tombstoned.add(id); pending.delete(id) }
     try {
       if (toUpsert.length) { const { error } = await db.from(table).upsert(toUpsert as any); if (error) throw error }
       if (toDelete.length) { const { error } = await db.from(table).delete().in('id', toDelete); if (error) throw error }
+      // Saved — release the optimistic bookkeeping (unless a newer edit replaced it).
+      for (const r of toUpsert) if (pending.get(r.id) === r) pending.delete(r.id)
+      for (const id of toDelete) tombstoned.delete(id)
     } catch (e) {
       console.error(`[sync:${table}] save failed, resyncing:`, (e as Error).message)
-      void hydrate() // revert optimistic state to server truth
+      // Genuine failure (e.g. a column the live DB doesn't have): drop the optimistic
+      // bookkeeping and fall back to server truth so bad data doesn't linger.
+      for (const r of toUpsert) if (pending.get(r.id) === r) pending.delete(r.id)
+      for (const id of toDelete) tombstoned.delete(id)
+      void hydrate()
     }
   }
 
   return {
     load: () => { start(); return cache },
     commit: (next) => { const prev = cache; cache = next; emit(); void persist(prev, next) },
-    subscribe: (cb) => { start(); if (!hydrating) void hydrate(); listeners.add(cb); return () => listeners.delete(cb) },
+    // Refresh on mount, but at most once every few seconds. Many components
+    // subscribing at once shouldn't each fire a full-table reload — that only
+    // widens the save/refresh race. Realtime keeps the cache live between refreshes.
+    subscribe: (cb) => {
+      start()
+      if (!hydrating && Date.now() - lastHydrateAt > 4000) void hydrate()
+      listeners.add(cb)
+      return () => listeners.delete(cb)
+    },
   }
 }
 
@@ -110,6 +148,8 @@ function supabaseConfig<T>({ key, default: def, merge }: { key: string; lsKey: s
   let cache: T = def
   let started = false
   let hydrating = false
+  let lastHydrateAt = 0
+  let saving = 0 // in-flight set() saves; while > 0 a hydrate must not clobber the local value
   const listeners = new Set<() => void>()
   const emit = () => listeners.forEach((l) => l())
   const apply = (saved: T | null | undefined) => { cache = saved == null ? def : (merge ? merge(saved) : saved); emit() }
@@ -118,6 +158,8 @@ function supabaseConfig<T>({ key, default: def, merge }: { key: string; lsKey: s
     hydrating = true
     const { data, error } = await db.from(CONFIG_TABLE).select('value').eq('key', key).maybeSingle()
     hydrating = false
+    lastHydrateAt = Date.now()
+    if (saving > 0) return // an unsaved local change is in flight — don't overwrite it with stale server state
     if (!error) apply((data?.value as T) ?? null)
     else console.error(`[config:${key}] load failed:`, error.message)
   }
@@ -133,9 +175,18 @@ function supabaseConfig<T>({ key, default: def, merge }: { key: string; lsKey: s
     get: () => { start(); return cache },
     set: (value) => {
       cache = value; emit()
-      void db.from(CONFIG_TABLE).upsert({ key, value }).then(({ error }: { error: unknown }) => { if (error) { console.error(`[config:${key}] save failed`); void hydrate() } })
+      saving++
+      void db.from(CONFIG_TABLE).upsert({ key, value }).then(({ error }: { error: unknown }) => {
+        saving = Math.max(0, saving - 1)
+        if (error) { console.error(`[config:${key}] save failed`); if (saving === 0) void hydrate() }
+      })
     },
-    subscribe: (cb) => { start(); if (!hydrating) void hydrate(); listeners.add(cb); return () => listeners.delete(cb) },
+    subscribe: (cb) => {
+      start()
+      if (!hydrating && Date.now() - lastHydrateAt > 4000) void hydrate()
+      listeners.add(cb)
+      return () => listeners.delete(cb)
+    },
   }
 }
 
