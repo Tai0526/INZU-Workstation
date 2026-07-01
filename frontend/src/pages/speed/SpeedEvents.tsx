@@ -10,7 +10,7 @@ import SpeedEventModal from '@/components/speed/SpeedEventModal'
 import SpeedImportModal from '@/components/speed/SpeedImportModal'
 import { useSpeedEvents, speedStore } from '@/lib/speed/store'
 import { useCases, CASE_STAGE_META } from '@/lib/safety/cases'
-import { type SpeedEvent, type SpeedStatus, STATUS_META, overBy, countsAgainstDriver, offenceNumberInBand, penaltyFor, penaltyTone, penaltyLabel } from '@/lib/speed/types'
+import { type SpeedEvent, type SpeedStatus, STATUS_META, overBy, countsAgainstDriver, offenceNumberInBand, penaltyFor, penaltyTone, penaltyLabel, monthKey, monthLabel } from '@/lib/speed/types'
 
 const PENALTY_TEXT: Record<string, string> = {
   critical: 'text-status-critical', warning: 'text-[#8a6d10]', good: 'text-status-good', neutral: 'text-status-neutral',
@@ -31,8 +31,16 @@ export default function SpeedEvents() {
   const [editing, setEditing] = useState<SpeedEvent | null>(null)
   const [modalOpen, setModalOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
+  const [month, setMonth] = useState('all')
+  const [vehicle, setVehicle] = useState('all')
+  const [driver, setDriver] = useState('all')
 
   const branchEvents = useMemo(() => all.filter((e) => e.branch === branch), [all, branch])
+
+  // Filter options, derived from the branch's events.
+  const months = useMemo(() => [...new Set(branchEvents.map((e) => monthKey(e.event_datetime)))].sort().reverse(), [branchEvents])
+  const vehicleOpts = useMemo(() => [...new Set(branchEvents.map((e) => e.vehicle_label).filter(Boolean))].sort((x, y) => x.localeCompare(y, undefined, { numeric: true })), [branchEvents])
+  const driverOpts = useMemo(() => [...new Set(branchEvents.map((e) => e.driver_name).filter(Boolean))].sort(), [branchEvents])
 
   const cases = useCases()
   const caseByEvent = useMemo(() => {
@@ -50,15 +58,27 @@ export default function SpeedEvents() {
     }
   }, [branchEvents, caseByEvent])
 
+  // Everything matching the month/bus/driver/search filters (but not status) —
+  // drives both the status chips (so their counts reflect the current view) and
+  // the table (which then also applies the status filter).
+  const scoped = useMemo(() => {
+    const term = q.trim().toLowerCase()
+    return branchEvents
+      .filter((e) => month === 'all' || monthKey(e.event_datetime) === month)
+      .filter((e) => vehicle === 'all' || e.vehicle_label === vehicle)
+      .filter((e) => driver === 'all' || e.driver_name === driver)
+      .filter((e) => !term || [e.driver_name, e.vehicle_label, e.route].some((f) => f.toLowerCase().includes(term)))
+  }, [branchEvents, q, month, vehicle, driver])
+
   const counts = useMemo(() => ({
-    total: branchEvents.length,
-    pending: branchEvents.filter((e) => e.status === 'pending').length,
-    flagged: branchEvents.filter((e) => e.status === 'flagged').length,
-    confirmed: branchEvents.filter((e) => e.status === 'confirmed').length,
-    disputed: branchEvents.filter((e) => e.status === 'disputed').length,
-    dismissed: branchEvents.filter((e) => e.status === 'dismissed').length,
-    closed: branchEvents.filter((e) => e.status === 'closed').length,
-  }), [branchEvents])
+    total: scoped.length,
+    pending: scoped.filter((e) => e.status === 'pending').length,
+    flagged: scoped.filter((e) => e.status === 'flagged').length,
+    confirmed: scoped.filter((e) => e.status === 'confirmed').length,
+    disputed: scoped.filter((e) => e.status === 'disputed').length,
+    dismissed: scoped.filter((e) => e.status === 'dismissed').length,
+    closed: scoped.filter((e) => e.status === 'closed').length,
+  }), [scoped])
 
   // Per-driver offence tally (counts against = flagged/confirmed) for repeat flags.
   const offenceCount = useMemo(() => {
@@ -71,13 +91,12 @@ export default function SpeedEvents() {
     return m
   }, [branchEvents])
 
-  const rows = useMemo(() => {
-    const term = q.trim().toLowerCase()
-    return branchEvents
+  const rows = useMemo(
+    () => scoped
       .filter((e) => statusFilter === 'all' || e.status === statusFilter)
-      .filter((e) => !term || [e.driver_name, e.vehicle_label, e.route].some((f) => f.toLowerCase().includes(term)))
-      .sort((a, b) => b.event_datetime.localeCompare(a.event_datetime))
-  }, [branchEvents, q, statusFilter])
+      .sort((a, b) => b.event_datetime.localeCompare(a.event_datetime)),
+    [scoped, statusFilter],
+  )
 
   function openAdd() { setEditing(null); setModalOpen(true) }
   function openRow(e: SpeedEvent) { setEditing(e); setModalOpen(true) }
@@ -110,15 +129,32 @@ export default function SpeedEvents() {
       />
 
       <div className="flex flex-wrap items-center gap-2">
-        <div className="relative flex-1 min-w-[200px]">
+        <div className="relative min-w-[170px] flex-1">
           <Search size={15} className="pointer-events-none absolute left-3 top-2.5 text-status-neutral" />
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search driver, vehicle, route…"
             className="w-full rounded-lg border border-black/15 bg-white py-2 pl-9 pr-3 text-sm text-navy outline-none focus:border-brand" />
         </div>
+        <select value={month} onChange={(e) => setMonth(e.target.value)} className="rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand">
+          <option value="all">All months</option>
+          {months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+        </select>
+        <select value={vehicle} onChange={(e) => setVehicle(e.target.value)} className="rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand">
+          <option value="all">All buses</option>
+          {vehicleOpts.map((v) => <option key={v} value={v}>{v}</option>)}
+        </select>
+        <select value={driver} onChange={(e) => setDriver(e.target.value)} className="rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand">
+          <option value="all">All drivers</option>
+          {driverOpts.map((d) => <option key={d} value={d}>{d}</option>)}
+        </select>
         <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as any)} className="rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand">
           <option value="all">All statuses</option>
           {(Object.keys(STATUS_META) as SpeedStatus[]).map((s) => <option key={s} value={s}>{STATUS_META[s].label}</option>)}
         </select>
+        {(month !== 'all' || vehicle !== 'all' || driver !== 'all' || statusFilter !== 'all' || q) && (
+          <button onClick={() => { setMonth('all'); setVehicle('all'); setDriver('all'); setStatusFilter('all'); setQ('') }}
+            className="rounded-lg border border-black/15 px-3 py-2 text-sm text-status-neutral hover:text-navy">Clear</button>
+        )}
+        <span className="ml-auto text-xs text-status-neutral">{rows.length} shown</span>
       </div>
 
       <div className="card overflow-hidden">
