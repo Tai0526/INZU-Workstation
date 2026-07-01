@@ -90,12 +90,29 @@ function supabaseTable<T extends { id: string }>({ table, lsKey }: { table: stri
     return [...byId.values()]
   }
 
+  // Fetch every row, paging past PostgREST's 1000-row response cap. mileage_trips
+  // alone runs to several thousand rows a month (per bus × day × shift), so a plain
+  // select('*') silently returned only the first 1000 — some vehicles' movements
+  // were in the database but never reached the app, and monthly totals undercounted.
+  async function fetchAll(): Promise<{ rows: T[] | null; error: { message: string } | null }> {
+    const PAGE = 1000
+    const all: T[] = []
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await db.from(table).select('*').order('id', { ascending: true }).range(from, from + PAGE - 1)
+      if (error) return { rows: null, error }
+      const batch = (data ?? []) as T[]
+      all.push(...batch)
+      if (batch.length < PAGE) break // last page
+    }
+    return { rows: all, error: null }
+  }
+
   async function hydrate() {
     hydrating = true
-    const { data, error } = await db.from(table).select('*')
+    const { rows, error } = await fetchAll()
     hydrating = false
     lastHydrateAt = Date.now()
-    if (!error && data) { cache = reconcile(data as T[]); emit(); void flush() }
+    if (!error && rows) { cache = reconcile(rows); emit(); void flush() }
     else if (error) console.error(`[sync:${table}] load failed:`, error.message)
   }
 
