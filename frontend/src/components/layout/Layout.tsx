@@ -3,6 +3,7 @@ import { Outlet, Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from '@/auth/AuthContext'
 import { reconcileVehicleDocBranches } from '@/lib/fleet/store'
 import ErrorBoundary from '@/components/ErrorBoundary'
+import SyncStatus from '@/components/SyncStatus'
 import Sidebar from './Sidebar'
 import Topbar from './Topbar'
 
@@ -60,6 +61,7 @@ export default function Layout() {
           </ErrorBoundary>
         </main>
       </div>
+      <SyncStatus />
     </div>
   )
 }

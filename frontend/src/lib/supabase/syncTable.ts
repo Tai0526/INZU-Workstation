@@ -25,12 +25,34 @@ export function createSyncTable<T extends { id: string }>(opts: { table: string;
 }
 
 // ── Supabase-backed ─────────────────────────────────────────────────────────
-function supabaseTable<T extends { id: string }>({ table }: { table: string; lsKey: string; seed: T[] }): SyncTable<T> {
+/** Notify the app (a toast/banner listener) that a save could not be completed. */
+function reportSyncError(table: string, message: string) {
+  try { if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('inzu:sync-error', { detail: { table, message } })) } catch { /* noop */ }
+}
+
+/**
+ * Tell a *permanent* rejection (a retry can never succeed — missing column/table,
+ * forbidden by RLS, bad data shape) from a *transient* one (offline, 5xx, timeout,
+ * expired token). Permanent → revert to server truth; transient → keep and retry.
+ */
+function isPermanentError(err: any): boolean {
+  const code = String(err?.code ?? '')
+  const status = Number(err?.status ?? err?.statusCode ?? 0)
+  if (['42703', '42P01', 'PGRST204', 'PGRST205', '42501', '23502', '23503', '23514', '22P02'].includes(code)) return true
+  if ([400, 403, 404, 409, 422].includes(status)) return true
+  return false // network error, 401 (token refresh may fix), 408, 429, 5xx → transient
+}
+
+function supabaseTable<T extends { id: string }>({ table, lsKey }: { table: string; lsKey: string; seed: T[] }): SyncTable<T> {
   const db = supabase!
+  const OUTBOX = `${lsKey}:outbox` // durable copy of un-acknowledged writes/deletes
   let cache: T[] = []
   let hydrating = false
   let started = false
   let lastHydrateAt = 0
+  let flushing = false
+  let flushAgain = false
+  let retryTimer: ReturnType<typeof setTimeout> | null = null
   // Un-acknowledged local changes: rows written but not yet confirmed by the
   // server, and ids deleted locally but not yet confirmed. These are what stop a
   // freshly-entered row from *disappearing*: a full-table hydrate() that lands
@@ -40,6 +62,23 @@ function supabaseTable<T extends { id: string }>({ table }: { table: string; lsK
   const tombstoned = new Set<string>()
   const listeners = new Set<() => void>()
   const emit = () => listeners.forEach((l) => l())
+
+  // ── durable outbox: mirror un-confirmed changes to localStorage so a refresh,
+  //    a closed tab, or a dropped connection can't lose them — they're retried. ──
+  function saveOutbox() {
+    try {
+      if (pending.size === 0 && tombstoned.size === 0) localStorage.removeItem(OUTBOX)
+      else localStorage.setItem(OUTBOX, JSON.stringify({ pending: [...pending.values()], tombstoned: [...tombstoned] }))
+    } catch { /* storage full / unavailable — best effort */ }
+  }
+  function loadOutbox() {
+    try {
+      const raw = localStorage.getItem(OUTBOX); if (!raw) return
+      const o = JSON.parse(raw) as { pending?: T[]; tombstoned?: string[] }
+      for (const r of o.pending ?? []) if (r && (r as any).id != null) pending.set((r as any).id, r)
+      for (const id of o.tombstoned ?? []) tombstoned.add(id)
+    } catch { /* ignore a corrupt outbox */ }
+  }
 
   // Merge server rows with any un-acknowledged local writes/deletes, so a reload
   // never drops data that simply hasn't finished saving.
@@ -56,19 +95,53 @@ function supabaseTable<T extends { id: string }>({ table }: { table: string; lsK
     const { data, error } = await db.from(table).select('*')
     hydrating = false
     lastHydrateAt = Date.now()
-    if (!error && data) { cache = reconcile(data as T[]); emit() }
+    if (!error && data) { cache = reconcile(data as T[]); emit(); void flush() }
     else if (error) console.error(`[sync:${table}] load failed:`, error.message)
+  }
+
+  // Push everything currently un-acknowledged to the server. Coalesces concurrent
+  // calls, and on a transient failure keeps the outbox and schedules a retry.
+  async function flush() {
+    if (flushing) { flushAgain = true; return }
+    if (pending.size === 0 && tombstoned.size === 0) return
+    flushing = true
+    const ups = [...pending.values()]
+    const dels = [...tombstoned]
+    try {
+      if (ups.length) { const { error } = await db.from(table).upsert(ups as any); if (error) throw error }
+      if (dels.length) { const { error } = await db.from(table).delete().in('id', dels); if (error) throw error }
+      for (const r of ups) if (pending.get(r.id) === r) pending.delete(r.id) // keep any newer edit
+      for (const id of dels) tombstoned.delete(id)
+      saveOutbox()
+    } catch (e: any) {
+      if (isPermanentError(e)) {
+        console.error(`[sync:${table}] save rejected, reverting:`, e?.message ?? e)
+        for (const r of ups) if (pending.get(r.id) === r) pending.delete(r.id)
+        for (const id of dels) tombstoned.delete(id)
+        saveOutbox()
+        reportSyncError(table, e?.message ?? 'save rejected')
+        void hydrate() // fall back to server truth so bad data doesn't linger
+      } else {
+        console.warn(`[sync:${table}] save deferred, will retry:`, e?.message ?? e)
+        reportSyncError(table, `Couldn't reach the server — your entry is saved locally and will sync automatically.`)
+        if (retryTimer) clearTimeout(retryTimer)
+        retryTimer = setTimeout(() => void flush(), 5000) // retry while idle/offline
+      }
+    } finally {
+      flushing = false
+      if (flushAgain) { flushAgain = false; void flush() }
+    }
   }
 
   function applyRealtime(payload: { eventType: string; new: Partial<T>; old: Partial<T> }) {
     if (payload.eventType === 'DELETE') {
       const id = payload.old?.id
-      if (id != null) { tombstoned.delete(id); cache = cache.filter((r) => r.id !== id); emit() }
+      if (id != null) { tombstoned.delete(id); saveOutbox(); cache = cache.filter((r) => r.id !== id); emit() }
       return
     }
     const row = payload.new as T
     if (!row || row.id == null) return
-    pending.delete(row.id) // the server just echoed this row — our optimistic write is confirmed
+    if (pending.delete(row.id)) saveOutbox() // the server just echoed this row — our write is confirmed
     cache = cache.some((r) => r.id === row.id) ? cache.map((r) => (r.id === row.id ? row : r)) : [...cache, row]
     emit()
   }
@@ -76,10 +149,13 @@ function supabaseTable<T extends { id: string }>({ table }: { table: string; lsK
   function start() {
     if (started) return
     started = true
-    // Re-load whenever we have an authenticated session; clear on sign-out.
+    loadOutbox()
+    if (pending.size || tombstoned.size) cache = reconcile(cache) // show un-synced work immediately
+    // Re-load whenever we have an authenticated session; clear the *view* on sign-out
+    // (but keep the outbox so an unsynced entry survives a re-login).
     db.auth.onAuthStateChange((_e, session) => {
       if (session) void hydrate()
-      else { cache = []; pending.clear(); tombstoned.clear(); emit() }
+      else { cache = []; emit() }
     })
     // Live updates from other users / devices.
     db.channel(`rt-${table}`)
@@ -87,33 +163,17 @@ function supabaseTable<T extends { id: string }>({ table }: { table: string; lsK
       .subscribe()
   }
 
-  async function persist(prev: T[], next: T[]) {
-    const nextIds = new Set(next.map((r) => r.id))
-    const prevById = new Map(prev.map((r) => [r.id, r]))
-    const toUpsert = next.filter((r) => prevById.get(r.id) !== r) // new or changed (reference differs)
-    const toDelete = prev.filter((r) => !nextIds.has(r.id)).map((r) => r.id)
-    // Register the optimistic change so a hydrate racing this save can't undo it.
-    for (const r of toUpsert) pending.set(r.id, r)
-    for (const id of toDelete) { tombstoned.add(id); pending.delete(id) }
-    try {
-      if (toUpsert.length) { const { error } = await db.from(table).upsert(toUpsert as any); if (error) throw error }
-      if (toDelete.length) { const { error } = await db.from(table).delete().in('id', toDelete); if (error) throw error }
-      // Saved — release the optimistic bookkeeping (unless a newer edit replaced it).
-      for (const r of toUpsert) if (pending.get(r.id) === r) pending.delete(r.id)
-      for (const id of toDelete) tombstoned.delete(id)
-    } catch (e) {
-      console.error(`[sync:${table}] save failed, resyncing:`, (e as Error).message)
-      // Genuine failure (e.g. a column the live DB doesn't have): drop the optimistic
-      // bookkeeping and fall back to server truth so bad data doesn't linger.
-      for (const r of toUpsert) if (pending.get(r.id) === r) pending.delete(r.id)
-      for (const id of toDelete) tombstoned.delete(id)
-      void hydrate()
-    }
-  }
-
   return {
     load: () => { start(); return cache },
-    commit: (next) => { const prev = cache; cache = next; emit(); void persist(prev, next) },
+    commit: (next) => {
+      const prev = cache; cache = next; emit()
+      const nextIds = new Set(next.map((r) => r.id))
+      const prevById = new Map(prev.map((r) => [r.id, r]))
+      for (const r of next) if (prevById.get(r.id) !== r) pending.set(r.id, r)          // new or changed
+      for (const r of prev) if (!nextIds.has(r.id)) { pending.delete(r.id); tombstoned.add(r.id) } // removed
+      saveOutbox()
+      void flush()
+    },
     // Refresh on mount, but at most once every few seconds. Many components
     // subscribing at once shouldn't each fire a full-table reload — that only
     // widens the save/refresh race. Realtime keeps the cache live between refreshes.
