@@ -2,14 +2,18 @@ import type { BranchCode } from '@/lib/roles'
 import type { StatusTone } from '@/components/ui/StatusBadge'
 
 // ── Event lifecycle (spec §4.4.2) ──────────────────────────────────────
-// Tracker logs a Geotab-flagged event → Safety Officer confirms or it is
-// disputed → it is closed out.
-export type SpeedStatus = 'flagged' | 'confirmed' | 'disputed' | 'closed'
+// Geotab flags an event → it lands as `pending` (imported, no driver yet) →
+// after speaking to the driver it is either `confirmed` (counts against them)
+// or `dismissed`/`disputed` (kept in the record but NOT counted) → `closed`.
+// `flagged` is the legacy manual state (still counts, like confirmed).
+export type SpeedStatus = 'pending' | 'flagged' | 'confirmed' | 'disputed' | 'dismissed' | 'closed'
 
 export const STATUS_META: Record<SpeedStatus, { label: string; tone: StatusTone }> = {
+  pending: { label: 'Pending driver', tone: 'warning' },
   flagged: { label: 'Flagged', tone: 'neutral' },
   confirmed: { label: 'Confirmed', tone: 'good' },
   disputed: { label: 'Disputed', tone: 'warning' },
+  dismissed: { label: 'Written off', tone: 'neutral' },
   closed: { label: 'Closed', tone: 'good' },
 }
 

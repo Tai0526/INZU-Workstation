@@ -52,9 +52,11 @@ export default function SpeedEvents() {
 
   const counts = useMemo(() => ({
     total: branchEvents.length,
+    pending: branchEvents.filter((e) => e.status === 'pending').length,
     flagged: branchEvents.filter((e) => e.status === 'flagged').length,
     confirmed: branchEvents.filter((e) => e.status === 'confirmed').length,
     disputed: branchEvents.filter((e) => e.status === 'disputed').length,
+    dismissed: branchEvents.filter((e) => e.status === 'dismissed').length,
     closed: branchEvents.filter((e) => e.status === 'closed').length,
   }), [branchEvents])
 
@@ -98,10 +100,12 @@ export default function SpeedEvents() {
         onPick={(v) => setStatusFilter(v)}
         stats={[
           { value: 'all', label: 'All', count: counts.total, tone: 'neutral' },
-          { value: 'flagged', label: 'Flagged', count: counts.flagged, tone: 'neutral' },
+          { value: 'pending', label: 'Pending driver', count: counts.pending, tone: 'warning' },
           { value: 'confirmed', label: 'Confirmed', count: counts.confirmed, tone: 'good' },
           { value: 'disputed', label: 'Disputed', count: counts.disputed, tone: 'warning' },
+          { value: 'dismissed', label: 'Written off', count: counts.dismissed, tone: 'neutral' },
           { value: 'closed', label: 'Closed', count: counts.closed, tone: 'good' },
+          ...(counts.flagged ? [{ value: 'flagged' as const, label: 'Flagged', count: counts.flagged, tone: 'neutral' as const }] : []),
         ]}
       />
 
@@ -140,7 +144,7 @@ export default function SpeedEvents() {
                     <td className="px-4 py-2.5 text-navy">{e.event_datetime.slice(0, 10)} <span className="text-status-neutral">{e.event_datetime.slice(11, 16)}</span></td>
                     <td className="px-4 py-2.5">
                       <div className="flex items-center gap-2">
-                        <span className="font-medium text-navy">{e.driver_name}</span>
+                        <span className={`font-medium ${e.driver_name ? 'text-navy' : 'italic text-status-warning'}`}>{e.driver_name || 'Confirm driver'}</span>
                         {count >= 3 && <span className="inline-flex items-center gap-0.5 rounded-full bg-status-critical/10 px-1.5 py-0.5 text-[10px] font-bold text-status-critical"><AlertTriangle size={10} /> repeat ×{count}</span>}
                         {count === 2 && <span className="rounded-full bg-status-warning/10 px-1.5 py-0.5 text-[10px] font-bold text-[#8a6d10]">×2</span>}
                       </div>

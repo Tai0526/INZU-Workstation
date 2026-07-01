@@ -9,6 +9,7 @@ import { ROLES, BRANCHES } from '@/lib/roles'
 import KpiCard from '@/components/ui/KpiCard'
 import Button from '@/components/ui/Button'
 import { useSpeedEvents } from '@/lib/speed/store'
+import { useSpeedGeo } from '@/lib/speed/geo'
 import { useVehicles } from '@/lib/fleet/store'
 import { useDrivers } from '@/lib/drivers/store'
 import { computeSpeedAnalytics } from '@/lib/speed/analytics'
@@ -75,6 +76,44 @@ export default function SpeedOverview() {
   const atDismissal = new Set(
     allEvents.filter((e) => e.branch === branch && penaltyFor(overBy(e), offenceNumberInBand(allEvents.filter((x) => x.branch === branch), e))?.dismissal).map((e) => e.driver_id || e.driver_name),
   ).size
+
+  // ── Coordinate hotspots (from Geotab detail) for the month under review ──
+  const geo = useSpeedGeo()
+  const geoPts = useMemo(
+    () => allEvents
+      .filter((e) => e.branch === branch && !isGlitch(e) && monthKey(e.event_datetime) === effCmp)
+      .map((e) => ({ e, g: geo[e.id] }))
+      .filter((x): x is { e: typeof x.e; g: NonNullable<typeof x.g> } => !!x.g && (x.g.lat !== 0 || x.g.lng !== 0)),
+    [allEvents, branch, effCmp, geo],
+  )
+  const hotspots = useMemo(() => {
+    const m = new Map<string, { name: string; count: number; overSum: number; buses: Set<string> }>()
+    for (const { e } of geoPts) {
+      const key = e.route || 'Unknown location'
+      const c = m.get(key) ?? { name: key, count: 0, overSum: 0, buses: new Set<string>() }
+      c.count++; c.overSum += overBy(e); c.buses.add(e.vehicle_label)
+      m.set(key, c)
+    }
+    return [...m.values()].map((h) => ({ name: h.name, count: h.count, avgOver: Math.round(h.overSum / h.count), buses: h.buses.size })).sort((x, y) => y.count - x.count)
+  }, [geoPts])
+  const bounds = useMemo(() => {
+    if (geoPts.length === 0) return null
+    const lats = geoPts.map((p) => p.g.lat), lngs = geoPts.map((p) => p.g.lng)
+    return { minLat: Math.min(...lats), maxLat: Math.max(...lats), minLng: Math.min(...lngs), maxLng: Math.max(...lngs) }
+  }, [geoPts])
+  const peakHour = useMemo(() => {
+    const h = new Array(24).fill(0)
+    for (const { e } of geoPts) h[Number(e.event_datetime.slice(11, 13))]++
+    let best = 0
+    for (let i = 1; i < 24; i++) if (h[i] > h[best]) best = i
+    return { hour: best, count: h[best] }
+  }, [geoPts])
+  const topGeoBus = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const { e } of geoPts) m.set(e.vehicle_label, (m.get(e.vehicle_label) || 0) + 1)
+    const arr = [...m.entries()].sort((a2, b2) => b2[1] - a2[1])
+    return arr[0] ? { fleet: arr[0][0], count: arr[0][1] } : null
+  }, [geoPts])
 
   const TrendIcon = a.same ? Minus : a.improving ? TrendingDown : TrendingUp
   const trendColor = a.same ? 'text-status-neutral' : a.improving ? 'text-status-good' : 'text-status-critical'
@@ -296,6 +335,48 @@ export default function SpeedOverview() {
           )}
         </div>
       </div>
+
+      {/* Where it's happening — coordinate hotspots */}
+      {geoPts.length > 0 && (
+        <Card title="Where it's happening — hotspot map" subtitle={`${geoPts.length} located speeding events in ${a.thisLabel}. Redder points are further over the limit.`}>
+          <div className="grid gap-4 lg:grid-cols-[1.5fr_1fr]">
+            <div className="rounded-lg border border-black/10 bg-canvas/40 p-1">
+              <svg viewBox="0 0 560 300" className="h-64 w-full">
+                {(() => {
+                  const W = 560, H = 300, pad = 18, b = bounds!
+                  const sx = (b.maxLng - b.minLng) || 1, sy = (b.maxLat - b.minLat) || 1
+                  const col = (o: number) => (o >= 20 ? '#B3261E' : o >= 10 ? '#C9A227' : '#0F1B33')
+                  return geoPts.map(({ e, g }, i) => {
+                    const x = pad + ((g.lng - b.minLng) / sx) * (W - 2 * pad)
+                    const y = pad + ((b.maxLat - g.lat) / sy) * (H - 2 * pad)
+                    return <circle key={i} cx={x} cy={y} r={4} fill={col(overBy(e))} fillOpacity={0.5} />
+                  })
+                })()}
+              </svg>
+            </div>
+            <div>
+              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-status-neutral">Top hotspots</div>
+              <div className="max-h-56 space-y-1 overflow-auto pr-1">
+                {hotspots.slice(0, 7).map((h) => (
+                  <div key={h.name} className="flex items-center gap-2 text-sm">
+                    <span className="flex-1 truncate text-navy" title={h.name}>{h.name}</span>
+                    <span className="text-[11px] text-status-neutral">{h.buses} bus{h.buses === 1 ? '' : 'es'} · +{h.avgOver}</span>
+                    <span className="rounded-full bg-status-critical/10 px-2 py-0.5 text-xs font-bold text-status-critical">{h.count}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+          <div className="mt-4 rounded-lg border border-brand/25 bg-brand-tint/25 px-4 py-3">
+            <div className="mb-1 text-sm font-semibold text-navy">Suggestions to curb it</div>
+            <ul className="ml-4 list-disc space-y-0.5 text-[13px] text-status-neutral">
+              {hotspots[0] && <li><span className="text-navy">{hotspots[0].name}</span> is the worst spot ({hotspots[0].count} events) — signage / a rumble strip and spot-checks there would bite hardest.</li>}
+              {peakHour.count > 0 && <li>Most breaches cluster around <span className="text-navy">{String(peakHour.hour).padStart(2, '0')}:00</span> — brief crews before that window.</li>}
+              {topGeoBus && <li><span className="text-navy">{topGeoBus.fleet}</span> triggered the most ({topGeoBus.count}) — coach that crew and review its route.</li>}
+            </ul>
+          </div>
+        </Card>
+      )}
 
       {/* Data quality */}
       <div className="card overflow-hidden">

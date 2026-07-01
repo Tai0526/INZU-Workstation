@@ -145,6 +145,18 @@ export function useNotifications(branch: BranchCode, role?: RoleKey): {
     })
   }
 
+  // ── Pending Geotab speed events awaiting driver confirmation (daily task) ──
+  const pendingSpeed = speed.filter((e) => e.branch === branch && e.status === 'pending' && !isGlitch(e))
+  if (pendingSpeed.length > 0) {
+    const latest = pendingSpeed.reduce((a, b) => (a.event_datetime > b.event_datetime ? a : b))
+    items.push({
+      id: `speed:pending:${pendingSpeed.length}`, severity: 'warning', audience: SPEED_ACTORS,
+      title: `${pendingSpeed.length} speeding event${pendingSpeed.length === 1 ? '' : 's'} need a driver confirmed`,
+      detail: 'Geotab events imported without a driver — after speaking to the driver, confirm who it was or write it off.',
+      date: latest.event_datetime.slice(0, 10), link: '/speed/events',
+    })
+  }
+
   // ── Authorised-vehicle fuel draws pending Ops sign-off ──
   for (const g of draws) {
     if (g.branch !== branch || g.status !== 'pending') continue

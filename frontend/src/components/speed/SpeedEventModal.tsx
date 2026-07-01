@@ -1,12 +1,14 @@
-import { useState } from 'react'
-import { Check, AlertTriangle, XCircle, History } from 'lucide-react'
+import { useMemo, useState } from 'react'
+import { Check, AlertTriangle, XCircle, History, Ban, Clock, MapPin } from 'lucide-react'
 import Modal from '@/components/ui/Modal'
 import Button from '@/components/ui/Button'
 import StatusBadge from '@/components/ui/StatusBadge'
 import type { BranchCode } from '@/lib/roles'
 import { useDrivers } from '@/lib/drivers/store'
 import { useVehicles } from '@/lib/fleet/store'
+import { useAllocations } from '@/lib/operations/store'
 import { useSpeedEvents, speedStore } from '@/lib/speed/store'
+import { useSpeedGeo, suggestDrivers } from '@/lib/speed/geo'
 import {
   type SpeedEvent, type SpeedEventInput, type SpeedStatus, STATUS_META, overBy, countsAgainstDriver,
   SPEED_ZONES, effectiveLimit, bandFor, penaltyFor, penaltyTone, penaltyLabel, offenceNumberInBand,
@@ -43,8 +45,21 @@ export default function SpeedEventModal({
   const vehicles = useVehicles().filter((v) => v.branch === branch)
   const allEvents = useSpeedEvents()
   const allCases = useCases()
+  const allocations = useAllocations().filter((a) => a.branch === branch)
+  const geoMap = useSpeedGeo()
+  const geo = editing ? geoMap[editing.id] : undefined
   const [form, setForm] = useState<SpeedEventInput | SpeedEvent>(() => (editing ? { ...editing } : empty(branch)))
   const [error, setError] = useState('')
+
+  // The Geotab report carries no driver, so suggest the most likely one to confirm against.
+  const suggestions = useMemo(
+    () => (form.driver_name ? [] : suggestDrivers(form.vehicle_label, form.event_datetime, { allocations, events: allEvents })),
+    [form.driver_name, form.vehicle_label, form.event_datetime, allocations, allEvents],
+  )
+  function pickDriver(name: string) {
+    const d = drivers.find((x) => x.full_name.trim().toLowerCase() === name.trim().toLowerCase())
+    setForm((f) => ({ ...f, driver_name: name, driver_id: d?.id ?? '' }))
+  }
 
   const key = (editing?.id ?? 'new') + String(open)
   const [lastKey, setLastKey] = useState('')
@@ -84,16 +99,22 @@ export default function SpeedEventModal({
 
   function save() {
     if (!form.event_datetime) return setError('Date/time of the event is required.')
-    if (!form.driver_name) return setError('Select the driver.')
+    if (form.status === 'confirmed' && !form.driver_name) return setError('Confirmed events need a driver — pick one or leave it pending.')
     if (!form.recorded_speed || !form.speed_limit) return setError('Recorded speed and limit are required.')
     if (editing) speedStore.update(editing.id, form)
     else speedStore.add(form)
     onClose()
   }
 
-  function quickStatus(s: SpeedStatus) {
-    if (editing) { speedStore.setStatus(editing.id, s); onClose() }
-    else set('status', s)
+  // Resolve a pending/open event: persist any driver + notes edits, then set the
+  // status. Confirming requires a driver; writing off keeps it in the record but
+  // does NOT count it against the driver.
+  function decide(status: SpeedStatus) {
+    if (!editing) return
+    if (status === 'confirmed' && !form.driver_name) { setError('Pick the driver before confirming.'); return }
+    speedStore.update(editing.id, { driver_id: form.driver_id, driver_name: form.driver_name, notes: form.notes })
+    speedStore.setStatus(editing.id, status)
+    onClose()
   }
 
   // Escalation → disciplinary incident (carries the recommendation + repeat history)
@@ -127,6 +148,31 @@ export default function SpeedEventModal({
       footer={canEdit ? <><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={save}>{editing ? 'Save changes' : 'Log event'}</Button></> : <Button variant="secondary" onClick={onClose}>Close</Button>}
     >
       {error && <div className="mb-4 rounded-lg border border-status-critical/30 bg-status-critical/5 px-3 py-2 text-sm text-status-critical">{error}</div>}
+
+      {/* Likely-driver suggestions (the Geotab report carries no driver) */}
+      {canEdit && !form.driver_name && suggestions.length > 0 && (
+        <div className="mb-4 rounded-lg border border-brand/30 bg-brand-tint/30 px-3 py-2.5">
+          <div className="mb-1.5 text-xs font-semibold text-navy">Likely driver — pick one, then confirm after speaking to them</div>
+          <div className="flex flex-wrap gap-1.5">
+            {suggestions.map((s) => (
+              <button key={s.name} type="button" onClick={() => pickDriver(s.name)} title={s.basis}
+                className="rounded-full border border-brand/40 bg-white px-2.5 py-1 text-xs text-navy hover:border-brand">
+                {s.name} <span className="text-status-neutral">· {s.basis}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Geotab detail — how long, how far, and where it happened */}
+      {geo && (
+        <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-black/10 bg-canvas px-3 py-2 text-xs text-status-neutral">
+          <span className="inline-flex items-center gap-1"><Clock size={13} /> <span className="font-medium text-navy">{geo.dur}s</span> over the limit</span>
+          <span><span className="font-medium text-navy">{geo.dist.toFixed(2)} km</span> while speeding</span>
+          {(geo.lat !== 0 || geo.lng !== 0) && <span className="inline-flex items-center gap-1"><MapPin size={13} /> {geo.lat.toFixed(5)}, {geo.lng.toFixed(5)}</span>}
+          {geo.loc && <span className="max-w-[280px] truncate" title={geo.loc}>{geo.loc}</span>}
+        </div>
+      )}
 
       {/* Repeat-offender banner */}
       {form.driver_name && (
@@ -222,10 +268,11 @@ export default function SpeedEventModal({
           <StatusBadge tone={STATUS_META[editing.status].tone}>{STATUS_META[editing.status].label}</StatusBadge>
           {editing.resolved_by && <span className="text-[11px] text-status-neutral">by {editing.resolved_by}</span>}
           {canEdit && (
-            <div className="ml-auto flex gap-1.5">
-              <Button variant="secondary" onClick={() => quickStatus('confirmed')}><Check size={14} /> Confirm</Button>
-              <Button variant="secondary" onClick={() => quickStatus('disputed')}><AlertTriangle size={14} /> Dispute</Button>
-              <Button variant="secondary" onClick={() => quickStatus('closed')}><XCircle size={14} /> Close</Button>
+            <div className="ml-auto flex flex-wrap gap-1.5">
+              <Button onClick={() => decide('confirmed')}><Check size={14} /> Confirm</Button>
+              <Button variant="secondary" onClick={() => decide('dismissed')}><Ban size={14} /> Write off</Button>
+              <Button variant="secondary" onClick={() => decide('disputed')}><AlertTriangle size={14} /> Dispute</Button>
+              <Button variant="secondary" onClick={() => decide('closed')}><XCircle size={14} /> Close</Button>
             </div>
           )}
         </div>
