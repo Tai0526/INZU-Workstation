@@ -86,6 +86,17 @@ const numFrom = (v: any): number | null => {
   return m ? Number(m[1]) : null
 }
 
+/**
+ * Max speed from the "Max Speed: 66 km/h" cell — anchored on the label so we
+ * always take the 66, never a different number that happens to share the cell
+ * (e.g. the rule threshold in "…over 62 km (Max Speed: 66 km/h)").
+ */
+function parseMaxSpeed(v: any): number | null {
+  const s = String(v ?? '')
+  const m = s.match(/max\s*speed[:\s]*([0-9]+(?:\.[0-9]+)?)/i)
+  return m ? Number(m[1]) : numFrom(s)
+}
+
 /** Excel serial → site wall-clock ISO (no timezone shift, so hour-of-day is right). */
 function serialToLocalISO(serial: number): string {
   const d = new Date(Math.round((serial - 25569) * 86400) * 1000)
@@ -93,9 +104,13 @@ function serialToLocalISO(serial: number): string {
   return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}T${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`
 }
 
-/** Posted zone limit from the Geotab rule threshold (82→80, 62→60, else 40). */
+/**
+ * Posted limit from the Geotab rule: "Speed > 82 km/h" → 80, "Speeding over
+ * 62 km …" → 60, and the numberless "Inzu Site Speeding" is the in-mine 60 km/h
+ * limit. Anything below 60 falls to the 40 km/h restricted-zone limit.
+ */
 function zoneFromThreshold(thr: number | null): number {
-  if (thr == null) return 40
+  if (thr == null) return 60 // "Inzu Site Speeding" — in-mine 60 km/h limit
   if (thr >= 80) return 80
   if (thr >= 60) return 60
   return 40
@@ -146,7 +161,7 @@ export async function parseGeotab(file: File, vehicles: { id: string; fleet_no: 
   for (const r of rows) {
     const device = firstCell<string>(r, ['.Device.DeviceName', 'Device'])
     const startRaw = firstCell<number>(r, ['ExceptionDetailStartTime', 'Start Time', 'Date'])
-    const maxSpeed = numFrom(firstCell(r, ['ExceptionDetailExtraInfo', 'Max Speed', 'Extra Info']))
+    const maxSpeed = parseMaxSpeed(firstCell(r, ['ExceptionDetailExtraInfo', 'Max Speed', 'Extra Info']))
     if (!device || typeof startRaw !== 'number' || maxSpeed == null) continue
 
     const rule = String(firstCell(r, ['.ExceptionRule.ExceptionRuleName', 'ExceptionRule', 'Details']) ?? '')
