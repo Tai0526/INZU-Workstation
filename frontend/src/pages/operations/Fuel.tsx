@@ -905,9 +905,12 @@ function DeliveryModal({ state, onClose, branch }: { state: { open: boolean; edi
 // ── Summary tab ────────────────────────────────────────────────────────
 function SummaryTab({ issuances, genFuel, branch, canManage }: { issuances: FuelIssuance[]; genFuel: GenFuel[]; branch: BranchCode; canManage: boolean }) {
   const curMonth = new Date().toISOString().slice(0, 7)
-  const months = useMemo(() => { const s = new Set([curMonth, ...issuances.map((i) => monthKey(i.date)), ...genFuel.map((g) => monthKey(g.date))]); return [...s].sort().reverse() }, [issuances, genFuel])
+  const dataMonths = useMemo(() => [...new Set([...issuances.map((i) => monthKey(i.date)), ...genFuel.map((g) => monthKey(g.date))])].sort().reverse(), [issuances, genFuel])
+  const months = useMemo(() => [...new Set([curMonth, ...dataMonths])].sort().reverse(), [curMonth, dataMonths])
   const [month, setMonth] = useState('')
-  const effMonth = months.includes(month) ? month : curMonth
+  // Default to the newest month that has data, not the calendar month — otherwise
+  // last month's fuel looks empty on the 1st (same fix as Mileage).
+  const effMonth = months.includes(month) ? month : (dataMonths[0] ?? curMonth)
   const [cur, setCur] = useState<Currency>('USD')
   const [editRate, setEditRate] = useState(false)
 

@@ -99,9 +99,12 @@ export default function Mileage() {
 // ── Daily log tab ──────────────────────────────────────────────────────
 function LogTab({ trips, branch, project, routes, vehicles, canManage }: { trips: MileageTrip[]; branch: BranchCode; project: string; routes: any[]; vehicles: any[]; canManage: boolean }) {
   const curMonth = new Date().toISOString().slice(0, 7)
-  const months = useMemo(() => [...new Set([curMonth, ...trips.map((t) => monthKey(t.date))])].sort().reverse(), [trips])
+  const dataMonths = useMemo(() => [...new Set(trips.map((t) => monthKey(t.date)))].sort().reverse(), [trips])
+  const months = useMemo(() => [...new Set([curMonth, ...dataMonths])].sort().reverse(), [curMonth, dataMonths])
   const [month, setMonth] = useState('')
-  const effMonth = months.includes(month) ? month : curMonth
+  // Default to the newest month that actually has data (e.g. last month right after
+  // month-end), not the calendar month — otherwise last month's billing looks empty on the 1st.
+  const effMonth = months.includes(month) ? month : (dataMonths[0] ?? curMonth)
   const [vehicleFilter, setVehicleFilter] = useState('all')
   const [addOpen, setAddOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
@@ -324,9 +327,12 @@ function ImportModal({ open, onClose, branch, project }: { open: boolean; onClos
 // ── Vehicle movements tab ──────────────────────────────────────────────
 function VehicleTab({ trips, project }: { trips: MileageTrip[]; project: string }) {
   const curMonth = new Date().toISOString().slice(0, 7)
-  const months = useMemo(() => [...new Set([curMonth, ...trips.map((t) => monthKey(t.date))])].sort().reverse(), [trips])
+  const dataMonths = useMemo(() => [...new Set(trips.map((t) => monthKey(t.date)))].sort().reverse(), [trips])
+  const months = useMemo(() => [...new Set([curMonth, ...dataMonths])].sort().reverse(), [curMonth, dataMonths])
   const [month, setMonth] = useState('')
-  const effMonth = months.includes(month) ? month : curMonth
+  // Default to the newest month that actually has data (e.g. last month right after
+  // month-end), not the calendar month — otherwise last month's billing looks empty on the 1st.
+  const effMonth = months.includes(month) ? month : (dataMonths[0] ?? curMonth)
   const monthTrips = useMemo(() => trips.filter((t) => monthKey(t.date) === effMonth), [trips, effMonth])
   const fleets = useMemo(() => [...new Map(monthTrips.map((t) => [t.fleet_no, t])).values()].map((t) => ({ fleet_no: t.fleet_no, vehicle_reg: t.vehicle_reg, seat_class: t.seat_class })).sort((a, b) => a.fleet_no.localeCompare(b.fleet_no, undefined, { numeric: true })), [monthTrips])
   const [fleet, setFleet] = useState('')
@@ -413,9 +419,12 @@ function VehicleTab({ trips, project }: { trips: MileageTrip[]; project: string 
 // ── Billing summary tab ────────────────────────────────────────────────
 function SummaryTab({ trips, rates, branch, branchShort, project }: { trips: MileageTrip[]; rates: MileageRates; branch: BranchCode; branchShort: string; project: string }) {
   const curMonth = new Date().toISOString().slice(0, 7)
-  const months = useMemo(() => [...new Set([curMonth, ...trips.map((t) => monthKey(t.date))])].sort().reverse(), [trips])
+  const dataMonths = useMemo(() => [...new Set(trips.map((t) => monthKey(t.date)))].sort().reverse(), [trips])
+  const months = useMemo(() => [...new Set([curMonth, ...dataMonths])].sort().reverse(), [curMonth, dataMonths])
   const [month, setMonth] = useState('')
-  const effMonth = months.includes(month) ? month : curMonth
+  // Default to the newest month that actually has data (e.g. last month right after
+  // month-end), not the calendar month — otherwise last month's billing looks empty on the 1st.
+  const effMonth = months.includes(month) ? month : (dataMonths[0] ?? curMonth)
   const [cur, setCur] = useState<Currency>('USD')
   const fuelRate = useFuelRate(branch, effMonth)
   const sig = useSignatories(branch, project)

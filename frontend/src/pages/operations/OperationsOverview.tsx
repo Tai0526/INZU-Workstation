@@ -58,12 +58,15 @@ export default function OperationsOverview() {
   const rates = useMileageRates(branch)
 
   const curMonth = new Date().toISOString().slice(0, 7)
-  const months = useMemo(() => {
-    const s = new Set<string>([curMonth, ...trips.map((t) => monthKey(t.date)), ...issuances.map((i) => monthKey(i.date))])
-    return [...s].filter(Boolean).sort().reverse()
-  }, [trips, issuances])
+  const dataMonths = useMemo(
+    () => [...new Set([...trips.map((t) => monthKey(t.date)), ...issuances.map((i) => monthKey(i.date))].filter(Boolean))].sort().reverse(),
+    [trips, issuances],
+  )
+  const months = useMemo(() => [...new Set([curMonth, ...dataMonths])].sort().reverse(), [curMonth, dataMonths])
   const [month, setMonth] = useState('')
-  const effMonth = months.includes(month) ? month : curMonth
+  // Default to the newest month that has data, not the calendar month — otherwise
+  // last month's numbers look empty on the 1st (same fix as Mileage).
+  const effMonth = months.includes(month) ? month : (dataMonths[0] ?? curMonth)
 
   const fuelRate = useFuelRate(branch, effMonth)
   const priceUSD = pricePerLitre(fuelRate, 'USD')
