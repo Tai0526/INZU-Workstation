@@ -1,5 +1,5 @@
 import { Fragment, useMemo, useState } from 'react'
-import { Plus, Upload, Download, Trash2, Pencil, Fuel as FuelIcon, Gauge, Settings, PackagePlus, CheckCircle2, AlertTriangle, UploadCloud, FileText, FileType, ChevronDown, ChevronUp, Search, Paperclip, Zap, Users, Check, X } from 'lucide-react'
+import { Plus, Upload, Download, Trash2, Pencil, Fuel as FuelIcon, Gauge, Settings, PackagePlus, CheckCircle2, AlertTriangle, UploadCloud, FileText, FileType, ChevronDown, ChevronUp, Search, Paperclip, Zap, Users, Check, X, Route as RouteIcon } from 'lucide-react'
 import clsx from 'clsx'
 import { useAuth } from '@/auth/AuthContext'
 import { ROLES, BRANCHES, type BranchCode } from '@/lib/roles'
@@ -11,11 +11,10 @@ import StatusBadge from '@/components/ui/StatusBadge'
 import SearchableSelect, { SearchableMultiSelect } from '@/components/ui/SearchableSelect'
 import { useVehicles } from '@/lib/fleet/store'
 import { useDrivers } from '@/lib/drivers/store'
-import { useMileageRoutes } from '@/lib/mileage/store'
 import { useEmployees } from '@/lib/hr/store'
 import { FUEL_HANDLER_ROLES } from '@/lib/hr/types'
 import {
-  useIssuances, useReceipts, useGenFuel, useFuelConfig, setFuelConfig, useFuelRate, setFuelRate, fetchLiveUsdZmw, recordRefuel, editIssuance, authorizeDraw, issuancesStore, receiptsStore, genFuelStore, useFuelLevels, fuelLevelsStore,
+  useIssuances, useReceipts, useGenFuel, useFuelConfig, setFuelConfig, useFuelRate, setFuelRate, fetchLiveUsdZmw, recordRefuel, editIssuance, authorizeDraw, issuancesStore, receiptsStore, genFuelStore, useFuelLevels, fuelLevelsStore, useFuelRoutes, fuelRoutesStore,
 } from '@/lib/fuel/store'
 import { putFile, viewFile } from '@/lib/storage/fileStore'
 import {
@@ -88,7 +87,17 @@ export default function Fuel() {
   const cfg = useFuelConfig(branch)
   const vehicles = useVehicles().filter((v) => v.branch === branch)
   const drivers = useDrivers().filter((d) => d.branch === branch && d.status === 'active')
-  const routes = useMileageRoutes().filter((r) => r.branch === branch)
+  // Fuel-only route catalogue (managed by fuel controllers). We also fold in any
+  // routes already used on existing issuances so historical entries stay selectable
+  // and nothing previously entered is disturbed.
+  const fuelRouteNames = useFuelRoutes(branch)
+  const usedRouteNames = useMemo(() => [...new Set(issuances.map((i) => i.route).filter(Boolean))], [issuances])
+  const routes = useMemo(
+    () => [...new Set([...fuelRouteNames, ...usedRouteNames])]
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+      .map((name) => ({ id: name, name })),
+    [fuelRouteNames, usedRouteNames],
+  )
   // Fuel attendants AND fuel controllers (both dispense fuel) for this branch.
   // Reactive — a newly added attendant/controller shows up in the form at once.
   const attendants = useEmployees().filter((e) => e.branch === branch && e.status === 'active' && FUEL_HANDLER_ROLES.includes(e.job_role))
@@ -130,6 +139,7 @@ function IssuancesTab({ issuances, genFuel, branch, branchLabel, vehicles, drive
   const [quickOpen, setQuickOpen] = useState(false)
   const [addOpen, setAddOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
+  const [routesOpen, setRoutesOpen] = useState(false)
   const [editing, setEditing] = useState<FuelIssuance | null>(null)
   const [genModal, setGenModal] = useState<{ open: boolean; editing: GenFuel | null; kind: DrawKind }>({ open: false, editing: null, kind: 'generator' })
   const onEdit = (i: FuelIssuance) => setEditing(i)
@@ -161,6 +171,7 @@ function IssuancesTab({ issuances, genFuel, branch, branchLabel, vehicles, drive
         <span className="text-xs text-status-neutral">{rows.length} shown</span>
         <div className="ml-auto flex flex-wrap gap-2">
           <Button variant="secondary" onClick={() => exportIssuances(rows, branchLabel)}><Download size={15} /> Export</Button>
+          {canManage && <Button variant="secondary" onClick={() => setRoutesOpen(true)}><RouteIcon size={15} /> Routes</Button>}
           {canManage && <Button variant="secondary" onClick={() => setImportOpen(true)}><Upload size={15} /> Bulk upload</Button>}
           {canManage && <Button variant="secondary" onClick={() => setGenModal({ open: true, editing: null, kind: 'generator' })}><Zap size={15} /> Generator fuel</Button>}
           {canManage && <Button variant="secondary" onClick={() => setGenModal({ open: true, editing: null, kind: 'visitor' })}><Users size={15} /> Authorised vehicle</Button>}
@@ -261,6 +272,7 @@ function IssuancesTab({ issuances, genFuel, branch, branchLabel, vehicles, drive
       <QuickRefuelModal open={quickOpen} onClose={() => setQuickOpen(false)} branch={branch} vehicles={vehicles} drivers={drivers} routes={routes} attendants={attendants} me={me} />
       <AddIssuancesModal open={addOpen} onClose={() => setAddOpen(false)} branch={branch} vehicles={vehicles} drivers={drivers} routes={routes} attendants={attendants} me={me} />
       <EditIssuanceModal editing={editing} onClose={() => setEditing(null)} vehicles={vehicles} drivers={drivers} routes={routes} attendants={attendants} />
+      <FuelRoutesModal open={routesOpen} onClose={() => setRoutesOpen(false)} branch={branch} />
       <ImportModal open={importOpen} onClose={() => setImportOpen(false)} branch={branch} vehicles={vehicles} attendants={attendants} me={me} />
       <OtherDrawModal state={genModal} onClose={() => setGenModal({ open: false, editing: null, kind: 'generator' })} branch={branch} />
     </div>
@@ -327,6 +339,34 @@ function PeopleHeader({ fleet, reg, driver, attendant, onFleet, setReg, setDrive
   )
 }
 
+// Fuel-only route catalogue manager. Fuel controllers add/remove the routes that
+// appear on the refuel forms; existing entries are never touched.
+function FuelRoutesModal({ open, onClose, branch }: { open: boolean; onClose: () => void; branch: BranchCode }) {
+  const routes = useFuelRoutes(branch)
+  const [name, setName] = useState('')
+  function add() { const v = name.trim(); if (!v) return; fuelRoutesStore.add(branch, v); setName('') }
+  return (
+    <Modal open={open} onClose={onClose} title="Fuel routes" subtitle="Routes offered on the refuel forms — fuel-only, separate from the Mileage catalogue.">
+      <div className="flex gap-2">
+        <input value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') add() }} placeholder="New route name…" className={inputCls} />
+        <Button onClick={add} disabled={!name.trim()}><Plus size={15} /> Add</Button>
+      </div>
+      <div className="mt-3 max-h-72 divide-y divide-black/5 overflow-auto rounded-lg border border-black/10">
+        {routes.length === 0 ? (
+          <p className="px-3 py-6 text-center text-sm text-status-neutral">No fuel routes yet — add the routes your buses fuel for.</p>
+        ) : routes.map((r) => (
+          <div key={r} className="flex items-center gap-2 px-3 py-2">
+            <RouteIcon size={14} className="text-status-neutral" />
+            <span className="flex-1 text-sm text-navy">{r}</span>
+            <button onClick={() => fuelRoutesStore.remove(branch, r)} className="rounded-md p-1.5 text-status-neutral hover:bg-status-critical/10 hover:text-status-critical" title="Remove"><Trash2 size={14} /></button>
+          </div>
+        ))}
+      </div>
+      <p className="mt-2 text-[11px] text-status-neutral">Removing a route here won't change any existing entries — routes already used on past issuances stay on record and remain selectable.</p>
+    </Modal>
+  )
+}
+
 function AddIssuancesModal({ open, onClose, branch, vehicles, drivers, routes, attendants, me }: { open: boolean; onClose: () => void; branch: BranchCode; vehicles: any[]; drivers: any[]; routes: any[]; attendants: any[]; me: string }) {
   const [fleet, setFleet] = useState(''); const [reg, setReg] = useState(''); const [driver, setDriver] = useState(''); const [attendant, setAttendant] = useState('')
   const [rows, setRows] = useState<Draft[]>([draft('2026-06-19'), draft(), draft()])
@@ -382,8 +422,8 @@ function AddIssuancesModal({ open, onClose, branch, vehicles, drivers, routes, a
         </table>
       </div>
       <button onClick={() => setRows((rs) => [...rs, draft(rs[rs.length - 1]?.date ?? '')])} className="mt-2 inline-flex items-center gap-1 rounded-lg border border-dashed border-navy/25 px-3 py-1.5 text-xs font-medium text-brand hover:border-brand"><Plus size={14} /> Add row</button>
-      <p className="mt-1 text-[11px] text-status-neutral">Both tank levels (before &amp; after fuelling) are recorded now. Only the closing odometer &amp; KM/L are filled in at the next refuel. Routes come from the Mileage route catalogue.</p>
-      {routes.length === 0 && <p className="mt-1 rounded-lg bg-brand-tint/40 px-3 py-2 text-[11px] text-[#8a4513]">No routes for this branch yet — add them in Mileage → Setup → Route catalogue.</p>}
+      <p className="mt-1 text-[11px] text-status-neutral">Both tank levels (before &amp; after fuelling) are recorded now. Only the closing odometer &amp; KM/L are filled in at the next refuel. Routes are the fuel-only catalogue (manage them with the “Routes” button).</p>
+      {routes.length === 0 && <p className="mt-1 rounded-lg bg-brand-tint/40 px-3 py-2 text-[11px] text-[#8a4513]">No fuel routes yet — add them with the “Routes” button on the Issuances tab.</p>}
     </Modal>
   )
 }
@@ -447,7 +487,7 @@ function QuickRefuelModal({ open, onClose, branch, vehicles, drivers, routes, at
               values={route ? route.split(',').map((s) => s.trim()).filter(Boolean) : []}
               onChange={(arr) => setRoute(arr.join(', '))}
               options={routes.map((x: any) => ({ value: x.name, label: x.name }))}
-              emptyText="No routes — add them in Mileage → Route catalogue" /></label>
+              emptyText="No fuel routes yet — add them with the “Routes” button" /></label>
           <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Trips</span><input type="number" className={inputCls} value={trips} onChange={(e) => setTrips(e.target.value)} /></label>
         </div>
         <datalist id="dl-fuel-fleet">{vehicles.map((v: any) => <option key={v.id} value={v.fleet_no} />)}</datalist>

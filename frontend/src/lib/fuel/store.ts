@@ -151,6 +151,34 @@ export const fuelLevelsStore = {
 }
 export const useFuelLevels = () => useSyncExternalStore(fuelLevelsCfg.subscribe, fuelLevelsCfg.get, fuelLevelsCfg.get)
 
+// ── Fuel route catalogue (per branch) — fuel-only, separate from Mileage ─
+// Fuel controllers manage these routes for the refuel forms. Stored in app_config
+// (keyed by branch) so it needs no DB migration and never touches existing
+// issuance records — their `route` is plain text and stays exactly as entered.
+const fuelRoutesCfg = createSyncConfig<Record<string, string[]>>({ key: 'fuel_routes', lsKey: 'inzu_fuel_routes', default: {} })
+export function getFuelRoutes(branch: string): string[] {
+  return fuelRoutesCfg.get()[branch] ?? []
+}
+export const fuelRoutesStore = {
+  get: getFuelRoutes,
+  subscribe: fuelRoutesCfg.subscribe,
+  add(branch: string, name: string) {
+    const v = name.trim()
+    if (!v) return
+    const all = fuelRoutesCfg.get()
+    const cur = all[branch] ?? []
+    if (cur.some((r) => r.toLowerCase() === v.toLowerCase())) return // no duplicates
+    fuelRoutesCfg.set({ ...all, [branch]: [...cur, v].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })) })
+  },
+  remove(branch: string, name: string) {
+    const all = fuelRoutesCfg.get()
+    fuelRoutesCfg.set({ ...all, [branch]: (all[branch] ?? []).filter((r) => r !== name) })
+  },
+}
+export function useFuelRoutes(branch: string): string[] {
+  return useSyncExternalStore(fuelRoutesCfg.subscribe, () => getFuelRoutes(branch), () => getFuelRoutes(branch))
+}
+
 // ── Monthly rates (per branch:YYYY-MM) — ERB diesel price + BoZ FX ──────
 const rateKey = (branch: string, ym: string) => `${branch}:${ym}`
 const RATE_SEED: Record<string, FuelRate> = {
