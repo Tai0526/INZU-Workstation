@@ -156,8 +156,12 @@ export const useFuelLevels = () => useSyncExternalStore(fuelLevelsCfg.subscribe,
 // (keyed by branch) so it needs no DB migration and never touches existing
 // issuance records — their `route` is plain text and stays exactly as entered.
 const fuelRoutesCfg = createSyncConfig<Record<string, string[]>>({ key: 'fuel_routes', lsKey: 'inzu_fuel_routes', default: {} })
+// Stable empty reference for branches with no routes yet — a fresh `[]` each call
+// makes useSyncExternalStore think the snapshot changed every render (infinite
+// loop → React #185). Existing stores dodge this with a constant default too.
+const EMPTY_ROUTES: string[] = []
 export function getFuelRoutes(branch: string): string[] {
-  return fuelRoutesCfg.get()[branch] ?? []
+  return fuelRoutesCfg.get()[branch] ?? EMPTY_ROUTES
 }
 export const fuelRoutesStore = {
   get: getFuelRoutes,
