@@ -105,6 +105,7 @@ export default function BusAllocation() {
   const [runModal, setRunModal] = useState<{ open: boolean; editing: Allocation | null }>({ open: false, editing: null })
   const [importOpen, setImportOpen] = useState(false)
   const [emailOpen, setEmailOpen] = useState(false)
+  const [tripScope, setTripScope] = useState<'day' | 'month' | 'all'>('month')
 
   const dayRuns = useMemo(
     () => allocations.filter((a) => a.branch === branch && a.date === date).sort((a, b) => (a.departure_time || '').localeCompare(b.departure_time || '')),
@@ -135,6 +136,26 @@ export default function BusAllocation() {
   const totalPax = dayRuns.reduce((s, r) => s + (r.passengers ?? 0), 0)
   const loggedCount = loggedPlan.length
   const missingCount = pendingPlan.length
+
+  // Trips per bus — each logged run (allocation entry) is one trip. Scope by the
+  // selected day, its month, or all time so a bus's tally is easy to read off.
+  const monthOfDate = date.slice(0, 7)
+  const tripCounts = useMemo(() => {
+    const inScope = allocations.filter((a) => a.branch === branch && (
+      tripScope === 'all' ? true : tripScope === 'month' ? a.date.slice(0, 7) === monthOfDate : a.date === date
+    ))
+    const m = new Map<string, { fleet: string; trips: number; pax: number; pickups: number; knockoffs: number }>()
+    for (const a of inScope) {
+      const c = m.get(a.fleet_no) ?? { fleet: a.fleet_no, trips: 0, pax: 0, pickups: 0, knockoffs: 0 }
+      c.trips++; c.pax += a.passengers ?? 0
+      if (a.trip_type === 'pickup') c.pickups++; else c.knockoffs++
+      m.set(a.fleet_no, c)
+    }
+    return [...m.values()].sort((x, y) => y.trips - x.trips || x.fleet.localeCompare(y.fleet, undefined, { numeric: true }))
+  }, [allocations, branch, date, tripScope, monthOfDate])
+  const scopeLabel = tripScope === 'day' ? date : tripScope === 'month'
+    ? new Date(Number(monthOfDate.slice(0, 4)), Number(monthOfDate.slice(5, 7)) - 1, 1).toLocaleDateString('en', { month: 'long', year: 'numeric' })
+    : 'all time'
 
   const stat = (label: string, value: number | string, tone: 'neutral' | 'good' | 'warning' = 'neutral') => (
     <div className={`rounded-xl border px-3 py-2 ${tone === 'warning' ? 'border-status-warning/40 bg-status-warning/10' : tone === 'good' ? 'border-status-good/30 bg-status-good/5' : 'border-black/10 bg-white'}`}>
@@ -214,6 +235,60 @@ export default function BusAllocation() {
           )}
         </div>
       )}
+
+      {/* Trips by bus — each logged run counts as one trip */}
+      <div className="card overflow-hidden">
+        <div className="flex flex-wrap items-center gap-2 border-b border-black/5 px-5 py-3">
+          <Bus size={16} className="text-brand" />
+          <h3 className="font-display text-sm font-bold text-navy">Trips by bus</h3>
+          <span className="text-xs text-status-neutral">each run = one trip · {scopeLabel}</span>
+          <div className="ml-auto inline-flex overflow-hidden rounded-lg border border-black/15 text-xs">
+            {(['day', 'month', 'all'] as const).map((k) => (
+              <button key={k} onClick={() => setTripScope(k)}
+                className={`px-2.5 py-1.5 font-medium ${tripScope === k ? 'bg-navy text-white' : 'bg-white text-navy hover:bg-canvas'}`}>
+                {k === 'day' ? 'This day' : k === 'month' ? 'This month' : 'All time'}
+              </button>
+            ))}
+          </div>
+        </div>
+        {tripCounts.length === 0 ? (
+          <p className="px-5 py-8 text-center text-sm text-status-neutral">No trips logged for {scopeLabel}.</p>
+        ) : (
+          <div className="max-h-72 overflow-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="sticky top-0 z-10 bg-canvas text-status-neutral">
+                <tr>
+                  <th className="px-5 py-2 font-medium">Bus</th>
+                  <th className="px-4 py-2 text-right font-medium">Trips</th>
+                  <th className="px-4 py-2 text-right font-medium">Pickups</th>
+                  <th className="px-4 py-2 text-right font-medium">Knock-offs</th>
+                  <th className="px-4 py-2 text-right font-medium">Passengers</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tripCounts.map((r) => (
+                  <tr key={r.fleet} className="border-t border-black/5">
+                    <td className="px-5 py-2 font-medium text-navy">{r.fleet}</td>
+                    <td className="px-4 py-2 text-right font-bold text-navy">{r.trips}</td>
+                    <td className="px-4 py-2 text-right text-status-neutral">{r.pickups}</td>
+                    <td className="px-4 py-2 text-right text-status-neutral">{r.knockoffs}</td>
+                    <td className="px-4 py-2 text-right text-status-neutral">{r.pax}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t-2 border-navy/15 bg-canvas font-semibold text-navy">
+                  <td className="px-5 py-2">Total ({tripCounts.length} bus{tripCounts.length === 1 ? '' : 'es'})</td>
+                  <td className="px-4 py-2 text-right">{tripCounts.reduce((s, r) => s + r.trips, 0)}</td>
+                  <td className="px-4 py-2 text-right">{tripCounts.reduce((s, r) => s + r.pickups, 0)}</td>
+                  <td className="px-4 py-2 text-right">{tripCounts.reduce((s, r) => s + r.knockoffs, 0)}</td>
+                  <td className="px-4 py-2 text-right">{tripCounts.reduce((s, r) => s + r.pax, 0)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        )}
+      </div>
 
       <MultiRunModal open={multiOpen} onClose={() => setMultiOpen(false)} branch={branch} date={date} vehicles={vehicles} drivers={drivers} locations={locations} />
       <RunModal state={runModal} onClose={() => setRunModal({ open: false, editing: null })} branch={branch} date={date} vehicles={vehicles} drivers={drivers} locations={locations} />

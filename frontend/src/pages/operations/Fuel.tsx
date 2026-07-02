@@ -126,6 +126,7 @@ export default function Fuel() {
 // ── Issuances tab ──────────────────────────────────────────────────────
 function IssuancesTab({ issuances, genFuel, branch, branchLabel, vehicles, drivers, routes, attendants, me, canManage, canAuthorize }: { issuances: FuelIssuance[]; genFuel: GenFuel[]; branch: BranchCode; branchLabel: string; vehicles: any[]; drivers: any[]; routes: any[]; attendants: any[]; me: string; canManage: boolean; canAuthorize: boolean }) {
   const [vehicleFilter, setVehicleFilter] = useState('all')
+  const [monthFilter, setMonthFilter] = useState('all')
   const [quickOpen, setQuickOpen] = useState(false)
   const [addOpen, setAddOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
@@ -137,10 +138,14 @@ function IssuancesTab({ issuances, genFuel, branch, branchLabel, vehicles, drive
   const drawLabel = (s: GenFuel['status']) => (s === 'approved' ? 'Approved' : s === 'pending' ? 'Pending auth' : 'Rejected')
 
   const rows = useMemo(
-    () => issuances.filter((i) => vehicleFilter === 'all' || i.fleet_no === vehicleFilter).sort((a, b) => b.date.localeCompare(a.date) || a.fleet_no.localeCompare(b.fleet_no)),
-    [issuances, vehicleFilter],
+    () => issuances
+      .filter((i) => vehicleFilter === 'all' || i.fleet_no === vehicleFilter)
+      .filter((i) => monthFilter === 'all' || monthKey(i.date) === monthFilter)
+      .sort((a, b) => b.date.localeCompare(a.date) || a.fleet_no.localeCompare(b.fleet_no)),
+    [issuances, vehicleFilter, monthFilter],
   )
   const fleets = [...new Set(issuances.map((i) => i.fleet_no))].sort()
+  const months = useMemo(() => [...new Set(issuances.map((i) => monthKey(i.date)))].sort().reverse(), [issuances])
 
   return (
     <div className="space-y-4">
@@ -149,6 +154,11 @@ function IssuancesTab({ issuances, genFuel, branch, branchLabel, vehicles, drive
           <option value="all">All vehicles</option>
           {fleets.map((f) => <option key={f} value={f}>{f}</option>)}
         </select>
+        <select value={monthFilter} onChange={(e) => setMonthFilter(e.target.value)} className="rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand">
+          <option value="all">All months</option>
+          {months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+        </select>
+        <span className="text-xs text-status-neutral">{rows.length} shown</span>
         <div className="ml-auto flex flex-wrap gap-2">
           <Button variant="secondary" onClick={() => exportIssuances(rows, branchLabel)}><Download size={15} /> Export</Button>
           {canManage && <Button variant="secondary" onClick={() => setImportOpen(true)}><Upload size={15} /> Bulk upload</Button>}
