@@ -39,7 +39,13 @@ export interface AppNotification {
   date: string // ISO of the relevant date
   link: string
   audience: RoleKey[] | null // roles that should see it; null = everyone
+  viewer?: boolean // also surfaced to view-only roles (incident/safety status only)
 }
+
+// View-only roles get NONE of the operational to-do notifications (licensing,
+// documents, fuel, workshop, grounded vehicles…) — only the incident/safety
+// status items flagged `viewer: true` (e.g. "escalated to incident", "with Ops").
+const VIEWER_ROLES: RoleKey[] = ['viewer']
 
 // ── Read-state (persisted, reactive) ───────────────────────────────────
 const KEY = 'inzu_notifications_read'
@@ -108,14 +114,14 @@ export function useNotifications(branch: BranchCode, role?: RoleKey): {
     const what = `${INCIDENT_TYPE_META[c.incident_type].label}${c.driver_name ? ` — ${c.driver_name}` : ''}`
     if (c.stage === 'safety_review') {
       items.push({
-        id: `case:${c.id}:safety_review`, severity: 'warning', audience: SAFETY_ACTORS,
+        id: `case:${c.id}:safety_review`, severity: 'warning', audience: SAFETY_ACTORS, viewer: true,
         title: `Incident with Safety: ${what}`,
         detail: 'Investigate, attach evidence and propose a verdict to Ops.',
         date: c.updated_at, link: '/safety/incidents',
       })
     } else if (c.stage === 'ops_review') {
       items.push({
-        id: `case:${c.id}:ops_review`, severity: 'critical', audience: OPS_DECIDERS,
+        id: `case:${c.id}:ops_review`, severity: 'critical', audience: OPS_DECIDERS, viewer: true,
         title: `Verdict awaiting your decision: ${what}`,
         detail: `Safety proposed ${c.proposal?.decisions.length ? 'a verdict' : 'an outcome'} — approve or reject it.`,
         date: c.updated_at, link: '/safety/incidents',
@@ -123,7 +129,7 @@ export function useNotifications(branch: BranchCode, role?: RoleKey): {
     } else if (c.stage === 'closed' && c.verdict) {
       // Inform Safety that Ops has responded.
       items.push({
-        id: `case:${c.id}:closed`, severity: 'info', audience: SAFETY_ACTORS,
+        id: `case:${c.id}:closed`, severity: 'info', audience: SAFETY_ACTORS, viewer: true,
         title: `Incident ${c.verdict.outcome}: ${what}`,
         detail: c.verdict.outcome === 'approved'
           ? `Ops approved the verdict${c.verdict.fine_amount ? ` (fine K${c.verdict.fine_amount.toLocaleString()})` : ''}.`
@@ -306,10 +312,14 @@ export function useNotifications(branch: BranchCode, role?: RoleKey): {
     detail: 'Reorder before they run out.', date: today, link: '/workshop/spares',
   })
 
-  // Keep only items meant for this role. Admins (MD, Ops Manager) see everything
-  // for oversight; if no role is supplied, fall back to showing all.
+  // View-only roles see ONLY the incident/safety status items (no operational
+  // to-dos). Everyone else: admins (MD, Ops Manager) see everything for oversight;
+  // other roles see branch-wide items plus those addressed to their role.
+  const isViewer = role ? VIEWER_ROLES.includes(role) : false
   const isAdmin = role ? ROLES[role].isAdmin : true
-  const forRole = items.filter((n) => !n.audience || isAdmin || (role ? n.audience.includes(role) : true))
+  const forRole = isViewer
+    ? items.filter((n) => n.viewer)
+    : items.filter((n) => !n.audience || isAdmin || (role ? n.audience.includes(role) : true))
 
   // Critical first, then by date ascending (soonest)
   const order = { critical: 0, warning: 1, info: 2 }
