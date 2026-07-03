@@ -94,10 +94,34 @@ export default function SpeedOverview() {
     [allEvents, branch, effCmp, geo],
   )
   const [geoBus, setGeoBus] = useState('all')
-  const geoBuses = useMemo(() => [...new Set(geoPts.map((p) => p.e.vehicle_label))].sort((x, y) => x.localeCompare(y, undefined, { numeric: true })), [geoPts])
-  const fgeoPts = useMemo(() => (geoBus === 'all' ? geoPts : geoPts.filter((p) => p.e.vehicle_label === geoBus)), [geoPts, geoBus])
+  const [geoDriver, setGeoDriver] = useState('all')
+  // Cascading options: the bus list reflects the chosen driver, and the driver list
+  // reflects the chosen bus — so you only ever see combinations that exist (pick
+  // INZ 122 → the driver list shows only who sped in it, and vice-versa).
+  const geoBuses = useMemo(
+    () => [...new Set(geoPts.filter((p) => geoDriver === 'all' || p.e.driver_name === geoDriver).map((p) => p.e.vehicle_label))].sort((x, y) => x.localeCompare(y, undefined, { numeric: true })),
+    [geoPts, geoDriver],
+  )
+  const geoDrivers = useMemo(
+    () => [...new Set(geoPts.filter((p) => geoBus === 'all' || p.e.vehicle_label === geoBus).map((p) => p.e.driver_name).filter(Boolean))].sort(),
+    [geoPts, geoBus],
+  )
+  const fgeoPts = useMemo(
+    () => geoPts.filter((p) => (geoBus === 'all' || p.e.vehicle_label === geoBus) && (geoDriver === 'all' || p.e.driver_name === geoDriver)),
+    [geoPts, geoBus, geoDriver],
+  )
+  // Changing one filter clears the other if the pair no longer exists, so you never
+  // land on an impossible combination.
+  function pickBus(v: string) {
+    setGeoBus(v)
+    if (v !== 'all' && geoDriver !== 'all' && !geoPts.some((p) => p.e.vehicle_label === v && p.e.driver_name === geoDriver)) setGeoDriver('all')
+  }
+  function pickDriver(v: string) {
+    setGeoDriver(v)
+    if (v !== 'all' && geoBus !== 'all' && !geoPts.some((p) => p.e.vehicle_label === geoBus && p.e.driver_name === v)) setGeoBus('all')
+  }
   const heatPoints = useMemo(
-    () => fgeoPts.map(({ e, g }) => ({ lat: g.lat, lng: g.lng, weight: Math.min(1, overBy(e) / 30), label: `${e.vehicle_label} · ${e.event_datetime.slice(0, 16).replace('T', ' ')} · +${overBy(e)} km/h · ${e.route || ''}` })),
+    () => fgeoPts.map(({ e, g }) => ({ lat: g.lat, lng: g.lng, weight: Math.min(1, overBy(e) / 30), label: `${e.vehicle_label}${e.driver_name ? ` · ${e.driver_name}` : ''} · ${e.event_datetime.slice(0, 16).replace('T', ' ')} · +${overBy(e)} km/h · ${e.route || ''}` })),
     [fgeoPts],
   )
   const hotspots = useMemo(() => {
@@ -368,8 +392,8 @@ export default function SpeedOverview() {
             <h3 className="font-display text-sm font-bold text-navy">Repeat-offender leaderboard</h3>
           </div>
           {offence.length === 0 ? <p className="px-5 py-8 text-center text-sm text-status-neutral">No offences recorded.</p> : (
-            <div className="max-h-96 divide-y divide-black/5 overflow-y-auto">
-              {offence.slice(0, 8).map((d, i) => (
+            <div className="max-h-60 divide-y divide-black/5 overflow-y-auto">
+              {offence.map((d, i) => (
                 <div key={d.name} className="flex items-center gap-3 px-5 py-2.5">
                   <span className="w-5 text-sm font-bold text-status-neutral">{i + 1}</span>
                   <span className="flex-1 text-sm font-medium text-navy">{d.name}</span>
@@ -386,11 +410,12 @@ export default function SpeedOverview() {
             <span className="ml-auto rounded-full bg-status-good/10 px-2 py-0.5 text-xs font-medium text-status-good">{clean.length} drivers</span>
           </div>
           {clean.length === 0 ? <p className="px-5 py-8 text-center text-sm text-status-neutral">No spotless records yet.</p> : (
-            <div className="flex flex-wrap gap-1.5 p-4">
-              {clean.slice(0, 18).map((d) => (
-                <span key={d.id} className="inline-flex items-center gap-1 rounded-full bg-status-good/8 px-2.5 py-1 text-xs text-navy"><ShieldCheck size={12} className="text-status-good" /> {d.full_name}</span>
-              ))}
-              {clean.length > 18 && <span className="px-2 py-1 text-xs text-status-neutral">+{clean.length - 18} more</span>}
+            <div className="max-h-60 overflow-auto p-4">
+              <div className="flex flex-wrap gap-1.5">
+                {clean.map((d) => (
+                  <span key={d.id} className="inline-flex items-center gap-1 rounded-full bg-status-good/8 px-2.5 py-1 text-xs text-navy"><ShieldCheck size={12} className="text-status-good" /> {d.full_name}</span>
+                ))}
+              </div>
             </div>
           )}
         </div>
@@ -398,14 +423,18 @@ export default function SpeedOverview() {
 
       {/* Where it's happening — coordinate hotspot map */}
       {geoPts.length > 0 && (
-        <Card title="Where it's happening — hotspot map" subtitle={`${fgeoPts.length} located speeding event${fgeoPts.length === 1 ? '' : 's'}${geoBus === 'all' ? '' : ` for ${geoBus}`} in ${a.thisLabel}. Warmer areas = more speeding.`}>
+        <Card title="Where it's happening — hotspot map" subtitle={`${fgeoPts.length} located speeding event${fgeoPts.length === 1 ? '' : 's'}${[geoBus, geoDriver].some((v) => v !== 'all') ? ` for ${[geoBus, geoDriver].filter((v) => v !== 'all').join(' · ')}` : ''} in ${a.thisLabel}. Warmer areas = more speeding.`}>
           <div className="mb-3 flex flex-wrap items-center gap-2">
-            <span className="text-xs text-status-neutral">Filter by bus</span>
-            <select value={geoBus} onChange={(e) => setGeoBus(e.target.value)} className="rounded-lg border border-black/15 bg-white px-3 py-1.5 text-sm font-medium text-navy outline-none focus:border-brand">
-              <option value="all">All buses ({geoPts.length})</option>
+            <span className="text-xs text-status-neutral">Filter</span>
+            <select value={geoBus} onChange={(e) => pickBus(e.target.value)} className="rounded-lg border border-black/15 bg-white px-3 py-1.5 text-sm font-medium text-navy outline-none focus:border-brand">
+              <option value="all">All buses</option>
               {geoBuses.map((b) => <option key={b} value={b}>{b}</option>)}
             </select>
-            {geoBus !== 'all' && <button onClick={() => setGeoBus('all')} className="text-xs text-brand hover:underline">clear</button>}
+            <select value={geoDriver} onChange={(e) => pickDriver(e.target.value)} className="rounded-lg border border-black/15 bg-white px-3 py-1.5 text-sm font-medium text-navy outline-none focus:border-brand">
+              <option value="all">All drivers</option>
+              {geoDrivers.map((d) => <option key={d} value={d}>{d}</option>)}
+            </select>
+            {(geoBus !== 'all' || geoDriver !== 'all') && <button onClick={() => { setGeoBus('all'); setGeoDriver('all') }} className="text-xs text-brand hover:underline">clear</button>}
           </div>
           <div className="grid gap-4 lg:grid-cols-[1.6fr_1fr]">
             <SpeedHotspotMap points={heatPoints} />
@@ -419,7 +448,7 @@ export default function SpeedOverview() {
                     <span className="rounded-full bg-status-critical/10 px-2 py-0.5 text-xs font-bold text-status-critical">{h.count}</span>
                   </div>
                 ))}
-                {hotspots.length === 0 && <p className="py-6 text-center text-sm text-status-neutral">No located events for this bus.</p>}
+                {hotspots.length === 0 && <p className="py-6 text-center text-sm text-status-neutral">No located events for this filter.</p>}
               </div>
             </div>
           </div>
