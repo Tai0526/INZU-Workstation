@@ -377,7 +377,8 @@ function AddIssuancesModal({ open, onClose, branch, vehicles, drivers, routes, a
 
   function onFleet(v: string) { setFleet(v); const veh = vehicles.find((x: any) => x.fleet_no.toLowerCase() === v.toLowerCase()); if (veh) setReg(veh.reg_plate) }
   function setRow(i: number, patch: Partial<Draft>) { setRows((rs) => rs.map((r, idx) => (idx === i ? { ...r, ...patch } : r))) }
-  const ready = rows.filter((r) => r.date && Number(r.opening_mileage) > 0 && Number(r.liters_given) > 0)
+  // Litres may be 0 — a movement-only record (mileage + driver, no fuel given).
+  const ready = rows.filter((r) => r.date && Number(r.opening_mileage) > 0)
 
   function save() {
     const valid = ready.slice().sort((a, b) => Number(a.opening_mileage) - Number(b.opening_mileage))
@@ -422,7 +423,7 @@ function AddIssuancesModal({ open, onClose, branch, vehicles, drivers, routes, a
         </table>
       </div>
       <button onClick={() => setRows((rs) => [...rs, draft(rs[rs.length - 1]?.date ?? '')])} className="mt-2 inline-flex items-center gap-1 rounded-lg border border-dashed border-navy/25 px-3 py-1.5 text-xs font-medium text-brand hover:border-brand"><Plus size={14} /> Add row</button>
-      <p className="mt-1 text-[11px] text-status-neutral">Both tank levels (before &amp; after fuelling) are recorded now. Only the closing odometer &amp; KM/L are filled in at the next refuel. Routes are the fuel-only catalogue (manage them with the “Routes” button).</p>
+      <p className="mt-1 text-[11px] text-status-neutral">Both tank levels (before &amp; after fuelling) are recorded now. Only the closing odometer &amp; KM/L are filled in at the next refuel. Enter <span className="font-medium text-navy">0 litres</span> to log a movement only (mileage &amp; driver, no fuel given). Routes are the fuel-only catalogue (manage them with the “Routes” button).</p>
       {routes.length === 0 && <p className="mt-1 rounded-lg bg-brand-tint/40 px-3 py-2 text-[11px] text-[#8a4513]">No fuel routes yet — add them with the “Routes” button on the Issuances tab.</p>}
     </Modal>
   )
@@ -442,7 +443,9 @@ function QuickRefuelModal({ open, onClose, branch, vehicles, drivers, routes, at
   if (!open && wasOpen) setWasOpen(false)
 
   function onFleet(v: string) { setFleet(v); const veh = vehicles.find((x: any) => x.fleet_no.toLowerCase() === v.toLowerCase()); if (veh) setReg(veh.reg_plate) }
-  const ready = !!fleet.trim() && Number(odo) > 0 && Number(litres) > 0
+  // Litres may be 0 — a movement-only record (mileage + driver, no fuel given),
+  // e.g. days a bus ran between refuels. Only the bus + odometer are required.
+  const ready = !!fleet.trim() && Number(odo) > 0
   function save() {
     if (!ready) return
     recordRefuel({
@@ -466,8 +469,9 @@ function QuickRefuelModal({ open, onClose, branch, vehicles, drivers, routes, at
         </div>
         <div className="grid grid-cols-2 gap-3">
           <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Odometer now</span><input type="number" inputMode="numeric" className={bigCls} placeholder="km" value={odo} onChange={(e) => setOdo(e.target.value)} /></label>
-          <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Litres given</span><input type="number" inputMode="decimal" className={bigCls} placeholder="L" value={litres} onChange={(e) => setLitres(e.target.value)} /></label>
+          <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Litres given <span className="font-normal text-status-neutral">— 0 if none</span></span><input type="number" inputMode="decimal" className={bigCls} placeholder="0 if no fuel" value={litres} onChange={(e) => setLitres(e.target.value)} /></label>
         </div>
+        <p className="text-[11px] text-status-neutral">A bus that <span className="font-medium text-navy">moved but wasn't fuelled</span>? Enter the odometer with <span className="font-medium text-navy">0 litres</span> — the mileage &amp; driver are still recorded.</p>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Tank before</span><select className={inputCls} value={before} onChange={(e) => setBefore(e.target.value)}><option value="">—</option>{levels.map((l) => <option key={l} value={l}>{l}</option>)}</select></label>
           <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Tank after</span><select className={inputCls} value={after} onChange={(e) => setAfter(e.target.value)}>{levels.map((l) => <option key={l} value={l}>{l}</option>)}</select></label>
