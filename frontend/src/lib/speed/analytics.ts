@@ -43,7 +43,7 @@ export interface SpeedAnalytics {
  * (the "vs" pick) — by default the previous month, but the caller can pick
  * any two. The 6-month trend always spans far enough to include both.
  */
-export function computeSpeedAnalytics(allEvents: SpeedEvent[], allVehicles: Vehicle[], branch: BranchCode, thisKey: string, lastKey: string, today: Date = new Date()): SpeedAnalytics {
+export function computeSpeedAnalytics(allEvents: SpeedEvent[], allVehicles: Vehicle[], branch: BranchCode, thisKey: string, lastKey: string, today: Date = new Date(), busesOnRoad?: (mk: string) => number): SpeedAnalytics {
   // Trend ends at the later of the two months and stretches back far enough
   // (≥6 months) to cover the older pick as well.
   const endKey = thisKey >= lastKey ? thisKey : lastKey
@@ -61,11 +61,15 @@ export function computeSpeedAnalytics(allEvents: SpeedEvent[], allVehicles: Vehi
   const thisEvents = valid.filter((e) => inMonth(e, thisKey))
   const lastEvents = valid.filter((e) => inMonth(e, lastKey))
 
-  const activeBuses = vehicles.length || 1
+  // Buses actually on the road that month = distinct fleet numbers that logged
+  // mileage (no duplicates), so a bus that ran both projects counts once. Falls
+  // back to the whole branch fleet if mileage isn't available for that month.
+  const activeBusesThis = busesOnRoad?.(thisKey) || vehicles.length || 1
+  const activeBusesLast = busesOnRoad?.(lastKey) || vehicles.length || 1
   const daysThis = daysInMonthOf(thisKey, today)
   const daysLast = daysInMonthOf(lastKey, today)
-  const rateThis = thisEvents.length / (activeBuses * daysThis)
-  const rateLast = lastEvents.length / (activeBuses * daysLast)
+  const rateThis = thisEvents.length / (activeBusesThis * daysThis)
+  const rateLast = lastEvents.length / (activeBusesLast * daysLast)
   const ratePct = rateLast ? Math.round(((rateThis - rateLast) / rateLast) * 100) : rateThis ? 100 : 0
   const improving = rateThis < rateLast
   const same = Math.abs(rateThis - rateLast) < 1e-9
@@ -132,7 +136,7 @@ export function computeSpeedAnalytics(allEvents: SpeedEvent[], allVehicles: Vehi
   return {
     thisKey, lastKey, thisLabel: monthLabel(thisKey), lastLabel: monthLabel(lastKey),
     countThis: thisEvents.length, countLast: lastEvents.length,
-    activeBuses, daysThis, daysLast,
+    activeBuses: activeBusesThis, daysThis, daysLast,
     rateThis, rateLast, ratePct, improving, same,
     avgSevThis: avg(thisEvents), avgSevLast: avg(lastEvents),
     trend, daily, lastDailyAvg, hourly, zoneMix, byModel,

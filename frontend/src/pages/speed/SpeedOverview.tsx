@@ -12,6 +12,7 @@ import { useSpeedEvents } from '@/lib/speed/store'
 import { useSpeedGeo } from '@/lib/speed/geo'
 import { useVehicles } from '@/lib/fleet/store'
 import { useDrivers } from '@/lib/drivers/store'
+import { useMileageTrips } from '@/lib/mileage/store'
 import { computeSpeedAnalytics } from '@/lib/speed/analytics'
 import SpeedHotspotMap from '@/components/speed/SpeedHotspotMap'
 import { exportSpeedPdf, svgToPng } from '@/lib/speed/pdf'
@@ -59,13 +60,29 @@ export default function SpeedOverview() {
   const [cmpKey, setCmpKey] = useState('')
   const [baseKey, setBaseKey] = useState('')
   const effCmp = monthOptions.includes(cmpKey) ? cmpKey : (dataMonths[0] ?? monthOptions[0])
-  // monthOptions is latest-first, so the month right after effCmp in the list
-  // is the chronologically previous one — the natural baseline.
-  const effBase = monthOptions.includes(baseKey)
-    ? baseKey
-    : (monthOptions[monthOptions.indexOf(effCmp) + 1] ?? monthOptions.find((k) => k !== effCmp) ?? effCmp)
+  // Baseline ("vs"): defaults to NONE — you review one month on its own and only
+  // compare when you deliberately pick an earlier month, so it never compares a
+  // month with itself.
+  const NONE = 'none'
+  const effBase = baseKey && baseKey !== effCmp && monthOptions.includes(baseKey) ? baseKey : NONE
+  const single = effBase === NONE
+  const effBaseForCalc = single ? effCmp : effBase // keep the maths valid; single-month UI ignores the "last" side
 
-  const a = useMemo(() => computeSpeedAnalytics(allEvents, vehicles, branch, effCmp, effBase, new Date()), [allEvents, vehicles, branch, effCmp, effBase])
+  // Buses actually on the road each month = distinct fleet numbers that logged
+  // mileage (no duplicates), used to normalise the per-bus rate.
+  const mileageTrips = useMileageTrips()
+  const busesOnRoad = useMemo(() => {
+    const byMonth = new Map<string, Set<string>>()
+    for (const t of mileageTrips) {
+      if (t.branch !== branch) continue
+      const mk = monthKey(t.date)
+      if (!byMonth.has(mk)) byMonth.set(mk, new Set())
+      byMonth.get(mk)!.add(t.fleet_no)
+    }
+    return (mk: string) => byMonth.get(mk)?.size ?? 0
+  }, [mileageTrips, branch])
+
+  const a = useMemo(() => computeSpeedAnalytics(allEvents, vehicles, branch, effCmp, effBaseForCalc, new Date(), busesOnRoad), [allEvents, vehicles, branch, effCmp, effBaseForCalc, busesOnRoad])
 
   // Driver-accountability extras (valid, branch events)
   const valid = useMemo(() => allEvents.filter((e) => e.branch === branch && countsAgainstDriver(e)), [allEvents, branch])
@@ -166,11 +183,13 @@ export default function SpeedOverview() {
         const png = await svgToPng(svg)
         if (png) charts.push({ title, ...png })
       }
-      const verdict = a.same
-        ? `Speeding held steady in ${a.thisLabel}: ${a.rateThis.toFixed(2)} events per bus per day, unchanged from ${a.lastLabel}.`
-        : a.improving
-          ? `Speeding improved ${Math.abs(a.ratePct)}% in ${a.thisLabel}: ${a.rateThis.toFixed(2)} events per bus per day, down from ${a.rateLast.toFixed(2)} in ${a.lastLabel}.`
-          : `Speeding deteriorated ${a.ratePct}% in ${a.thisLabel}: ${a.rateThis.toFixed(2)} events per bus per day, up from ${a.rateLast.toFixed(2)} in ${a.lastLabel}.`
+      const verdict = single
+        ? `In ${a.thisLabel}, each bus averaged ${a.rateThis.toFixed(2)} speeding events per day across ${a.activeBuses} buses on the road, at about ${a.avgSevThis.toFixed(1)} km/h over the limit.`
+        : a.same
+          ? `Speeding held steady in ${a.thisLabel}: ${a.rateThis.toFixed(2)} events per bus per day, unchanged from ${a.lastLabel}.`
+          : a.improving
+            ? `Speeding improved ${Math.abs(a.ratePct)}% in ${a.thisLabel}: ${a.rateThis.toFixed(2)} events per bus per day, down from ${a.rateLast.toFixed(2)} in ${a.lastLabel}.`
+            : `Speeding deteriorated ${a.ratePct}% in ${a.thisLabel}: ${a.rateThis.toFixed(2)} events per bus per day, up from ${a.rateLast.toFixed(2)} in ${a.lastLabel}.`
       const suggestions: string[] = []
       if (hotspots[0]) suggestions.push(`${hotspots[0].name} is the worst location (${hotspots[0].count} events) — prioritise signage and enforcement there.`)
       if (peakHour.count > 0) suggestions.push(`Most breaches cluster around ${String(peakHour.hour).padStart(2, '0')}:00 — brief crews before that window.`)
@@ -178,15 +197,17 @@ export default function SpeedOverview() {
       if (repeatOffenders.length) suggestions.push(`${repeatOffenders.length} repeat offender${repeatOffenders.length === 1 ? '' : 's'} — hold counselling sessions and apply the penalty ladder consistently.`)
       exportSpeedPdf({
         branchLabel,
-        periodLabel: `${a.thisLabel} vs ${a.lastLabel}`,
+        periodLabel: single ? a.thisLabel : `${a.thisLabel} vs ${a.lastLabel}`,
         generated: new Date().toLocaleDateString('en', { day: '2-digit', month: 'short', year: 'numeric' }),
         verdict,
         kpis: [
-          { label: 'Speeding / bus / day', value: a.rateThis.toFixed(2), sub: `vs ${a.rateLast.toFixed(2)} last` },
+          { label: 'Speeding / bus / day', value: a.rateThis.toFixed(2), sub: single ? a.thisLabel : `vs ${a.rateLast.toFixed(2)} last` },
           { label: 'Valid events', value: String(a.countThis), sub: a.thisLabel },
           { label: 'Avg over limit', value: `${a.avgSevThis.toFixed(1)} km/h`, sub: 'severity' },
           { label: 'Repeat offenders', value: String(repeatOffenders.length), sub: '2+ events' },
-          { label: 'Buses speeding more', value: `${a.busesWorse}/${a.activeBuses}`, sub: `${a.busesImproved} improved` },
+          single
+            ? { label: 'Buses on the road', value: String(a.activeBuses), sub: `ran in ${a.thisLabel}` }
+            : { label: 'Buses speeding more', value: `${a.busesWorse}/${a.activeBuses}`, sub: `${a.busesImproved} improved` },
           { label: 'Fines this month', value: `K${finesThisMonth.toLocaleString()}`, sub: 'confirmed' },
         ],
         charts,
@@ -206,7 +227,7 @@ export default function SpeedOverview() {
     <div className="page space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-status-neutral">
-          {branchLabel} speeding performance — {a.lastLabel} → {a.thisLabel}, normalized per active bus per day.
+          {branchLabel} speeding performance — {single ? a.thisLabel : `${a.lastLabel} → ${a.thisLabel}`}, normalized per active bus per day.
         </p>
         <div className="flex flex-wrap items-center gap-2">
           <label className="flex items-center gap-1.5 text-xs text-status-neutral">
@@ -225,7 +246,8 @@ export default function SpeedOverview() {
             onChange={(e) => setBaseKey(e.target.value)}
             className="rounded-lg border border-black/15 bg-white px-3 py-2 text-sm font-medium text-navy outline-none focus:border-brand"
           >
-            {monthOptions.map((k) => <option key={k} value={k}>{monthLabel(k)}</option>)}
+            <option value="none">— none (single month) —</option>
+            {monthOptions.filter((k) => k !== effCmp).map((k) => <option key={k} value={k}>{monthLabel(k)}</option>)}
           </select>
           <Button variant="secondary" onClick={exportPdf} disabled={exporting}><FileText size={15} /> {exporting ? 'Preparing…' : 'PDF report'}</Button>
           <Button variant="secondary" onClick={() => exportEvents(allEvents.filter((e) => e.branch === branch), branchLabel)}><Download size={15} /> Export</Button>
@@ -233,21 +255,34 @@ export default function SpeedOverview() {
       </div>
 
       {/* Headline */}
-      <div className="card flex flex-wrap items-center gap-5 p-5">
-        <div className={`flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl ${a.improving ? 'bg-status-good/10' : a.same ? 'bg-canvas' : 'bg-status-critical/10'}`}>
-          <TrendIcon size={30} className={trendColor} />
+      {single ? (
+        <div className="card flex flex-wrap items-center gap-5 p-5">
+          <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-canvas"><Activity size={30} className="text-brand" /></div>
+          <div className="flex-1">
+            <h2 className="font-display text-lg font-bold text-navy">{a.thisLabel}: {rateFmt(a.rateThis)} speeding events per bus, per day</h2>
+            <p className="text-sm text-status-neutral">
+              {a.countThis} valid event{a.countThis === 1 ? '' : 's'} across <span className="font-medium text-navy">{a.activeBuses}</span> bus{a.activeBuses === 1 ? '' : 'es'} on the road, averaging {a.avgSevThis.toFixed(1)} km/h over the limit.
+              Pick an earlier month in the <span className="font-medium text-navy">vs</span> box to compare.
+            </p>
+          </div>
         </div>
-        <div className="flex-1">
-          <h2 className="font-display text-lg font-bold text-navy">
-            {a.same ? 'Speeding held steady this month' : a.improving ? `Speeding improved ${Math.abs(a.ratePct)}% this month` : `Speeding deteriorated ${a.ratePct}% this month`}
-          </h2>
-          <p className="text-sm text-status-neutral">
-            On average each bus triggered <span className="font-medium text-navy">{rateFmt(a.rateThis)}</span> speeding events per day in {a.thisLabel}, vs {rateFmt(a.rateLast)} in {a.lastLabel}.
-            We divide by the number of buses on the road ({a.activeBuses}) so months with bigger fleets don't look worse automatically.
-            Severity stayed around {a.avgSevThis.toFixed(1)} km/h over the limit. {a.improving ? 'Keep it up.' : a.same ? '' : 'See what changed below.'}
-          </p>
+      ) : (
+        <div className="card flex flex-wrap items-center gap-5 p-5">
+          <div className={`flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl ${a.improving ? 'bg-status-good/10' : a.same ? 'bg-canvas' : 'bg-status-critical/10'}`}>
+            <TrendIcon size={30} className={trendColor} />
+          </div>
+          <div className="flex-1">
+            <h2 className="font-display text-lg font-bold text-navy">
+              {a.same ? 'Speeding held steady' : a.improving ? `Speeding improved ${Math.abs(a.ratePct)}%` : `Speeding deteriorated ${a.ratePct}%`} — {a.thisLabel} vs {a.lastLabel}
+            </h2>
+            <p className="text-sm text-status-neutral">
+              On average each bus triggered <span className="font-medium text-navy">{rateFmt(a.rateThis)}</span> speeding events per day in {a.thisLabel}, vs {rateFmt(a.rateLast)} in {a.lastLabel}.
+              We divide by the number of buses on the road ({a.activeBuses}) so months with bigger fleets don't look worse automatically.
+              Severity stayed around {a.avgSevThis.toFixed(1)} km/h over the limit. {a.improving ? 'Keep it up.' : a.same ? '' : 'See what changed below.'}
+            </p>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Headline KPIs */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
@@ -255,20 +290,22 @@ export default function SpeedOverview() {
           label="Speeding / bus / day"
           info="Average speeding events per active bus each day. We normalise by fleet size so months with more buses on the road still compare fairly."
           value={rateFmt(a.rateThis)}
-          tone={a.improving || a.same ? 'good' : 'critical'}
-          trend={a.same ? undefined : { dir: a.improving ? 'down' : 'up', text: `${Math.abs(a.ratePct)}%`, good: a.improving }}
-          sub={`vs ${rateFmt(a.rateLast)} in ${a.lastLabel}`}
+          tone={single ? 'good' : a.improving || a.same ? 'good' : 'critical'}
+          trend={single || a.same ? undefined : { dir: a.improving ? 'down' : 'up', text: `${Math.abs(a.ratePct)}%`, good: a.improving }}
+          sub={single ? a.thisLabel : `vs ${rateFmt(a.rateLast)} in ${a.lastLabel}`}
         />
         <KpiCard label="Fines this month" value={`K${finesThisMonth.toLocaleString()}`} tone={finesThisMonth ? 'warning' : 'good'} sub="from confirmed charges" info="Total fines from charges confirmed this month, per the penalty policy." />
         <KpiCard label="Valid events" value={a.countThis} sub={a.thisLabel} info="Genuine speeding events this month, after removing GPS glitches." />
         <KpiCard label="Repeat offenders" value={repeatOffenders.length} tone={repeatOffenders.length ? 'critical' : 'good'} sub="drivers with 2+ events" />
-        <KpiCard label="Buses speeding more" value={`${a.busesWorse} / ${a.activeBuses}`} tone={a.busesWorse ? 'critical' : 'good'} sub={`${a.busesImproved} improved`} info="Buses with more speeding events than last month, out of the active fleet." />
+        {single
+          ? <KpiCard label="Buses on the road" value={a.activeBuses} sub={`ran in ${a.thisLabel}`} info="Distinct buses that logged mileage this month (no duplicates) — used to normalise the per-bus rate." />
+          : <KpiCard label="Buses speeding more" value={`${a.busesWorse} / ${a.activeBuses}`} tone={a.busesWorse ? 'critical' : 'good'} sub={`${a.busesImproved} improved`} info="Buses with more speeding events than last month, out of the buses on the road." />}
         <KpiCard label="At dismissal" value={atDismissal} tone={atDismissal ? 'critical' : 'good'} sub="drivers at the threshold" info="Drivers whose offence history has reached the dismissal step in the penalty policy." />
       </div>
 
       {/* Trend + normalized rate */}
-      <div className="grid gap-4 lg:grid-cols-[1.6fr_1fr]">
-        <Card title="Events per month" subtitle={`Raw valid events — ${a.thisLabel} (navy) and ${a.lastLabel} (orange) highlighted`}>
+      <div className={`grid gap-4 ${single ? '' : 'lg:grid-cols-[1.6fr_1fr]'}`}>
+        <Card title="Events per month" subtitle={single ? `Raw valid events — ${a.thisLabel} highlighted` : `Raw valid events — ${a.thisLabel} (navy) and ${a.lastLabel} (orange) highlighted`}>
           <div id="spd-chart-trend" className="h-56">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={a.trend} margin={{ top: 8, right: 8, bottom: 0, left: -20 }}>
@@ -284,26 +321,28 @@ export default function SpeedOverview() {
           </div>
         </Card>
 
-        <Card title="Speeding per bus, per day" subtitle="The fair month-to-month number — adjusts for how many buses ran, so a bigger fleet isn't penalised.">
-          <div id="spd-chart-rate" className="h-56">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={[{ name: a.lastLabel, rate: +a.rateLast.toFixed(2) }, { name: a.thisLabel, rate: +a.rateThis.toFixed(2) }]} margin={{ top: 8, right: 8, bottom: 0, left: -20 }}>
-                <CartesianGrid stroke={GRID} vertical={false} />
-                <XAxis dataKey="name" tick={{ fontSize: 12, fill: '#6B7280' }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fontSize: 12, fill: '#6B7280' }} axisLine={false} tickLine={false} />
-                <Tooltip formatter={(v: number) => [`${v} / bus / day`, 'Rate']} contentStyle={tip} />
-                <Bar dataKey="rate" radius={[6, 6, 0, 0]} maxBarSize={64}>
-                  <Cell fill={BRAND} /><Cell fill={a.improving ? '#2E7D4F' : '#B3261E'} />
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </Card>
+        {!single && (
+          <Card title="Speeding per bus, per day" subtitle="The fair month-to-month number — adjusts for how many buses ran, so a bigger fleet isn't penalised.">
+            <div id="spd-chart-rate" className="h-56">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={[{ name: a.lastLabel, rate: +a.rateLast.toFixed(2) }, { name: a.thisLabel, rate: +a.rateThis.toFixed(2) }]} margin={{ top: 8, right: 8, bottom: 0, left: -20 }}>
+                  <CartesianGrid stroke={GRID} vertical={false} />
+                  <XAxis dataKey="name" tick={{ fontSize: 12, fill: '#6B7280' }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fontSize: 12, fill: '#6B7280' }} axisLine={false} tickLine={false} />
+                  <Tooltip formatter={(v: number) => [`${v} / bus / day`, 'Rate']} contentStyle={tip} />
+                  <Bar dataKey="rate" radius={[6, 6, 0, 0]} maxBarSize={64}>
+                    <Cell fill={BRAND} /><Cell fill={a.improving ? '#2E7D4F' : '#B3261E'} />
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </Card>
+        )}
       </div>
 
       {/* Daily + hourly */}
       <div className="grid gap-4 lg:grid-cols-2">
-        <Card title={`Daily trend — ${a.thisLabel}`} subtitle={`Dashed line = ${a.lastLabel} daily average (${a.lastDailyAvg.toFixed(1)})`}>
+        <Card title={`Daily trend — ${a.thisLabel}`} subtitle={single ? `Dashed line = daily average (${a.lastDailyAvg.toFixed(1)})` : `Dashed line = ${a.lastLabel} daily average (${a.lastDailyAvg.toFixed(1)})`}>
           <div className="h-52">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={a.daily} margin={{ top: 8, right: 10, bottom: 0, left: -22 }}>
@@ -329,7 +368,7 @@ export default function SpeedOverview() {
                 <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#6B7280' }} axisLine={false} tickLine={false} />
                 <Tooltip formatter={(v: number, n: string) => [`${v} events`, n]} labelFormatter={(h) => `${h}:00`} contentStyle={tip} />
                 <Legend wrapperStyle={{ fontSize: 11 }} />
-                <Line type="monotone" dataKey="lastM" name={a.lastLabel} stroke={NAVY} strokeWidth={2} dot={false} />
+                {!single && <Line type="monotone" dataKey="lastM" name={a.lastLabel} stroke={NAVY} strokeWidth={2} dot={false} />}
                 <Line type="monotone" dataKey="thisM" name={a.thisLabel} stroke={BRAND} strokeWidth={2} dot={false} />
               </LineChart>
             </ResponsiveContainer>
@@ -338,27 +377,29 @@ export default function SpeedOverview() {
       </div>
 
       {/* By model + zone mix */}
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card title="By bus model" subtitle={`Events ${a.lastLabel} vs ${a.thisLabel}`}>
-          <div className="h-52">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={a.byModel} margin={{ top: 8, right: 10, bottom: 0, left: -22 }}>
-                <CartesianGrid stroke={GRID} vertical={false} />
-                <XAxis dataKey="model" tick={{ fontSize: 10, fill: '#6B7280' }} axisLine={false} tickLine={false} />
-                <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#6B7280' }} axisLine={false} tickLine={false} />
-                <Tooltip contentStyle={tip} />
-                <Legend wrapperStyle={{ fontSize: 11 }} />
-                <Bar dataKey="lastM" name={a.lastLabel} fill={NAVY} radius={[4, 4, 0, 0]} maxBarSize={28} />
-                <Bar dataKey="thisM" name={a.thisLabel} fill={BRAND} radius={[4, 4, 0, 0]} maxBarSize={28} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </Card>
+      <div className={`grid gap-4 ${single ? '' : 'lg:grid-cols-2'}`}>
+        {!single && (
+          <Card title="By bus model" subtitle={`Events ${a.lastLabel} vs ${a.thisLabel}`}>
+            <div className="h-52">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={a.byModel} margin={{ top: 8, right: 10, bottom: 0, left: -22 }}>
+                  <CartesianGrid stroke={GRID} vertical={false} />
+                  <XAxis dataKey="model" tick={{ fontSize: 10, fill: '#6B7280' }} axisLine={false} tickLine={false} />
+                  <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#6B7280' }} axisLine={false} tickLine={false} />
+                  <Tooltip contentStyle={tip} />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  <Bar dataKey="lastM" name={a.lastLabel} fill={NAVY} radius={[4, 4, 0, 0]} maxBarSize={28} />
+                  <Bar dataKey="thisM" name={a.thisLabel} fill={BRAND} radius={[4, 4, 0, 0]} maxBarSize={28} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </Card>
+        )}
 
         <Card title="Where it happens — by speed zone" subtitle="Open-road breaches (>80) carry more risk than slow site-zone ones">
           <div id="spd-chart-zone" className="h-52">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={a.zoneMix} layout="vertical" margin={{ top: 8, right: 10, bottom: 0, left: 6 }}>
+              <BarChart data={single ? a.zoneMix.slice(1) : a.zoneMix} layout="vertical" margin={{ top: 8, right: 10, bottom: 0, left: 6 }}>
                 <XAxis type="number" tick={{ fontSize: 11, fill: '#6B7280' }} axisLine={false} tickLine={false} allowDecimals={false} />
                 <YAxis type="category" dataKey="month" width={48} tick={{ fontSize: 12, fill: '#0F1B33' }} axisLine={false} tickLine={false} />
                 <Tooltip contentStyle={tip} />
@@ -372,16 +413,20 @@ export default function SpeedOverview() {
         </Card>
       </div>
 
-      {/* Per-bus winners & concerns */}
-      <div className="grid gap-4 lg:grid-cols-2">
-        <PerBusTable title="Watch list — largest deterioration" icon={<AlertTriangle size={16} className="text-status-critical" />} rows={a.watch} positive />
-        <PerBusTable title="Improved — largest reduction" icon={<Trophy size={16} className="text-status-good" />} rows={a.improved} positive={false} />
-      </div>
-      {a.concentrationBuses.length > 0 && (
-        <div className="rounded-xl border border-status-critical/20 bg-status-critical/5 px-4 py-3 text-sm text-navy">
-          <span className="font-semibold text-status-critical">Concentration risk:</span> {a.concentrationBuses.join(', ')} account for{' '}
-          <span className="font-semibold">{a.concentrationShare}%</span> of this month's increase — focus coaching here rather than a blanket fleet memo.
-        </div>
+      {/* Per-bus winners & concerns — only meaningful when comparing two months */}
+      {!single && (
+        <>
+          <div className="grid gap-4 lg:grid-cols-2">
+            <PerBusTable title="Watch list — largest deterioration" icon={<AlertTriangle size={16} className="text-status-critical" />} rows={a.watch} positive />
+            <PerBusTable title="Improved — largest reduction" icon={<Trophy size={16} className="text-status-good" />} rows={a.improved} positive={false} />
+          </div>
+          {a.concentrationBuses.length > 0 && (
+            <div className="rounded-xl border border-status-critical/20 bg-status-critical/5 px-4 py-3 text-sm text-navy">
+              <span className="font-semibold text-status-critical">Concentration risk:</span> {a.concentrationBuses.join(', ')} account for{' '}
+              <span className="font-semibold">{a.concentrationShare}%</span> of this month's increase — focus coaching here rather than a blanket fleet memo.
+            </div>
+          )}
+        </>
       )}
 
       {/* Driver accountability */}
