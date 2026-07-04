@@ -86,12 +86,44 @@ export default function SpeedOverview() {
 
   // Driver-accountability extras (valid, branch events)
   const valid = useMemo(() => allEvents.filter((e) => e.branch === branch && countsAgainstDriver(e)), [allEvents, branch])
+
+  // ── Accountability scope: repeat offenders for the selected month, YTD, or all
+  //    time — so you see the month, or how the year is tracking year-on-year. ──
+  const [offPeriod, setOffPeriod] = useState<'month' | 'ytd' | 'all'>('month')
+  const offYear = effCmp.slice(0, 4)
+  const cutMonth = effCmp.slice(5, 7)
+  const periodEvents = useMemo(() => valid.filter((e) => {
+    if (offPeriod === 'all') return true
+    const mk = monthKey(e.event_datetime)
+    if (offPeriod === 'month') return mk === effCmp
+    return mk.slice(0, 4) === offYear && mk.slice(5, 7) <= cutMonth // YTD, up to the selected month
+  }), [valid, offPeriod, effCmp, offYear, cutMonth])
+  const offPeriodLabel = offPeriod === 'month' ? monthLabel(effCmp) : offPeriod === 'ytd' ? `${offYear} to date` : 'all time'
+
   const offence = useMemo(() => {
     const m = new Map<string, { name: string; count: number }>()
-    for (const e of valid) { const k = e.driver_id || e.driver_name; const c = m.get(k) ?? { name: e.driver_name, count: 0 }; c.count++; m.set(k, c) }
+    for (const e of periodEvents) { const k = e.driver_id || e.driver_name; const c = m.get(k) ?? { name: e.driver_name, count: 0 }; c.count++; m.set(k, c) }
     return [...m.values()].sort((x, y) => y.count - x.count)
-  }, [valid])
+  }, [periodEvents])
   const repeatOffenders = offence.filter((d) => d.count >= 2)
+
+  // Year-on-year when YTD is picked: this year to date vs the same window last year.
+  const ytdCompare = useMemo(() => {
+    if (offPeriod !== 'ytd') return null
+    const prevYear = String(Number(offYear) - 1)
+    const thisYtd = periodEvents.length
+    const lastYtd = valid.filter((e) => { const mk = monthKey(e.event_datetime); return mk.slice(0, 4) === prevYear && mk.slice(5, 7) <= cutMonth }).length
+    const pct = lastYtd ? Math.round(((thisYtd - lastYtd) / lastYtd) * 100) : (thisYtd ? 100 : 0)
+    return { thisYtd, lastYtd, prevYear, pct, improving: thisYtd < lastYtd, hasPrev: lastYtd > 0 }
+  }, [offPeriod, periodEvents, valid, offYear, cutMonth])
+
+  // Per-year totals (for "all time") so multi-year direction is visible at a glance.
+  const byYear = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const e of valid) { const y = e.event_datetime.slice(0, 4); m.set(y, (m.get(y) || 0) + 1) }
+    return [...m.entries()].sort((x, y) => x[0].localeCompare(y[0])).map(([year, count]) => ({ year, count }))
+  }, [valid])
+
   const offenderKeys = new Set(allEvents.filter((e) => e.branch === branch).map((e) => e.driver_id || e.driver_name))
   const clean = drivers.filter((d) => !offenderKeys.has(d.id) && !offenderKeys.has(d.full_name))
   const finesThisMonth = allEvents
@@ -165,6 +197,53 @@ export default function SpeedOverview() {
     return arr[0] ? { fleet: arr[0][0], count: arr[0][1] } : null
   }, [geoPts])
 
+  // ── Data-driven insights & recommendations (for the accountability period) ──
+  const peakHourOverall = useMemo(() => {
+    const h = new Array(24).fill(0)
+    for (const e of periodEvents) h[Number(e.event_datetime.slice(11, 13))]++
+    let best = 0
+    for (let i = 1; i < 24; i++) if (h[i] > h[best]) best = i
+    return { hour: best, count: h[best] }
+  }, [periodEvents])
+  const worstBusOverall = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const e of periodEvents) m.set(e.vehicle_label, (m.get(e.vehicle_label) || 0) + 1)
+    const arr = [...m.entries()].sort((x, y) => y[1] - x[1])
+    return arr[0] ? { fleet: arr[0][0], count: arr[0][1] } : null
+  }, [periodEvents])
+  const recommendations = useMemo(() => {
+    const recs: string[] = []
+    const pad = (n: number) => String(n).padStart(2, '0')
+    // Direction / are we improving?
+    if (offPeriod === 'ytd' && ytdCompare?.hasPrev) {
+      recs.push(ytdCompare.improving
+        ? `Year-to-date speeding is down ${Math.abs(ytdCompare.pct)}% vs ${ytdCompare.prevYear} (${ytdCompare.thisYtd} vs ${ytdCompare.lastYtd}) — the current measures are working; keep them up.`
+        : `Year-to-date speeding is up ${ytdCompare.pct}% vs ${ytdCompare.prevYear} (${ytdCompare.thisYtd} vs ${ytdCompare.lastYtd}) — step up enforcement and review what changed.`)
+    } else if (offPeriod === 'all' && byYear.length >= 2) {
+      const last = byYear[byYear.length - 1], prev = byYear[byYear.length - 2]
+      recs.push(last.count <= prev.count
+        ? `Speeding is trending down year-on-year (${prev.year}: ${prev.count} → ${last.year}: ${last.count}) — the programme is paying off.`
+        : `Speeding rose ${prev.year} → ${last.year} (${prev.count} → ${last.count}) — revisit what changed between the years.`)
+    } else if (offPeriod === 'month' && !single && !a.same) {
+      recs.push(a.improving ? `Speeding improved ${Math.abs(a.ratePct)}% vs ${a.lastLabel} — sustain the current coaching.` : `Speeding rose ${a.ratePct}% vs ${a.lastLabel} — act before it becomes a habit.`)
+    }
+    // Repeat offenders — a few drivers usually carry most of the risk.
+    if (repeatOffenders.length) {
+      const names = repeatOffenders.slice(0, 3).map((d) => d.name).join(', ')
+      recs.push(`Target the ${repeatOffenders.length} repeat offender${repeatOffenders.length === 1 ? '' : 's'} (${names}${repeatOffenders.length > 3 ? '…' : ''}) with one-on-one counselling rather than a blanket fleet memo.`)
+    }
+    // Peak time.
+    if (peakHourOverall.count > 0) recs.push(`Speeding clusters around ${pad(peakHourOverall.hour)}:00 — brief crews and add spot-checks just before that window (often shift-change).`)
+    // Worst location (needs imported coordinates).
+    if (hotspots[0]) recs.push(`${hotspots[0].name} is the worst location — signage, a rumble strip or an enforcement point there would bite hardest.`)
+    // Worst bus.
+    if (worstBusOverall && worstBusOverall.count >= 3) recs.push(`${worstBusOverall.fleet} triggers the most events (${worstBusOverall.count}) — check its route, speed governor and whether one crew is involved.`)
+    // Drivers at the dismissal step.
+    if (atDismissal > 0) recs.push(`${atDismissal} driver${atDismissal === 1 ? ' has' : 's have'} reached the dismissal step — apply the policy consistently so it stays a real deterrent.`)
+    if (recs.length === 0) recs.push('No counted speeding for this period — keep up the current checks and briefings.')
+    return recs
+  }, [offPeriod, ytdCompare, byYear, single, a, repeatOffenders, peakHourOverall, hotspots, worstBusOverall, atDismissal])
+
   // ── Stakeholder PDF (verdict + KPIs + charts + hotspots + offenders) ──
   const [exporting, setExporting] = useState(false)
   async function exportPdf() {
@@ -204,7 +283,7 @@ export default function SpeedOverview() {
           { label: 'Speeding / bus / day', value: a.rateThis.toFixed(2), sub: single ? a.thisLabel : `vs ${a.rateLast.toFixed(2)} last` },
           { label: 'Valid events', value: String(a.countThis), sub: a.thisLabel },
           { label: 'Avg over limit', value: `${a.avgSevThis.toFixed(1)} km/h`, sub: 'severity' },
-          { label: 'Repeat offenders', value: String(repeatOffenders.length), sub: '2+ events' },
+          { label: 'Repeat offenders', value: String(repeatOffenders.length), sub: `2+ events · ${offPeriodLabel}` },
           single
             ? { label: 'Buses on the road', value: String(a.activeBuses), sub: `ran in ${a.thisLabel}` }
             : { label: 'Buses speeding more', value: `${a.busesWorse}/${a.activeBuses}`, sub: `${a.busesImproved} improved` },
@@ -296,7 +375,7 @@ export default function SpeedOverview() {
         />
         <KpiCard label="Fines this month" value={`K${finesThisMonth.toLocaleString()}`} tone={finesThisMonth ? 'warning' : 'good'} sub="from confirmed charges" info="Total fines from charges confirmed this month, per the penalty policy." />
         <KpiCard label="Valid events" value={a.countThis} sub={a.thisLabel} info="Genuine speeding events this month, after removing GPS glitches." />
-        <KpiCard label="Repeat offenders" value={repeatOffenders.length} tone={repeatOffenders.length ? 'critical' : 'good'} sub="drivers with 2+ events" />
+        <KpiCard label="Repeat offenders" value={repeatOffenders.length} tone={repeatOffenders.length ? 'critical' : 'good'} sub={`2+ events · ${offPeriodLabel}`} info="Drivers with 2+ counted events in the accountability period — change it (month / YTD / all time) under the leaderboard." />
         {single
           ? <KpiCard label="Buses on the road" value={a.activeBuses} sub={`ran in ${a.thisLabel}`} info="Distinct buses that logged mileage this month (no duplicates) — used to normalise the per-bus rate." />
           : <KpiCard label="Buses speeding more" value={`${a.busesWorse} / ${a.activeBuses}`} tone={a.busesWorse ? 'critical' : 'good'} sub={`${a.busesImproved} improved`} info="Buses with more speeding events than last month, out of the buses on the road." />}
@@ -429,14 +508,41 @@ export default function SpeedOverview() {
         </>
       )}
 
-      {/* Driver accountability */}
+      {/* Driver accountability — scope: month / YTD / all time */}
+      <div className="space-y-2">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <h3 className="font-display text-sm font-bold text-navy">Driver accountability</h3>
+          <div className="inline-flex overflow-hidden rounded-lg border border-black/15 text-xs">
+            {(['month', 'ytd', 'all'] as const).map((p) => (
+              <button key={p} onClick={() => setOffPeriod(p)}
+                className={`px-2.5 py-1.5 font-medium ${offPeriod === p ? 'bg-navy text-white' : 'bg-white text-navy hover:bg-canvas'}`}>
+                {p === 'month' ? monthLabel(effCmp) : p === 'ytd' ? `${offYear} YTD` : 'All time'}
+              </button>
+            ))}
+          </div>
+          <span className="text-xs text-status-neutral">
+            {repeatOffenders.length} repeat · {offence.length} driver{offence.length === 1 ? '' : 's'} with events · {offPeriodLabel}
+            {offPeriod === 'ytd' && ytdCompare?.hasPrev && (
+              <span className={`ml-1 font-semibold ${ytdCompare.improving ? 'text-status-good' : 'text-status-critical'}`}>
+                {ytdCompare.improving ? `↓ ${Math.abs(ytdCompare.pct)}%` : `↑ ${ytdCompare.pct}%`} vs {ytdCompare.prevYear}
+              </span>
+            )}
+          </span>
+        </div>
+        {offPeriod === 'all' && byYear.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {byYear.map((y) => <span key={y.year} className="rounded-full bg-navy/5 px-2 py-0.5 text-xs text-navy">{y.year}: <b className="text-navy">{y.count}</b></span>)}
+          </div>
+        )}
+      </div>
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="card overflow-hidden">
           <div className="flex items-center gap-2 border-b border-black/5 px-5 py-3.5">
             <ShieldAlert size={16} className="text-status-critical" />
             <h3 className="font-display text-sm font-bold text-navy">Repeat-offender leaderboard</h3>
+            <span className="ml-auto text-[11px] text-status-neutral">{offPeriodLabel}</span>
           </div>
-          {offence.length === 0 ? <p className="px-5 py-8 text-center text-sm text-status-neutral">No offences recorded.</p> : (
+          {offence.length === 0 ? <p className="px-5 py-8 text-center text-sm text-status-neutral">No counted offences in {offPeriodLabel}.</p> : (
             <div className="max-h-60 divide-y divide-black/5 overflow-y-auto">
               {offence.map((d, i) => (
                 <div key={d.name} className="flex items-center gap-3 px-5 py-2.5">
@@ -464,6 +570,18 @@ export default function SpeedOverview() {
             </div>
           )}
         </div>
+      </div>
+
+      {/* Insights & recommendations — data-driven */}
+      <div className="card p-5">
+        <div className="mb-2.5 flex flex-wrap items-center gap-2">
+          <Activity size={16} className="text-brand" />
+          <h3 className="font-display text-sm font-bold text-navy">Insights &amp; recommendations</h3>
+          <span className="text-[11px] text-status-neutral">based on {offPeriodLabel}{hotspots.length === 0 ? ' · import Geotab coordinates for location insights' : ''}</span>
+        </div>
+        <ul className="ml-4 list-disc space-y-1.5 text-[13px] text-status-neutral">
+          {recommendations.map((r, i) => <li key={i}><span className="text-navy">{r}</span></li>)}
+        </ul>
       </div>
 
       {/* Where it's happening — coordinate hotspot map */}
