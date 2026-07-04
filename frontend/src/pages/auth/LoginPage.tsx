@@ -71,6 +71,15 @@ export default function LoginPage() {
       {/* RIGHT PANEL */}
       <div className="flex flex-1 flex-col items-center justify-center overflow-auto bg-canvas px-6 py-8 sm:px-12">
         <div className="w-full max-w-[400px]">
+          {/* Mobile-only brand header — the navy panel on the left is desktop-only */}
+          <div className="mb-6 flex flex-col items-center gap-3 rounded-2xl bg-navy px-6 py-6 md:hidden">
+            <img src="/logo.png" alt="INZU MCS" className="h-12 object-contain" onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')} />
+            <div className="text-center">
+              <div className="font-display text-base font-bold text-white">INZU MCS Limited</div>
+              <div className="text-[11px] text-white/60">Transport · Safety · Compliance</div>
+            </div>
+            <div className="h-[3px] w-8 rounded bg-brand" />
+          </div>
           <div className="mb-7">
             <h1 className="m-0 mb-1.5 font-display text-2xl font-bold tracking-tight text-navy">Sign in</h1>
             <p className="m-0 text-sm text-status-neutral">Use the credentials issued by your administrator.</p>
