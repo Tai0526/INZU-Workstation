@@ -64,14 +64,15 @@ export default function Topbar({
         {collapsed ? <PanelLeft size={18} /> : <PanelLeftClose size={18} />}
       </button>
 
-      <h1 className="font-display text-[15px] font-bold text-navy">{title}</h1>
+      <h1 className="min-w-0 truncate font-display text-[15px] font-bold text-navy">{title}</h1>
 
-      <div className="ml-auto flex items-center gap-1.5">
+      <div className="ml-auto flex shrink-0 items-center gap-1.5">
         {/* Branch context — a switcher when the user may view more than one */}
         {branches.length > 1 ? (
-          <div className="mr-1 hidden items-center gap-1.5 rounded-full bg-navy/5 pl-3 pr-1.5 py-1 text-xs font-medium text-navy sm:flex">
-            <MapPin size={13} className="text-brand" />
-            <select value={user!.branch} onChange={(e) => setBranch(e.target.value as any)} className="bg-transparent text-xs font-medium text-navy outline-none">
+          // Cross-branch switcher — shown on every screen size (incl. mobile).
+          <div className="mr-1 flex items-center gap-1 rounded-full bg-navy/5 pl-2.5 pr-1 py-1 text-xs font-medium text-navy">
+            <MapPin size={13} className="shrink-0 text-brand" />
+            <select value={user!.branch} onChange={(e) => setBranch(e.target.value as any)} className="max-w-[92px] bg-transparent text-xs font-medium text-navy outline-none">
               {branches.map((b) => <option key={b} value={b}>{BRANCHES.find((x) => x.code === b)!.short}</option>)}
             </select>
           </div>
