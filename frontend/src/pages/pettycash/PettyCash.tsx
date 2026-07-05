@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Plus, Download, Check, X, Wallet, ReceiptText, AlertTriangle, Ban, UserCog, HandCoins, Trash2, Paperclip } from 'lucide-react'
+import { Plus, Download, Check, X, Wallet, ReceiptText, AlertTriangle, Ban, UserCog, HandCoins, Trash2, Paperclip, SkipForward } from 'lucide-react'
 import { useAuth } from '@/auth/AuthContext'
 import { BRANCHES, ROLES, type BranchCode } from '@/lib/roles'
 import Button from '@/components/ui/Button'
@@ -9,7 +9,7 @@ import KpiCard from '@/components/ui/KpiCard'
 import {
   useReqs, useLedger, useActingApprover, actingStore,
   submitReq, authoriseReq, checkReq, approveReq, rejectReq, payReq, addLedger, removeLedger,
-  addReceipt, removeReceipt, canApprove, canCheck, canManageLedger, canSeePettyBooks,
+  addReceipt, removeReceipt, canApprove, canAuthorise, canCheck, canManageLedger, canSeePettyBooks, skipAuthorise,
 } from '@/lib/pettycash/store'
 import { putFile, viewFile, deleteFile } from '@/lib/storage/fileStore'
 import {
@@ -31,6 +31,7 @@ export default function PettyCash() {
   const myName = user!.fullName
 
   const approver = canApprove(role, myName)
+  const authoriser = canAuthorise(role, myName)
   const checker = canCheck(role)
   const custodian = canManageLedger(role)
   const books = canSeePettyBooks(role) // Safety / Ops / Asst Ops / admin / MD — see the float, reconciliation & export
@@ -56,7 +57,7 @@ export default function PettyCash() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <p className="max-w-2xl text-sm text-status-neutral">
           {books
-            ? <>Petty cash requisitions and the Safety-run reconciliation for {branchLabel}. Request → authorise (Ops/Asst Ops) → check (Safety) → approve (Ops/Asst Ops) → pay. Everyone in the chain is notified.</>
+            ? <>Petty cash requisitions and the Safety-run reconciliation for {branchLabel}. Request → check (Safety) → authorise (Asst Ops, skipped if on leave) → approve (Ops/Asst Ops) → pay. Everyone in the chain is notified.</>
             : <>Your petty cash requisitions for {branchLabel}. Raise a request and it routes for authorisation, check and approval — you'll be notified at each step and when it is paid.</>}
         </p>
         {books && <Button variant="secondary" onClick={() => exportPettyCash({ reqs: allReqs, ledger, branchLabel })}><Download size={15} /> Export books (Excel)</Button>}
@@ -99,15 +100,15 @@ export default function PettyCash() {
         </div>
       )}
 
-      {(!books || tab === 'requests') && <RequestsTab reqs={reqs} branch={branch} myName={myName} role={role} approver={approver} checker={checker} custodian={custodian} balance={bal} initialFilter={books ? 'open' : 'all'} />}
+      {(!books || tab === 'requests') && <RequestsTab reqs={reqs} branch={branch} myName={myName} role={role} approver={approver} authoriser={authoriser} checker={checker} custodian={custodian} balance={bal} initialFilter={books ? 'open' : 'all'} />}
       {books && tab === 'recon' && <ReconTab ledger={ledger} reqs={allReqs} branch={branch} custodian={custodian} balance={bal} arrears={arrears} branchLabel={branchLabel} />}
     </div>
   )
 }
 
 // ── Requisitions ────────────────────────────────────────────────────────
-function RequestsTab({ reqs, branch, myName, role, approver, checker, custodian, balance, initialFilter = 'open' }: {
-  reqs: Requisition[]; branch: BranchCode; myName: string; role: any; approver: boolean; checker: boolean; custodian: boolean; balance: number; initialFilter?: 'open' | 'all' | 'paid' | 'rejected'
+function RequestsTab({ reqs, branch, myName, role, approver, authoriser, checker, custodian, balance, initialFilter = 'open' }: {
+  reqs: Requisition[]; branch: BranchCode; myName: string; role: any; approver: boolean; authoriser: boolean; checker: boolean; custodian: boolean; balance: number; initialFilter?: 'open' | 'all' | 'paid' | 'rejected'
 }) {
   const [filter, setFilter] = useState<'open' | 'all' | 'paid' | 'rejected'>(initialFilter)
   const [newOpen, setNewOpen] = useState(false)
@@ -138,7 +139,7 @@ function RequestsTab({ reqs, branch, myName, role, approver, checker, custodian,
 
       <div className="space-y-3">
         {rows.map((r) => (
-          <ReqCard key={r.id} r={r} myName={myName} role={role} approver={approver} checker={checker} custodian={custodian} balance={balance} onPay={() => setPay(r)} onReject={() => setReject(r)} />
+          <ReqCard key={r.id} r={r} myName={myName} role={role} approver={approver} authoriser={authoriser} checker={checker} custodian={custodian} balance={balance} onPay={() => setPay(r)} onReject={() => setReject(r)} />
         ))}
         {rows.length === 0 && <div className="card px-6 py-12 text-center text-sm text-status-neutral">No requisitions here yet.</div>}
       </div>
@@ -156,13 +157,14 @@ function Stamp({ label, by, at }: { label: string; by: string; at: string }) {
   return <span className="text-[11px] text-status-neutral">{label} <span className="font-medium text-navy">{by}</span> · {at.slice(0, 10)}</span>
 }
 
-function ReqCard({ r, myName, role, approver, checker, custodian, balance, onPay, onReject }: {
-  r: Requisition; myName: string; role: any; approver: boolean; checker: boolean; custodian: boolean; balance: number; onPay: () => void; onReject: () => void
+function ReqCard({ r, myName, role, approver, authoriser, checker, custodian, balance, onPay, onReject }: {
+  r: Requisition; myName: string; role: any; approver: boolean; authoriser: boolean; checker: boolean; custodian: boolean; balance: number; onPay: () => void; onReject: () => void
 }) {
   const mine = r.requester_name.trim().toLowerCase() === myName.trim().toLowerCase()
-  const canAuthorise = r.status === 'pending' && approver
-  const canDoCheck = r.status === 'authorised' && checker
-  const canDoApprove = r.status === 'checked' && approver
+  const canDoCheck = r.status === 'pending' && checker                              // Safety checks first
+  const canDoAuthorise = r.status === 'checked' && authoriser                       // Asst Ops authorises
+  const canSkipAuth = r.status === 'checked' && !authoriser && (approver || checker) // skip when Asst Ops on leave
+  const canDoApprove = r.status === 'authorised' && approver                        // Ops / Asst Ops approve
   const canDoPay = r.status === 'approved' && custodian
   const canDoReject = OPEN_STATUSES.includes(r.status) && (approver || checker)
   const receipts = r.receipts ?? []
@@ -188,16 +190,19 @@ function ReqCard({ r, myName, role, approver, checker, custodian, balance, onPay
           <div className="mt-0.5 text-sm text-navy"><span className="font-medium">{r.requester_name}</span> · {r.department}{r.position ? ` · ${r.position}` : ''} · {r.date}</div>
           <p className="mt-1 text-sm text-status-neutral">{r.purpose}</p>
           <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5">
-            <Stamp label="Authorised:" by={r.authorised_by} at={r.authorised_at} />
             <Stamp label="Checked:" by={r.checked_by} at={r.checked_at} />
+            {r.authorised_skipped
+              ? (!!r.authorised_at && <span className="text-[11px] text-status-neutral">Authorisation <span className="font-medium text-navy">skipped</span> (Asst Ops on leave) · {r.authorised_by} · {r.authorised_at.slice(0, 10)}</span>)
+              : <Stamp label="Authorised:" by={r.authorised_by} at={r.authorised_at} />}
             <Stamp label="Approved:" by={r.approved_by} at={r.approved_at} />
             {r.status === 'paid' && <span className="text-[11px] text-status-good">Paid <span className="font-medium">{fmtK(r.paid_amount)}</span> by {r.paid_by} · {r.paid_at.slice(0, 10)}</span>}
             {r.status === 'rejected' && <span className="text-[11px] text-status-critical">Rejected by {r.rejected_by}{r.rejected_note ? ` — ${r.rejected_note}` : ''}</span>}
           </div>
         </div>
         <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
-          {canAuthorise && <Button variant="secondary" onClick={() => authoriseReq(r.id)}><Check size={14} /> Authorise</Button>}
           {canDoCheck && <Button variant="secondary" onClick={() => checkReq(r.id)}><Check size={14} /> Check</Button>}
+          {canDoAuthorise && <Button variant="secondary" onClick={() => authoriseReq(r.id)}><Check size={14} /> Authorise</Button>}
+          {canSkipAuth && <Button variant="secondary" onClick={() => { if (confirm('Skip the Asst Ops authorisation? Use this only when the Asst Ops is on leave.')) skipAuthorise(r.id) }}><SkipForward size={14} /> Skip authorisation</Button>}
           {canDoApprove && <Button onClick={() => approveReq(r.id)}><Check size={14} /> Approve</Button>}
           {canDoPay && <Button onClick={onPay}><HandCoins size={14} /> Pay</Button>}
           {canDoReject && <Button variant="secondary" onClick={onReject}><Ban size={14} /> Reject</Button>}
@@ -241,7 +246,7 @@ function NewRequestModal({ open, onClose, branch, myName }: { open: boolean; onC
     onClose()
   }
   return (
-    <Modal open={open} onClose={onClose} title="Petty cash requisition" subtitle="Fill it in as on the paper form — it routes for authorisation, check and approval."
+    <Modal open={open} onClose={onClose} title="Petty cash requisition" subtitle="Fill it in as on the paper form — it routes for checking, authorisation and approval."
       footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={save} disabled={!ready}>Submit request</Button></>}>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Date</span><input type="date" className={inputCls} value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></label>

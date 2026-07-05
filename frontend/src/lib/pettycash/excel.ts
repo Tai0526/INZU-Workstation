@@ -112,7 +112,7 @@ export function exportPettyCash(opts: { reqs: Requisition[]; ledger: LedgerEntry
   const wsR: any = {}
   put(wsR, 0, 0, `PETTY CASH VOUCHER REGISTER — ${branchLabel}`, S.title)
   put(wsR, 1, 0, `Period ${period} · prepared ${today}`, S.sub)
-  const rHead = ['Voucher', 'Date', 'Payee', 'Department / position', 'Particulars', 'Amount requested', 'Amount paid', 'Authorised by', 'Checked by', 'Approved by', 'Status', 'Receipt on file']
+  const rHead = ['Voucher', 'Date', 'Payee', 'Department / position', 'Particulars', 'Amount requested', 'Amount paid', 'Checked by', 'Authorised by', 'Approved by', 'Status', 'Receipt on file']
   rHead.forEach((h, c) => put(wsR, 3, c, h, S.head))
   const reg = [...reqs].sort((a, b) => a.date.localeCompare(b.date))
   reg.forEach((q, i) => {
@@ -124,8 +124,8 @@ export function exportPettyCash(opts: { reqs: Requisition[]; ledger: LedgerEntry
     put(wsR, row, 4, q.purpose, S.cell)
     put(wsR, row, 5, q.amount, S.money)
     put(wsR, row, 6, q.status === 'paid' ? q.paid_amount : '', S.money)
-    put(wsR, row, 7, q.authorised_by, S.cell)
-    put(wsR, row, 8, q.checked_by, S.cell)
+    put(wsR, row, 7, q.checked_by, S.cell)
+    put(wsR, row, 8, q.authorised_skipped ? 'Skipped (Asst Ops on leave)' : q.authorised_by, S.cell)
     put(wsR, row, 9, q.approved_by, S.cell)
     put(wsR, row, 10, REQ_STATUS_META[q.status].label, S.cellC)
     put(wsR, row, 11, q.receipts && q.receipts.length ? `Yes (${q.receipts.length})` : '—', S.cellC)

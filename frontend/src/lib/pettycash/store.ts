@@ -63,6 +63,17 @@ export function canApprove(role: RoleKey, userName: string): boolean {
   const acting = actingCfg.get()
   return !!acting && !!userName && acting.name.trim().toLowerCase() === userName.trim().toLowerCase()
 }
+/**
+ * Authorise: the Assistant Operations Manager's step (admins / MD stand in, as
+ * does the named acting approver). When the Asst Ops is on leave the step is
+ * skipped instead — see `skipAuthorise`.
+ */
+const AUTHORISER_ROLES: RoleKey[] = ['asst_operations_manager', 'administrator', 'managing_director']
+export function canAuthorise(role: RoleKey, userName: string): boolean {
+  if (AUTHORISER_ROLES.includes(role)) return true
+  const acting = actingCfg.get()
+  return !!acting && !!userName && acting.name.trim().toLowerCase() === userName.trim().toLowerCase()
+}
 /** Safety Officer is the checker / custodian; admins can stand in. */
 export function canCheck(role: RoleKey): boolean {
   return role === 'safety_officer' || ROLES[role].isAdmin
@@ -86,7 +97,7 @@ export function canSeePettyBooks(role: RoleKey): boolean {
 export function submitReq(input: RequisitionInput): Requisition {
   return reqStore.add({
     ...input, status: 'pending',
-    authorised_by: '', authorised_at: '', checked_by: '', checked_at: '',
+    checked_by: '', checked_at: '', authorised_by: '', authorised_at: '', authorised_skipped: false,
     approved_by: '', approved_at: '', paid_by: '', paid_at: '', paid_amount: 0,
     rejected_by: '', rejected_at: '', rejected_note: '', receipts: [],
   })
@@ -101,8 +112,10 @@ export function removeReceipt(reqId: string, fileId: string) {
   const req = reqStore.get().find((r) => r.id === reqId)
   reqStore.update(reqId, { receipts: (req?.receipts ?? []).filter((f) => f.id !== fileId) })
 }
-export function authoriseReq(id: string) { reqStore.update(id, { status: 'authorised', authorised_by: who(), authorised_at: now() }) }
 export function checkReq(id: string) { reqStore.update(id, { status: 'checked', checked_by: who(), checked_at: now() }) }
+export function authoriseReq(id: string) { reqStore.update(id, { status: 'authorised', authorised_by: who(), authorised_at: now(), authorised_skipped: false }) }
+/** Skip the Asst Ops authorisation (used only when the Asst Ops is on leave); stamps who skipped it. */
+export function skipAuthorise(id: string) { reqStore.update(id, { status: 'authorised', authorised_by: who(), authorised_at: now(), authorised_skipped: true }) }
 export function approveReq(id: string) { reqStore.update(id, { status: 'approved', approved_by: who(), approved_at: now() }) }
 export function rejectReq(id: string, note: string) { reqStore.update(id, { status: 'rejected', rejected_by: who(), rejected_at: now(), rejected_note: note.trim() }) }
 

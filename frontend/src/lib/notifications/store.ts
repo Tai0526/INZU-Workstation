@@ -326,14 +326,14 @@ export function useNotifications(branch: BranchCode, role?: RoleKey, userName?: 
     if (q.branch !== branch) continue
     const amt = fmtK(q.amount)
     if (q.status === 'pending') {
-      items.push({ id: `petty:${q.id}:auth`, severity: 'warning', audience: OPS_DECIDERS, forName: actingName,
-        title: `Petty cash to authorise: ${q.requester_name}`, detail: `${amt} — ${q.purpose.slice(0, 60)}. Authorise or reject.`, date: q.created_at.slice(0, 10), link: '/petty-cash' })
-    } else if (q.status === 'authorised') {
       items.push({ id: `petty:${q.id}:check`, severity: 'warning', audience: PETTY_CUSTODIAN,
-        title: `Petty cash to check: ${q.requester_name}`, detail: `${amt} — authorised by ${q.authorised_by}, awaiting your check.`, date: q.authorised_at.slice(0, 10), link: '/petty-cash' })
+        title: `Petty cash to check: ${q.requester_name}`, detail: `${amt} — ${q.purpose.slice(0, 60)}. Check it, then it goes to Asst Ops.`, date: q.created_at.slice(0, 10), link: '/petty-cash' })
     } else if (q.status === 'checked') {
+      items.push({ id: `petty:${q.id}:auth`, severity: 'warning', audience: OPS_DECIDERS, forName: actingName,
+        title: `Petty cash to authorise: ${q.requester_name}`, detail: `${amt} — checked by ${q.checked_by}. Asst Ops to authorise (or skip if on leave).`, date: q.checked_at.slice(0, 10), link: '/petty-cash' })
+    } else if (q.status === 'authorised') {
       items.push({ id: `petty:${q.id}:approve`, severity: 'critical', audience: OPS_DECIDERS, forName: actingName,
-        title: `Petty cash to approve: ${q.requester_name}`, detail: `${amt} — checked by ${q.checked_by}. Approve or reject.`, date: q.checked_at.slice(0, 10), link: '/petty-cash' })
+        title: `Petty cash to approve: ${q.requester_name}`, detail: `${amt} — ${q.authorised_skipped ? 'authorisation skipped (Asst Ops on leave)' : `authorised by ${q.authorised_by}`}. Approve or reject.`, date: q.authorised_at.slice(0, 10), link: '/petty-cash' })
     } else if (q.status === 'approved') {
       items.push({ id: `petty:${q.id}:pay`, severity: 'warning', audience: PETTY_CUSTODIAN,
         title: `Petty cash to pay out: ${q.requester_name}`, detail: `${amt} approved — disburse and post it to the ledger.`, date: q.approved_at.slice(0, 10), link: '/petty-cash' })

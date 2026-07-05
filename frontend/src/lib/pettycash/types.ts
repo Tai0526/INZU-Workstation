@@ -17,18 +17,19 @@ export interface Audited {
 }
 
 // ── Requisition workflow ────────────────────────────────────────────────
-export type ReqStatus = 'pending' | 'authorised' | 'checked' | 'approved' | 'paid' | 'rejected'
+// Flow: request → check (Safety) → authorise (Asst Ops, skippable on leave) → approve (Ops/Asst Ops) → pay
+export type ReqStatus = 'pending' | 'checked' | 'authorised' | 'approved' | 'paid' | 'rejected'
 
 export const REQ_STATUS_META: Record<ReqStatus, { label: string; tone: StatusTone }> = {
-  pending: { label: 'Pending authorisation', tone: 'warning' },
-  authorised: { label: 'Authorised · to check', tone: 'warning' },
-  checked: { label: 'Checked · to approve', tone: 'warning' },
+  pending: { label: 'Pending check', tone: 'warning' },
+  checked: { label: 'Checked · to authorise', tone: 'warning' },
+  authorised: { label: 'Authorised · to approve', tone: 'warning' },
   approved: { label: 'Approved · to pay', tone: 'good' },
   paid: { label: 'Paid', tone: 'good' },
   rejected: { label: 'Rejected', tone: 'critical' },
 }
 /** The stages that still need someone to act (drives the notifications). */
-export const OPEN_STATUSES: ReqStatus[] = ['pending', 'authorised', 'checked', 'approved']
+export const OPEN_STATUSES: ReqStatus[] = ['pending', 'checked', 'authorised', 'approved']
 
 /** A proof-of-purchase receipt attached after the money is spent (optional). */
 export interface ReceiptFile { id: string; name: string; at: string; by: string }
@@ -43,8 +44,8 @@ export interface Requisition extends Audited {
   amount: number // amount requested
   status: ReqStatus
   // Sign-offs (each stamps who + when)
-  authorised_by: string; authorised_at: string
   checked_by: string; checked_at: string
+  authorised_by: string; authorised_at: string; authorised_skipped?: boolean // skipped when Asst Ops on leave
   approved_by: string; approved_at: string
   paid_by: string; paid_at: string; paid_amount: number // amount actually given
   rejected_by: string; rejected_at: string; rejected_note: string
