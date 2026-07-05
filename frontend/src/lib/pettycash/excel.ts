@@ -112,7 +112,7 @@ export function exportPettyCash(opts: { reqs: Requisition[]; ledger: LedgerEntry
   const wsR: any = {}
   put(wsR, 0, 0, `PETTY CASH VOUCHER REGISTER — ${branchLabel}`, S.title)
   put(wsR, 1, 0, `Period ${period} · prepared ${today}`, S.sub)
-  const rHead = ['Voucher', 'Date', 'Payee', 'Department / position', 'Particulars', 'Amount requested', 'Amount paid', 'Authorised by', 'Checked by', 'Approved by', 'Status']
+  const rHead = ['Voucher', 'Date', 'Payee', 'Department / position', 'Particulars', 'Amount requested', 'Amount paid', 'Authorised by', 'Checked by', 'Approved by', 'Status', 'Receipt on file']
   rHead.forEach((h, c) => put(wsR, 3, c, h, S.head))
   const reg = [...reqs].sort((a, b) => a.date.localeCompare(b.date))
   reg.forEach((q, i) => {
@@ -128,13 +128,14 @@ export function exportPettyCash(opts: { reqs: Requisition[]; ledger: LedgerEntry
     put(wsR, row, 8, q.checked_by, S.cell)
     put(wsR, row, 9, q.approved_by, S.cell)
     put(wsR, row, 10, REQ_STATUS_META[q.status].label, S.cellC)
+    put(wsR, row, 11, q.receipts && q.receipts.length ? `Yes (${q.receipts.length})` : '—', S.cellC)
   })
   const rTot = 4 + reg.length
   put(wsR, rTot, 4, 'TOTAL', S.sTotalLabel)
   put(wsR, rTot, 5, reg.reduce((s, q) => s + q.amount, 0), S.sTotalAmt)
   put(wsR, rTot, 6, reg.filter((q) => q.status === 'paid').reduce((s, q) => s + q.paid_amount, 0), S.sTotalAmt)
-  wsR['!ref'] = XS.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: rTot, c: 10 } })
-  wsR['!cols'] = [{ wch: 10 }, { wch: 11 }, { wch: 20 }, { wch: 22 }, { wch: 38 }, { wch: 15 }, { wch: 14 }, { wch: 17 }, { wch: 17 }, { wch: 17 }, { wch: 18 }]
+  wsR['!ref'] = XS.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: rTot, c: 11 } })
+  wsR['!cols'] = [{ wch: 10 }, { wch: 11 }, { wch: 20 }, { wch: 22 }, { wch: 38 }, { wch: 15 }, { wch: 14 }, { wch: 17 }, { wch: 17 }, { wch: 17 }, { wch: 18 }, { wch: 14 }]
   XS.utils.book_append_sheet(wb, wsR, 'Voucher Register')
 
   XS.writeFile(wb, `Petty Cash - ${branchLabel} (${today}).xlsx`)

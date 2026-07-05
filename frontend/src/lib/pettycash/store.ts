@@ -3,7 +3,7 @@ import { getActor } from '@/lib/audit/actor'
 import { createSyncConfig } from '@/lib/supabase/syncTable'
 import { ROLES, type RoleKey } from '@/lib/roles'
 import {
-  type Requisition, type RequisitionInput, type LedgerEntry, type LedgerEntryInput,
+  type Requisition, type RequisitionInput, type LedgerEntry, type LedgerEntryInput, type ReceiptFile,
 } from './types'
 
 function newId() {
@@ -78,8 +78,18 @@ export function submitReq(input: RequisitionInput): Requisition {
     ...input, status: 'pending',
     authorised_by: '', authorised_at: '', checked_by: '', checked_at: '',
     approved_by: '', approved_at: '', paid_by: '', paid_at: '', paid_amount: 0,
-    rejected_by: '', rejected_at: '', rejected_note: '',
+    rejected_by: '', rejected_at: '', rejected_note: '', receipts: [],
   })
+}
+
+/** Attach / detach a proof-of-purchase receipt (the file itself lives in fileStore). */
+export function addReceipt(reqId: string, rf: ReceiptFile) {
+  const req = reqStore.get().find((r) => r.id === reqId)
+  reqStore.update(reqId, { receipts: [...(req?.receipts ?? []), rf] })
+}
+export function removeReceipt(reqId: string, fileId: string) {
+  const req = reqStore.get().find((r) => r.id === reqId)
+  reqStore.update(reqId, { receipts: (req?.receipts ?? []).filter((f) => f.id !== fileId) })
 }
 export function authoriseReq(id: string) { reqStore.update(id, { status: 'authorised', authorised_by: who(), authorised_at: now() }) }
 export function checkReq(id: string) { reqStore.update(id, { status: 'checked', checked_by: who(), checked_at: now() }) }

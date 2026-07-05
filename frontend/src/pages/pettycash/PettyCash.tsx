@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Plus, Download, Check, X, Wallet, ReceiptText, AlertTriangle, Ban, UserCog, HandCoins, Trash2 } from 'lucide-react'
+import { Plus, Download, Check, X, Wallet, ReceiptText, AlertTriangle, Ban, UserCog, HandCoins, Trash2, Paperclip } from 'lucide-react'
 import { useAuth } from '@/auth/AuthContext'
 import { BRANCHES, ROLES, type BranchCode } from '@/lib/roles'
 import Button from '@/components/ui/Button'
@@ -9,8 +9,9 @@ import KpiCard from '@/components/ui/KpiCard'
 import {
   useReqs, useLedger, useActingApprover, actingStore,
   submitReq, authoriseReq, checkReq, approveReq, rejectReq, payReq, addLedger, removeLedger,
-  canApprove, canCheck, canManageLedger,
+  addReceipt, removeReceipt, canApprove, canCheck, canManageLedger,
 } from '@/lib/pettycash/store'
+import { putFile, viewFile, deleteFile } from '@/lib/storage/fileStore'
 import {
   type Requisition, type LedgerEntry, type LedgerKind,
   REQ_STATUS_META, OPEN_STATUSES, LEDGER_KIND_LABEL, MONEY_IN_KINDS,
@@ -144,6 +145,15 @@ function ReqCard({ r, myName, role, approver, checker, custodian, balance, onPay
   const canDoApprove = r.status === 'checked' && approver
   const canDoPay = r.status === 'approved' && custodian
   const canDoReject = OPEN_STATUSES.includes(r.status) && (approver || checker)
+  const receipts = r.receipts ?? []
+  const canAttach = custodian || mine // Safety (checker) or the requester
+  async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const id = `pcrcpt_${r.id}_${Date.now()}_${Math.round(Math.random() * 1e6)}`
+    try { await putFile(id, file); addReceipt(r.id, { id, name: file.name, at: new Date().toISOString(), by: myName }) } catch { /* upload failed */ }
+    e.target.value = ''
+  }
 
   return (
     <div className="card p-4">
@@ -175,6 +185,25 @@ function ReqCard({ r, myName, role, approver, checker, custodian, balance, onPay
       </div>
       {canDoPay && balance < r.amount && (
         <p className="mt-2 flex items-center gap-1 text-[11px] text-[#8a6d10]"><AlertTriangle size={12} /> Balance ({fmtK(balance)}) is below the requested amount — paying will overdraw. Record where the cash came from on the Reconciliation tab.</p>
+      )}
+      {(receipts.length > 0 || canAttach) && (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5 border-t border-black/5 pt-2">
+          <span className="text-[11px] font-medium text-status-neutral">Receipts</span>
+          {receipts.map((f) => (
+            <span key={f.id} className="inline-flex items-center gap-1 rounded-full bg-navy/5 px-2 py-0.5 text-[11px] text-navy" title={`Attached by ${f.by} · ${f.at.slice(0, 10)}`}>
+              <Paperclip size={11} className="text-brand" />
+              <button onClick={() => viewFile(f.id, f.name)} className="max-w-[160px] truncate hover:underline">{f.name}</button>
+              {canAttach && <button onClick={() => { removeReceipt(r.id, f.id); void deleteFile(f.id) }} className="text-status-neutral hover:text-status-critical" title="Remove"><X size={11} /></button>}
+            </span>
+          ))}
+          {receipts.length === 0 && <span className="text-[11px] text-status-neutral/70">none yet — optional, attach once purchased</span>}
+          {canAttach && (
+            <label className="inline-flex cursor-pointer items-center gap-1 rounded-full border border-dashed border-brand/40 px-2 py-0.5 text-[11px] font-medium text-brand hover:border-brand">
+              <Plus size={11} /> Attach receipt
+              <input type="file" accept=".pdf,.png,.jpg,.jpeg,.webp" className="hidden" onChange={onFile} />
+            </label>
+          )}
+        </div>
       )}
     </div>
   )

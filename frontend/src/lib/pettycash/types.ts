@@ -30,6 +30,9 @@ export const REQ_STATUS_META: Record<ReqStatus, { label: string; tone: StatusTon
 /** The stages that still need someone to act (drives the notifications). */
 export const OPEN_STATUSES: ReqStatus[] = ['pending', 'authorised', 'checked', 'approved']
 
+/** A proof-of-purchase receipt attached after the money is spent (optional). */
+export interface ReceiptFile { id: string; name: string; at: string; by: string }
+
 export interface Requisition extends Audited {
   branch: BranchCode
   date: string // date requested (yyyy-mm-dd)
@@ -45,6 +48,7 @@ export interface Requisition extends Audited {
   approved_by: string; approved_at: string
   paid_by: string; paid_at: string; paid_amount: number // amount actually given
   rejected_by: string; rejected_at: string; rejected_note: string
+  receipts?: ReceiptFile[] // proof-of-purchase attachments (optional)
 }
 export type RequisitionInput = Pick<Requisition, 'branch' | 'date' | 'requester_name' | 'department' | 'position' | 'purpose' | 'amount'>
 
