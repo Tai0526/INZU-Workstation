@@ -41,6 +41,7 @@ import HrReports from '@/pages/hr/HrReports'
 import DocumentsLibrary from '@/pages/documents/DocumentsLibrary'
 import Messages from '@/pages/messages/Messages'
 import Admin from '@/pages/admin/Admin'
+import PettyCash from '@/pages/pettycash/PettyCash'
 import ChangePassword from '@/pages/auth/ChangePassword'
 import PlaceholderPage from '@/components/PlaceholderPage'
 import { ALL_PAGES } from '@/lib/nav'
@@ -84,6 +85,7 @@ const REAL_PAGES: Record<string, React.ComponentType> = {
   '/hr/leave': HrLeave,
   '/hr/reports': HrReports,
   '/documents': DocumentsLibrary,
+  '/petty-cash': PettyCash,
   '/admin': Admin,
 }
 import { canView } from '@/lib/permissions'

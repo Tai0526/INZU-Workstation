@@ -39,7 +39,7 @@ export default function Topbar({
   const branch = BRANCHES.find((b) => b.code === user!.branch)!
   const initials = user!.fullName.split(/\s+/).map((w) => w[0]).slice(0, 2).join('').toUpperCase()
 
-  const { unread: notifUnread } = useNotifications(user!.branch, user!.role)
+  const { unread: notifUnread } = useNotifications(user!.branch, user!.role, user!.fullName)
   const msgState = useMessaging()
   const msgUnread = totalUnread(msgState, user!.id)
 

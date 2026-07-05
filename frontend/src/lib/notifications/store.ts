@@ -14,6 +14,8 @@ import { DRAW_LABEL } from '@/lib/fuel/types'
 import { useMileage } from '@/lib/operations/store'
 import { useJobCards, useChecklists, useSpares, usePm } from '@/lib/workshop/store'
 import { checklistFaults, spareLow, pmStatus, DEFAULT_PM } from '@/lib/workshop/types'
+import { useReqs as usePettyReqs, useLedger as usePettyLedger, useActingApprover } from '@/lib/pettycash/store'
+import { fmtK, balanceOf } from '@/lib/pettycash/types'
 import { registerCrossTabSync } from '@/lib/storage/sync'
 
 /**
@@ -30,6 +32,7 @@ const SPEED_ACTORS: RoleKey[] = ['tracker', 'operations_manager', 'asst_operatio
 const WORKSHOP_ACTORS: RoleKey[] = ['workshop_supervisor', 'operations_manager', 'asst_operations_manager'] // workshop does it, ops is aware
 const PLANNER_ACTORS: RoleKey[] = ['bus_controller', 'route_supervisor', 'operations_manager', 'asst_operations_manager'] // plan daily/weekly bus movements
 const DOC_APPROVERS: RoleKey[] = ['operations_manager', 'asst_operations_manager', 'managing_director'] // approve library documents (admins see all anyway)
+const PETTY_CUSTODIAN: RoleKey[] = ['safety_officer'] // checks & disburses petty cash, owns the reconciliation
 
 export interface AppNotification {
   id: string
@@ -40,6 +43,7 @@ export interface AppNotification {
   link: string
   audience: RoleKey[] | null // roles that should see it; null = everyone
   viewer?: boolean // also surfaced to view-only roles (incident/safety status only)
+  forName?: string // also surfaced to the individual whose name matches (e.g. a petty-cash requester)
 }
 
 // View-only roles get NONE of the operational to-do notifications (licensing,
@@ -89,7 +93,7 @@ function snapshot() {
 registerCrossTabSync(KEY, () => { readCache = null; readSet(); listeners.forEach((l) => l()) })
 
 // ── Derivation ─────────────────────────────────────────────────────────
-export function useNotifications(branch: BranchCode, role?: RoleKey): {
+export function useNotifications(branch: BranchCode, role?: RoleKey, userName?: string): {
   items: (AppNotification & { read: boolean })[]
   unread: number
 } {
@@ -103,6 +107,9 @@ export function useNotifications(branch: BranchCode, role?: RoleKey): {
   const checklists = useChecklists()
   const spares = useSpares()
   const pm = usePm()
+  const pettyReqs = usePettyReqs()
+  const pettyLedger = usePettyLedger()
+  const pettyActing = useActingApprover()
   const read = useSyncExternalStore(subscribe, snapshot, snapshot)
   const today = new Date().toISOString().slice(0, 10)
 
@@ -312,14 +319,49 @@ export function useNotifications(branch: BranchCode, role?: RoleKey): {
     detail: 'Reorder before they run out.', date: today, link: '/workshop/spares',
   })
 
+  // ── Petty cash — every party alerted at each handoff; the requester is notified
+  //    of the outcome via forName (approved / paid / rejected). ──
+  const actingName = pettyActing?.name
+  for (const q of pettyReqs) {
+    if (q.branch !== branch) continue
+    const amt = fmtK(q.amount)
+    if (q.status === 'pending') {
+      items.push({ id: `petty:${q.id}:auth`, severity: 'warning', audience: OPS_DECIDERS, forName: actingName,
+        title: `Petty cash to authorise: ${q.requester_name}`, detail: `${amt} — ${q.purpose.slice(0, 60)}. Authorise or reject.`, date: q.created_at.slice(0, 10), link: '/petty-cash' })
+    } else if (q.status === 'authorised') {
+      items.push({ id: `petty:${q.id}:check`, severity: 'warning', audience: PETTY_CUSTODIAN,
+        title: `Petty cash to check: ${q.requester_name}`, detail: `${amt} — authorised by ${q.authorised_by}, awaiting your check.`, date: q.authorised_at.slice(0, 10), link: '/petty-cash' })
+    } else if (q.status === 'checked') {
+      items.push({ id: `petty:${q.id}:approve`, severity: 'critical', audience: OPS_DECIDERS, forName: actingName,
+        title: `Petty cash to approve: ${q.requester_name}`, detail: `${amt} — checked by ${q.checked_by}. Approve or reject.`, date: q.checked_at.slice(0, 10), link: '/petty-cash' })
+    } else if (q.status === 'approved') {
+      items.push({ id: `petty:${q.id}:pay`, severity: 'warning', audience: PETTY_CUSTODIAN,
+        title: `Petty cash to pay out: ${q.requester_name}`, detail: `${amt} approved — disburse and post it to the ledger.`, date: q.approved_at.slice(0, 10), link: '/petty-cash' })
+      items.push({ id: `petty:${q.id}:approved-you`, severity: 'info', audience: [], forName: q.requester_name,
+        title: 'Your petty cash was approved', detail: `${amt} approved — you can collect it from petty cash.`, date: q.approved_at.slice(0, 10), link: '/petty-cash' })
+    } else if (q.status === 'paid') {
+      items.push({ id: `petty:${q.id}:paid-you`, severity: 'info', audience: [], forName: q.requester_name,
+        title: `Petty cash paid: ${fmtK(q.paid_amount)}`, detail: `Your requisition was paid out by ${q.paid_by}.`, date: q.paid_at.slice(0, 10), link: '/petty-cash' })
+    } else if (q.status === 'rejected') {
+      items.push({ id: `petty:${q.id}:rejected-you`, severity: 'warning', audience: [], forName: q.requester_name,
+        title: 'Petty cash request rejected', detail: `Your ${amt} request was rejected${q.rejected_note ? `: ${q.rejected_note}` : ''}.`, date: q.rejected_at.slice(0, 10), link: '/petty-cash' })
+    }
+  }
+  const pettyBal = balanceOf(pettyLedger.filter((e) => e.branch === branch))
+  if (pettyBal < 0) items.push({
+    id: 'petty:overdrawn', severity: 'critical', audience: [...PETTY_CUSTODIAN, ...OPS_DECIDERS],
+    title: 'Petty cash overdrawn', detail: `Balance is ${fmtK(pettyBal)}. Top up the float and record where any borrowed cash came from.`, date: today, link: '/petty-cash',
+  })
+
   // View-only roles see ONLY the incident/safety status items (no operational
   // to-dos). Everyone else: admins (MD, Ops Manager) see everything for oversight;
   // other roles see branch-wide items plus those addressed to their role.
   const isViewer = role ? VIEWER_ROLES.includes(role) : false
   const isAdmin = role ? ROLES[role].isAdmin : true
-  const forRole = isViewer
-    ? items.filter((n) => n.viewer)
-    : items.filter((n) => !n.audience || isAdmin || (role ? n.audience.includes(role) : true))
+  const nameMatch = (n: AppNotification) => !!n.forName && !!userName && n.forName.trim().toLowerCase() === userName.trim().toLowerCase()
+  const forRole = items.filter((n) => nameMatch(n) || (isViewer
+    ? !!n.viewer
+    : (!n.audience || isAdmin || (role ? n.audience.includes(role) : true))))
 
   // Critical first, then by date ascending (soonest)
   const order = { critical: 0, warning: 1, info: 2 }

@@ -18,7 +18,7 @@ const SEV_COLOR = {
 export default function NotificationPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { user } = useAuth()
   const navigate = useNavigate()
-  const { items, unread } = useNotifications(user!.branch, user!.role)
+  const { items, unread } = useNotifications(user!.branch, user!.role, user!.fullName)
 
   function openItem(n: AppNotification) {
     markRead(n.id)
