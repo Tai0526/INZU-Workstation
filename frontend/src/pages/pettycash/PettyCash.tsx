@@ -9,7 +9,7 @@ import KpiCard from '@/components/ui/KpiCard'
 import {
   useReqs, useLedger, useActingApprover, actingStore,
   submitReq, authoriseReq, checkReq, approveReq, rejectReq, payReq, addLedger, removeLedger,
-  addReceipt, removeReceipt, canApprove, canCheck, canManageLedger,
+  addReceipt, removeReceipt, canApprove, canCheck, canManageLedger, canSeePettyBooks,
 } from '@/lib/pettycash/store'
 import { putFile, viewFile, deleteFile } from '@/lib/storage/fileStore'
 import {
@@ -33,36 +33,53 @@ export default function PettyCash() {
   const approver = canApprove(role, myName)
   const checker = canCheck(role)
   const custodian = canManageLedger(role)
+  const books = canSeePettyBooks(role) // Safety / Ops / Asst Ops / admin / MD — see the float, reconciliation & export
+  const canSeeAll = books || approver   // an acting approver also needs the queue, to approve
 
-  const reqs = useReqs().filter((r) => r.branch === branch)
+  const allReqs = useReqs().filter((r) => r.branch === branch)
   const ledger = useLedger().filter((e) => e.branch === branch)
   const acting = useActingApprover()
+
+  const myReqs = allReqs.filter((r) => r.requester_name.trim().toLowerCase() === myName.trim().toLowerCase())
+  const reqs = canSeeAll ? allReqs : myReqs // what this user is allowed to see
 
   const [tab, setTab] = useState<Tab>('requests')
   const bal = balanceOf(ledger)
   const arrears = arrearsOf(ledger)
   const openReqs = reqs.filter((r) => OPEN_STATUSES.includes(r.status))
   const paidTotal = reqs.filter((r) => r.status === 'paid').reduce((s, r) => s + r.paid_amount, 0)
+  const myPaid = myReqs.filter((r) => r.status === 'paid').reduce((s, r) => s + r.paid_amount, 0)
+  const myOpen = myReqs.filter((r) => OPEN_STATUSES.includes(r.status)).length
 
   return (
     <div className="page space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <p className="max-w-2xl text-sm text-status-neutral">
-          Petty cash requisitions and the Safety-run reconciliation for {branchLabel}. Request → authorise (Ops/Asst Ops) → check (Safety) → approve (Ops/Asst Ops) → pay. Everyone in the chain is notified.
+          {books
+            ? <>Petty cash requisitions and the Safety-run reconciliation for {branchLabel}. Request → authorise (Ops/Asst Ops) → check (Safety) → approve (Ops/Asst Ops) → pay. Everyone in the chain is notified.</>
+            : <>Your petty cash requisitions for {branchLabel}. Raise a request and it routes for authorisation, check and approval — you'll be notified at each step and when it is paid.</>}
         </p>
-        <Button variant="secondary" onClick={() => exportPettyCash({ reqs, ledger, branchLabel })}><Download size={15} /> Export books (Excel)</Button>
+        {books && <Button variant="secondary" onClick={() => exportPettyCash({ reqs: allReqs, ledger, branchLabel })}><Download size={15} /> Export books (Excel)</Button>}
       </div>
 
-      {/* KPIs */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <KpiCard label="Cash balance" value={fmtK(bal)} tone={bal < 0 ? 'critical' : 'good'} sub={`${branchLabel} float`} info="Money received minus money paid out — the current petty-cash balance." />
-        <KpiCard label="Awaiting action" value={openReqs.length} tone={openReqs.length ? 'warning' : 'good'} sub="requisitions in the chain" />
-        <KpiCard label="Paid out (all)" value={fmtK(paidTotal)} sub="disbursed to date" />
-        <KpiCard label="Arrears" value={fmtK(arrears)} tone={arrears > 0 ? 'critical' : 'good'} sub="borrowed, unrepaid" info="Money borrowed to cover an overdraft that hasn't been repaid yet." />
-      </div>
+      {/* KPIs — the full "books" view for privileged roles, a personal view for everyone else */}
+      {books ? (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <KpiCard label="Cash balance" value={fmtK(bal)} tone={bal < 0 ? 'critical' : 'good'} sub={`${branchLabel} float`} info="Money received minus money paid out — the current petty-cash balance." />
+          <KpiCard label="Awaiting action" value={openReqs.length} tone={openReqs.length ? 'warning' : 'good'} sub="requisitions in the chain" />
+          <KpiCard label="Paid out (all)" value={fmtK(paidTotal)} sub="disbursed to date" />
+          <KpiCard label="Arrears" value={fmtK(arrears)} tone={arrears > 0 ? 'critical' : 'good'} sub="borrowed, unrepaid" info="Money borrowed to cover an overdraft that hasn't been repaid yet." />
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+          <KpiCard label="Paid out to you" value={fmtK(myPaid)} tone="good" sub="disbursed to date" info="Total petty cash paid out to you across all your requisitions." />
+          <KpiCard label="In progress" value={myOpen} tone={myOpen ? 'warning' : 'good'} sub="your requests in the chain" />
+          <KpiCard label="Your requests" value={myReqs.length} sub="raised to date" />
+        </div>
+      )}
 
-      {/* Acting-approver banner */}
-      {acting && (
+      {/* Acting-approver banner — only those who actually work the queue */}
+      {acting && canSeeAll && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-brand/25 bg-brand-tint/25 px-4 py-2.5 text-sm text-navy">
           <UserCog size={16} className="text-brand" />
           <span><span className="font-semibold">{acting.name}</span> is acting approver{acting.note ? ` — ${acting.note}` : ''} (set by {acting.by}).</span>
@@ -70,26 +87,29 @@ export default function PettyCash() {
         </div>
       )}
 
-      <div className="flex gap-1 border-b border-black/10">
-        {([['requests', 'Requisitions'], ['recon', 'Reconciliation']] as [Tab, string][]).map(([k, label]) => (
-          <button key={k} onClick={() => setTab(k)}
-            className={`-mb-px border-b-2 px-4 py-2 text-sm font-medium ${tab === k ? 'border-brand text-navy' : 'border-transparent text-status-neutral hover:text-navy'}`}>
-            {label}
-          </button>
-        ))}
-      </div>
+      {/* Tabs — the reconciliation "books" are for privileged roles only */}
+      {books && (
+        <div className="flex gap-1 border-b border-black/10">
+          {([['requests', 'Requisitions'], ['recon', 'Reconciliation']] as [Tab, string][]).map(([k, label]) => (
+            <button key={k} onClick={() => setTab(k)}
+              className={`-mb-px border-b-2 px-4 py-2 text-sm font-medium ${tab === k ? 'border-brand text-navy' : 'border-transparent text-status-neutral hover:text-navy'}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
 
-      {tab === 'requests' && <RequestsTab reqs={reqs} branch={branch} myName={myName} role={role} approver={approver} checker={checker} custodian={custodian} balance={bal} />}
-      {tab === 'recon' && <ReconTab ledger={ledger} reqs={reqs} branch={branch} custodian={custodian} balance={bal} arrears={arrears} branchLabel={branchLabel} />}
+      {(!books || tab === 'requests') && <RequestsTab reqs={reqs} branch={branch} myName={myName} role={role} approver={approver} checker={checker} custodian={custodian} balance={bal} initialFilter={books ? 'open' : 'all'} />}
+      {books && tab === 'recon' && <ReconTab ledger={ledger} reqs={allReqs} branch={branch} custodian={custodian} balance={bal} arrears={arrears} branchLabel={branchLabel} />}
     </div>
   )
 }
 
 // ── Requisitions ────────────────────────────────────────────────────────
-function RequestsTab({ reqs, branch, myName, role, approver, checker, custodian, balance }: {
-  reqs: Requisition[]; branch: BranchCode; myName: string; role: any; approver: boolean; checker: boolean; custodian: boolean; balance: number
+function RequestsTab({ reqs, branch, myName, role, approver, checker, custodian, balance, initialFilter = 'open' }: {
+  reqs: Requisition[]; branch: BranchCode; myName: string; role: any; approver: boolean; checker: boolean; custodian: boolean; balance: number; initialFilter?: 'open' | 'all' | 'paid' | 'rejected'
 }) {
-  const [filter, setFilter] = useState<'open' | 'all' | 'paid' | 'rejected'>('open')
+  const [filter, setFilter] = useState<'open' | 'all' | 'paid' | 'rejected'>(initialFilter)
   const [newOpen, setNewOpen] = useState(false)
   const [pay, setPay] = useState<Requisition | null>(null)
   const [reject, setReject] = useState<Requisition | null>(null)

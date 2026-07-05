@@ -71,6 +71,16 @@ export function canCheck(role: RoleKey): boolean {
 export function canManageLedger(role: RoleKey): boolean {
   return role === 'safety_officer' || ROLES[role].isAdmin
 }
+/**
+ * "The books" — the reconciliation ledger, the cash balance / arrears figures
+ * and the Excel export. Only Safety (custodian), Ops / Asst Ops, admins and the
+ * MD see these. Everyone else sees only their own requisitions and what has been
+ * paid to them — never the branch float or other people's requests.
+ */
+const BOOKS_ROLES: RoleKey[] = ['safety_officer', 'operations_manager', 'asst_operations_manager', 'administrator', 'managing_director']
+export function canSeePettyBooks(role: RoleKey): boolean {
+  return BOOKS_ROLES.includes(role) || ROLES[role].isAdmin
+}
 
 // ── Requisition workflow ────────────────────────────────────────────────
 export function submitReq(input: RequisitionInput): Requisition {
