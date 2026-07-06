@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import { getActor } from '@/lib/audit/actor'
-import { createSyncConfig } from '@/lib/supabase/syncTable'
+import { createSyncConfig, createSyncTable } from '@/lib/supabase/syncTable'
 import { ROLES, type RoleKey } from '@/lib/roles'
 import {
   type Requisition, type RequisitionInput, type LedgerEntry, type LedgerEntryInput, type ReceiptFile,
@@ -12,29 +12,32 @@ function newId() {
 const now = () => new Date().toISOString()
 const who = () => getActor().name
 
-// All petty-cash records live in app_config lists (no dedicated DB table), so
-// there is no migration to apply. (See the sync-schema gotcha.)
+// Petty-cash records live in dedicated Supabase tables (one row per requisition /
+// ledger entry) — durable, auditable, and cleared by the clean-slate reset.
+// Apply migration 0007_petty_cash.sql to create them (columns mirror these types
+// 1:1). This factory is a small audited list-store on top of createSyncTable:
+// each write commits the whole list and the sync layer diffs + persists per row.
 type WithAudit = { id: string; created_by: string; created_at: string; updated_by: string; updated_at: string }
-function makeConfigList<T extends WithAudit>(key: string, lsKey: string) {
-  const cfg = createSyncConfig<T[]>({ key, lsKey, default: [] })
+function makeSyncedList<T extends WithAudit>(table: string, lsKey: string) {
+  const t = createSyncTable<T>({ table, lsKey, seed: [] })
   return {
-    get: cfg.get,
-    subscribe: cfg.subscribe,
-    list: () => cfg.get(),
+    get: t.load,
+    subscribe: t.subscribe,
+    list: () => t.load(),
     add(data: Omit<T, keyof WithAudit>): T {
       const item = { ...(data as object), id: newId(), created_by: who(), created_at: now(), updated_by: who(), updated_at: now() } as T
-      cfg.set([...cfg.get(), item]); return item
+      t.commit([...t.load(), item]); return item
     },
     update(id: string, patch: Partial<T>) {
-      cfg.set(cfg.get().map((x) => (x.id === id ? { ...x, ...patch, id: x.id, updated_by: who(), updated_at: now() } : x)))
+      t.commit(t.load().map((x) => (x.id === id ? { ...x, ...patch, id: x.id, updated_by: who(), updated_at: now() } : x)))
     },
-    remove(id: string) { cfg.set(cfg.get().filter((x) => x.id !== id)) },
+    remove(id: string) { t.commit(t.load().filter((x) => x.id !== id)) },
   }
 }
 
 // ── Stores ──────────────────────────────────────────────────────────────
-export const reqStore = makeConfigList<Requisition>('petty_cash_reqs', 'inzu_petty_cash_reqs')
-export const ledgerStore = makeConfigList<LedgerEntry>('petty_cash_ledger', 'inzu_petty_cash_ledger')
+export const reqStore = makeSyncedList<Requisition>('petty_cash_requisitions', 'inzu_petty_cash_reqs')
+export const ledgerStore = makeSyncedList<LedgerEntry>('petty_cash_ledger', 'inzu_petty_cash_ledger')
 export const useReqs = () => useSyncExternalStore(reqStore.subscribe, reqStore.get, reqStore.get)
 export const useLedger = () => useSyncExternalStore(ledgerStore.subscribe, ledgerStore.get, ledgerStore.get)
 

@@ -14,7 +14,8 @@ begin
     'documents', 'speed_events', 'disciplinary_cases',
     'safety_compliance', 'safety_training', 'safety_hazards', 'safety_cap', 'safety_loto', 'safety_tools',
     'fuel_issuances', 'fuel_receipts', 'fuel_generator',
-    'mileage_trips', 'mileage_routes', 'payroll_deductions', 'report_recipients'
+    'mileage_trips', 'mileage_routes', 'payroll_deductions', 'report_recipients',
+    'petty_cash_requisitions', 'petty_cash_ledger'
   ]
   loop
     if to_regclass('public.' || t) is not null then
