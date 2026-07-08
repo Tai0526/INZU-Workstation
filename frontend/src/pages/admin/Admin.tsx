@@ -193,6 +193,7 @@ function UserModal({ user, currentId, onClose }: { user: AppUser | null; current
     if (form.id === currentId && (form.perm_overrides.admin === 'none' || form.perm_overrides.admin === 'view')) return setErr("You can't reduce your own admin access.")
 
     setBusy(true)
+    const isEmp = form.role !== 'viewer' && form.is_employee // viewers are never part of the organisation
     try {
       if (supa) {
         const extra = form.extra_branches.filter((b) => b !== form.branch)
@@ -201,14 +202,14 @@ function UserModal({ user, currentId, onClose }: { user: AppUser | null; current
             email: form.email.trim(), full_name: form.full_name.trim(), role: form.role, branch: form.branch,
             username: form.username.trim() || undefined, password: initialPw.trim() || undefined,
             extra_branches: extra, perm_overrides: form.perm_overrides, hidden_pages: form.hidden_pages,
-            is_employee: form.is_employee, employee_id: form.employee_id,
+            is_employee: isEmp, employee_id: form.employee_id,
           })
           setTempPw(res.temp_password) // keep modal open to reveal the one-time password
         } else {
           await supaUsersStore.updateProfile(form.id, {
             full_name: form.full_name.trim(), username: uname, role: form.role, branch: form.branch,
             extra_branches: extra, perm_overrides: form.perm_overrides, hidden_pages: form.hidden_pages,
-            is_employee: form.is_employee, employee_id: form.employee_id,
+            is_employee: isEmp, employee_id: form.employee_id,
           })
           if (user && user.active !== form.active) await supaUsersStore.setActive(form.id, form.active)
           drivingUsersStore.set(form.id, canDrive)
@@ -219,14 +220,14 @@ function UserModal({ user, currentId, onClose }: { user: AppUser | null; current
 
       // ── Local fallback ──
       let employee_id = form.employee_id
-      if (form.is_employee && !employee_id) {
+      if (isEmp && !employee_id) {
         const emp = employeesStore.add({
           branch: form.branch, employee_no: `INZ-U${(employeesStore.list().length + 1).toString().padStart(3, '0')}`,
           full_name: form.full_name.trim(), job_role: roleToJob(form.role), status: 'active', phone: '', hod: ROLES[form.role].label,
         })
         employee_id = emp.id
       }
-      const payload = { ...form, username: form.username.trim(), full_name: form.full_name.trim(), employee_id, extra_branches: form.extra_branches.filter((b) => b !== form.branch) }
+      const payload = { ...form, username: form.username.trim(), full_name: form.full_name.trim(), is_employee: isEmp, employee_id, extra_branches: form.extra_branches.filter((b) => b !== form.branch) }
       if (isNew) usersStore.add(payload as NewUser)
       else { usersStore.update(form.id, payload); drivingUsersStore.set(form.id, canDrive) }
       onClose()
@@ -296,7 +297,7 @@ function UserModal({ user, currentId, onClose }: { user: AppUser | null; current
         )}
 
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Role</span>
-          <select className={inputCls} value={form.role} onChange={(e) => set('role', e.target.value as RoleKey)}>
+          <select className={inputCls} value={form.role} onChange={(e) => { const r = e.target.value as RoleKey; set('role', r); set('is_employee', r !== 'viewer') }}>
             {ROLE_LIST.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
           </select>
         </label>
@@ -318,7 +319,7 @@ function UserModal({ user, currentId, onClose }: { user: AppUser | null; current
 
         <div className="flex flex-wrap gap-4 sm:col-span-2">
           <label className="inline-flex items-center gap-2 text-sm text-navy"><input type="checkbox" checked={form.active} onChange={(e) => set('active', e.target.checked)} /> Account active</label>
-          <label className="inline-flex items-center gap-2 text-sm text-navy"><input type="checkbox" checked={form.is_employee} onChange={(e) => set('is_employee', e.target.checked)} /> Is an employee (create HR profile)</label>
+          <label className={`inline-flex items-center gap-2 text-sm ${form.role === 'viewer' ? 'text-status-neutral/60' : 'text-navy'}`} title={form.role === 'viewer' ? 'Viewers are not part of the organisation, so they are never in HR.' : 'Staff appear in HR (Employees, Staff Schedule, Leave).'}><input type="checkbox" checked={form.role !== 'viewer' && form.is_employee} disabled={form.role === 'viewer'} onChange={(e) => set('is_employee', e.target.checked)} /> Is an employee (in HR)</label>
           {form.employee_id && <span className="text-xs text-status-good">Linked to HR profile.</span>}
           {!isNew && <label className="inline-flex items-center gap-2 text-sm text-navy" title="Their name will appear in the driver list when confirming a speeding event."><input type="checkbox" checked={canDrive} onChange={(e) => setCanDrive(e.target.checked)} /> Allowed to drive</label>}
         </div>

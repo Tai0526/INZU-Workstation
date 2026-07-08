@@ -66,10 +66,11 @@ export function useHrPeople(branch: BranchCode): HrPerson[] {
       })
     }
     // Accounts flagged "is an employee" that aren't already an HR employee or driver.
+    // Viewers are not part of the organisation, so they never appear in HR.
     const empIds = new Set(emps.map((e) => e.id))
     const known = new Set(people.map((p) => p.full_name.trim().toLowerCase()))
     for (const u of users) {
-      if (!u.is_employee || u.branch !== branch) continue
+      if (!u.is_employee || u.branch !== branch || u.role === 'viewer') continue
       if (u.employee_id && empIds.has(u.employee_id)) continue
       if (known.has(u.full_name.trim().toLowerCase())) continue
       people.push({

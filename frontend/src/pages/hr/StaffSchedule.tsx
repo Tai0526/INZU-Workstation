@@ -20,7 +20,8 @@ export default function StaffSchedule() {
   const editable = canEdit(user!.role, 'hr')
   const myName = user!.fullName
 
-  const users = useUsers().filter((u) => u.branch === branch && u.active).sort((a, b) => a.full_name.localeCompare(b.full_name))
+  // Only staff accounts (marked "Is an employee" in Admin) — viewers are not part of the organisation.
+  const users = useUsers().filter((u) => u.branch === branch && u.active && u.is_employee && u.role !== 'viewer').sort((a, b) => a.full_name.localeCompare(b.full_name))
   const sched = useStaffSchedule()
   const today = todayISO()
   const [start, setStart] = useState(today)
@@ -34,7 +35,7 @@ export default function StaffSchedule() {
     <div className="page space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <p className="max-w-2xl text-sm text-status-neutral">
-          Work-rest cycles for system users at {branch === 'trident' ? 'Trident' : 'Kansanshi'} — e.g. 21-on/7-off, or 7-on/7-off for route supervisors and bus controllers. Set a cycle and its first working day; the roster then shows who is on duty each day.
+          Work-rest cycles for staff at {branch === 'trident' ? 'Trident' : 'Kansanshi'} — e.g. 21-on/7-off, or 7-on/7-off for route supervisors and bus controllers. Only accounts marked “Is an employee” in Admin appear here. Set a cycle and its first working day; the roster then shows who is on duty each day.
         </p>
       </div>
 
@@ -105,7 +106,7 @@ export default function StaffSchedule() {
                   </tr>
                 )
               })}
-              {users.length === 0 && <tr><td colSpan={WINDOW + 2} className="px-4 py-12 text-center text-sm text-status-neutral">No system users at this branch yet.</td></tr>}
+              {users.length === 0 && <tr><td colSpan={WINDOW + 2} className="px-4 py-12 text-center text-sm text-status-neutral">No staff accounts here yet — mark an account “Is an employee” in Admin → Users to schedule it.</td></tr>}
             </tbody>
           </table>
         </div>
