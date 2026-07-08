@@ -7,14 +7,13 @@ import { useEmployees, employeesStore } from '@/lib/hr/store'
 import type { Employee } from '@/lib/hr/types'
 import { empLeaveStore, useEmployeeLeave } from '@/lib/hr/leave'
 import { gwStore, useGw, GW_DEFAULT_CYCLE, type GwGroup, type GwCycle } from '@/lib/safety/generalWorkers'
-import { isWorkingOn, addDaysISO, weekdayOf, todayISO, cycleLabel } from '@/lib/schedule/workCycle'
+import { isWorkingOn, weekdayOf, todayISO, cycleLabel, monthDays, shiftMonth, monthLabel, thisMonth } from '@/lib/schedule/workCycle'
 import Button from '@/components/ui/Button'
 import Modal from '@/components/ui/Modal'
 import KpiCard from '@/components/ui/KpiCard'
 
 const inputCls = 'w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand'
 const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-const WINDOW = 14
 const isWeekend = (wd: number) => wd === 5 || wd === 6 || wd === 0 // Fri / Sat / Sun
 const GROUP_CLS: Record<GwGroup, string> = { A: 'bg-brand/10 text-brand', B: 'bg-navy/10 text-navy' }
 
@@ -28,13 +27,13 @@ export default function GeneralWorkers() {
   const leave = useEmployeeLeave()
   const cycle = gw.cycles[branch] ?? GW_DEFAULT_CYCLE
   const today = todayISO()
-  const [start, setStart] = useState(today)
+  const [month, setMonth] = useState(thisMonth())
   const [addOpen, setAddOpen] = useState(false)
   const [editWorker, setEditWorker] = useState<Employee | null>(null)
   const [leaveFor, setLeaveFor] = useState<Employee | null>(null)
   const [cycleOpen, setCycleOpen] = useState(false)
 
-  const days = useMemo(() => Array.from({ length: WINDOW }, (_, i) => addDaysISO(start, i)), [start])
+  const days = useMemo(() => monthDays(month), [month])
   const rows = useMemo(
     () => [...workers].sort((a, b) => (gw.assign[a.id] ?? 'Z').localeCompare(gw.assign[b.id] ?? 'Z') || a.full_name.localeCompare(b.full_name)),
     [workers, gw.assign],
@@ -80,12 +79,12 @@ export default function GeneralWorkers() {
         </div>
       )}
 
-      {/* Window nav */}
+      {/* Month nav */}
       <div className="flex flex-wrap items-center gap-2">
-        <Button variant="secondary" onClick={() => setStart(addDaysISO(start, -WINDOW))}><ChevronLeft size={15} /> Earlier</Button>
-        <input type="date" className="rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand" value={start} onChange={(e) => e.target.value && setStart(e.target.value)} />
-        <Button variant="secondary" onClick={() => setStart(addDaysISO(start, WINDOW))}>Later <ChevronRight size={15} /></Button>
-        <Button variant="secondary" onClick={() => setStart(today)}>Today</Button>
+        <Button variant="secondary" onClick={() => setMonth(shiftMonth(month, -1))}><ChevronLeft size={15} /> Prev</Button>
+        <span className="min-w-[9rem] text-center text-sm font-semibold text-navy">{monthLabel(month)}</span>
+        <Button variant="secondary" onClick={() => setMonth(shiftMonth(month, 1))}>Next <ChevronRight size={15} /></Button>
+        <Button variant="secondary" onClick={() => setMonth(thisMonth())}>This month</Button>
         <span className="ml-auto flex items-center gap-3 text-[11px] text-status-neutral">
           <span className="inline-flex items-center gap-1"><i className="inline-block h-2.5 w-2.5 rounded-sm bg-status-good/70" /> On</span>
           <span className="inline-flex items-center gap-1"><i className="inline-block h-2.5 w-2.5 rounded-sm bg-black/10" /> Off</span>
@@ -94,35 +93,41 @@ export default function GeneralWorkers() {
       </div>
 
       <div className="card overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="max-h-[70vh] overflow-auto">
           <table className="w-full border-collapse text-left text-sm">
             <thead>
               <tr className="bg-navy text-white">
-                <th className="sticky left-0 z-10 bg-navy px-3 py-2 font-medium">Worker</th>
-                <th className="px-2 py-2 text-center font-medium">Team</th>
+                <th className="sticky left-0 top-0 z-30 bg-navy px-3 py-2 font-medium">Worker</th>
                 {days.map((d) => {
                   const wd = weekdayOf(d)
                   return (
-                    <th key={d} className={`px-1 py-2 text-center font-medium ${d === today ? 'bg-brand' : isWeekend(wd) ? 'bg-white/10' : ''}`} title={d}>
+                    <th key={d} className={`sticky top-0 z-20 px-1 py-2 text-center font-medium ${d === today ? 'bg-brand' : isWeekend(wd) ? 'bg-[#1b2740]' : 'bg-navy'}`} title={d}>
                       <div className="text-[10px] opacity-80">{WD[wd]}</div>
                       <div className="text-xs tabular-nums">{d.slice(8)}</div>
                     </th>
                   )
                 })}
-                {editable && <th className="px-2 py-2" />}
               </tr>
             </thead>
             <tbody>
-              {rows.map((w, i) => {
+              {rows.map((w) => {
                 const g = gw.assign[w.id]
                 return (
-                  <tr key={w.id} className={i % 2 ? 'bg-canvas/40' : ''}>
-                    <td className="sticky left-0 z-10 whitespace-nowrap bg-inherit px-3 py-2">
-                      <div className="font-medium text-navy">{w.full_name}</div>
-                      <div className="text-[11px] text-status-neutral">{w.employee_no}{onLeaveNow(w.id) ? ' · on leave' : ''}</div>
-                    </td>
-                    <td className="px-2 py-2 text-center">
-                      {g ? <span className={`inline-block rounded-full px-2 py-0.5 text-[11px] font-bold ${GROUP_CLS[g]}`}>{g}</span> : <span className="text-[11px] text-status-neutral/60">—</span>}
+                  <tr key={w.id} className="border-b border-black/5">
+                    <td className="sticky left-0 z-10 min-w-[13rem] whitespace-nowrap bg-white px-3 py-2">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-navy">{w.full_name}</span>
+                        {g ? <span className={`inline-block rounded-full px-1.5 py-0.5 text-[10px] font-bold ${GROUP_CLS[g]}`}>{g}</span> : <span className="text-[10px] text-status-neutral/60">no team</span>}
+                      </div>
+                      <div className="mt-0.5 flex items-center gap-1 text-[11px] text-status-neutral">
+                        <span>{w.employee_no}{onLeaveNow(w.id) ? ' · on leave' : ''}</span>
+                        {editable && (
+                          <>
+                            <button onClick={() => setLeaveFor(w)} title="Leave" className="rounded p-0.5 text-status-neutral hover:bg-brand/10 hover:text-brand"><Plane size={13} /></button>
+                            <button onClick={() => setEditWorker(w)} title="Edit" className="rounded p-0.5 text-status-neutral hover:bg-navy/10 hover:text-navy"><Pencil size={13} /></button>
+                          </>
+                        )}
+                      </div>
                     </td>
                     {days.map((d) => {
                       const st = stateOf(w.id, d)
@@ -133,16 +138,10 @@ export default function GeneralWorkers() {
                         </td>
                       )
                     })}
-                    {editable && (
-                      <td className="whitespace-nowrap px-2 py-2 text-right">
-                        <button onClick={() => setLeaveFor(w)} title="Leave" className="rounded-md p-1.5 text-status-neutral hover:bg-brand/10 hover:text-brand"><Plane size={14} /></button>
-                        <button onClick={() => setEditWorker(w)} title="Edit" className="rounded-md p-1.5 text-status-neutral hover:bg-navy/10 hover:text-navy"><Pencil size={14} /></button>
-                      </td>
-                    )}
                   </tr>
                 )
               })}
-              {rows.length === 0 && <tr><td colSpan={WINDOW + (editable ? 3 : 2)} className="px-4 py-12 text-center text-sm text-status-neutral">No general workers yet.{editable && ' Add one to start the roster.'}</td></tr>}
+              {rows.length === 0 && <tr><td colSpan={days.length + 1} className="px-4 py-12 text-center text-sm text-status-neutral">No general workers yet.{editable && ' Add one to start the roster.'}</td></tr>}
             </tbody>
           </table>
         </div>

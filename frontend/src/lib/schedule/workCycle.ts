@@ -55,3 +55,32 @@ export function todayISO(): string {
   const d = new Date()
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
+
+// ── Calendar-month helpers (for full-month roster views) ────────────────────
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+
+/** Current month as yyyy-mm (local). */
+export function thisMonth(): string { return todayISO().slice(0, 7) }
+
+/** Every day of a yyyy-mm month, as yyyy-mm-dd from the 1st to the 30th/31st. */
+export function monthDays(ym: string): string[] {
+  const [y, m] = ym.slice(0, 7).split('-').map(Number)
+  const n = new Date(Date.UTC(y, m, 0)).getUTCDate() // day 0 of next month = last day of this one
+  const mm = String(m).padStart(2, '0')
+  return Array.from({ length: n }, (_, i) => `${y}-${mm}-${String(i + 1).padStart(2, '0')}`)
+}
+
+/** yyyy-mm shifted by whole months (with year rollover). */
+export function shiftMonth(ym: string, delta: number): string {
+  let [y, m] = ym.slice(0, 7).split('-').map(Number)
+  m += delta
+  while (m < 1) { m += 12; y -= 1 }
+  while (m > 12) { m -= 12; y += 1 }
+  return `${y}-${String(m).padStart(2, '0')}`
+}
+
+/** "July 2026" for a yyyy-mm month. */
+export function monthLabel(ym: string): string {
+  const [y, m] = ym.slice(0, 7).split('-').map(Number)
+  return `${MONTHS[m - 1]} ${y}`
+}
