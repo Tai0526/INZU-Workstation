@@ -26,6 +26,7 @@ import HazardRegister from '@/pages/safety/HazardRegister'
 import CapTracker from '@/pages/safety/CapTracker'
 import LotoRegister from '@/pages/safety/LotoRegister'
 import ToolInspections from '@/pages/safety/ToolInspections'
+import GeneralWorkers from '@/pages/safety/GeneralWorkers'
 import WorkshopOverview from '@/pages/workshop/WorkshopOverview'
 import JobCards from '@/pages/workshop/JobCards'
 import MechanicsSchedule from '@/pages/workshop/MechanicsSchedule'
@@ -73,6 +74,7 @@ const REAL_PAGES: Record<string, React.ComponentType> = {
   '/safety/cap': CapTracker,
   '/safety/loto': LotoRegister,
   '/safety/tools': ToolInspections,
+  '/safety/general-workers': GeneralWorkers,
   '/workshop': WorkshopOverview,
   '/workshop/checklists': DailyChecklists,
   '/workshop/pm': PmSchedules,

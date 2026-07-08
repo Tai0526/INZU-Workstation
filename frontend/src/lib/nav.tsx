@@ -83,6 +83,7 @@ export const NAV: NavNode[] = [
       { label: 'CAP Tracker', path: '/safety/cap', blurb: 'The twelve FQM Trident OHS audit findings, each with sub-actions and mandatory evidence upload before "compliant".' },
       { label: 'LOTO Register', path: '/safety/loto', blurb: 'Lock-Out Tag-Out isolation points per asset: label code, procedure reference, labelled status, last audit.' },
       { label: 'Tool Inspections', path: '/safety/tools', blurb: 'Hand-tool and equipment checklist: asset tag, condition, safe-to-use flag, next inspection date.' },
+      { label: 'General Workers', path: '/safety/general-workers', blurb: 'Safety’s general-worker register: two teams on an 11-on/3-off cycle, staggered so rest days alternate across Fri/Sat/Sun, plus leave. Also feeds HR.' },
     ],
   },
   {
