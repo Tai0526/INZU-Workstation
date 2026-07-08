@@ -5,6 +5,8 @@ import Button from '@/components/ui/Button'
 import StatusBadge from '@/components/ui/StatusBadge'
 import type { BranchCode } from '@/lib/roles'
 import { useDrivers } from '@/lib/drivers/store'
+import { useDrivingUsers } from '@/lib/drivers/drivingUsers'
+import { useUsers } from '@/lib/auth/users'
 import { useVehicles } from '@/lib/fleet/store'
 import { useAllocations } from '@/lib/operations/store'
 import { useSpeedEvents, speedStore } from '@/lib/speed/store'
@@ -42,6 +44,8 @@ export default function SpeedEventModal({
   canEdit: boolean
 }) {
   const drivers = useDrivers().filter((d) => d.branch === branch)
+  const users = useUsers()
+  const drivingIds = useDrivingUsers()
   const vehicles = useVehicles().filter((v) => v.branch === branch)
   const allEvents = useSpeedEvents()
   const allCases = useCases()
@@ -51,13 +55,30 @@ export default function SpeedEventModal({
   const [form, setForm] = useState<SpeedEventInput | SpeedEvent>(() => (editing ? { ...editing } : empty(branch)))
   const [error, setError] = useState('')
 
+  // Registered drivers + any system users flagged "can drive" for this branch — the
+  // pool the speeding driver is confirmed against (a route supervisor or bus
+  // controller may have been the one driving).
+  const driverOptions = useMemo(() => {
+    const opts = drivers.map((d) => ({ id: d.id, name: d.full_name, staff: false }))
+    const seen = new Set(opts.map((o) => o.name.trim().toLowerCase()))
+    for (const u of users) {
+      if (!drivingIds.includes(u.id)) continue
+      if (u.branch !== branch && !(u.extra_branches ?? []).includes(branch)) continue
+      const k = u.full_name.trim().toLowerCase()
+      if (!k || seen.has(k)) continue
+      seen.add(k)
+      opts.push({ id: u.id, name: u.full_name, staff: true })
+    }
+    return opts.sort((a, b) => a.name.localeCompare(b.name))
+  }, [drivers, users, drivingIds, branch])
+
   // The Geotab report carries no driver, so suggest the most likely one to confirm against.
   const suggestions = useMemo(
     () => (form.driver_name ? [] : suggestDrivers(form.vehicle_label, form.event_datetime, { allocations, events: allEvents })),
     [form.driver_name, form.vehicle_label, form.event_datetime, allocations, allEvents],
   )
   function pickDriver(name: string) {
-    const d = drivers.find((x) => x.full_name.trim().toLowerCase() === name.trim().toLowerCase())
+    const d = driverOptions.find((x) => x.name.trim().toLowerCase() === name.trim().toLowerCase())
     setForm((f) => ({ ...f, driver_name: name, driver_id: d?.id ?? '' }))
   }
 
@@ -74,8 +95,8 @@ export default function SpeedEventModal({
   }
 
   function onDriver(id: string) {
-    const d = drivers.find((x) => x.id === id)
-    setForm((f) => ({ ...f, driver_id: id, driver_name: d?.full_name ?? '' }))
+    const d = driverOptions.find((x) => x.id === id)
+    setForm((f) => ({ ...f, driver_id: id, driver_name: d?.name ?? '' }))
   }
   function onVehicle(id: string) {
     const v = vehicles.find((x) => x.id === id)
@@ -215,7 +236,7 @@ export default function SpeedEventModal({
           <span className="mb-1 block text-xs font-medium text-navy">Driver *</span>
           <select className={inputCls} value={form.driver_id} onChange={(e) => onDriver(e.target.value)}>
             <option value="">{form.driver_name || 'Select driver…'}</option>
-            {drivers.map((d) => <option key={d.id} value={d.id}>{d.full_name}</option>)}
+            {driverOptions.map((d) => <option key={d.id} value={d.id}>{d.name}{d.staff ? ' · staff' : ''}</option>)}
           </select>
         </label>
         <label className="block">

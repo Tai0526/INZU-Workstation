@@ -22,6 +22,7 @@ import type { JobRole } from '@/lib/hr/types'
 import { clearAllData, restoreDemoData } from '@/lib/demo/reset'
 import { useVehicles } from '@/lib/fleet/store'
 import { useDrivers } from '@/lib/drivers/store'
+import { drivingUsersStore } from '@/lib/drivers/drivingUsers'
 import { useEmployees } from '@/lib/hr/store'
 import Modal from '@/components/ui/Modal'
 import Button from '@/components/ui/Button'
@@ -161,6 +162,7 @@ function UserModal({ user, currentId, onClose }: { user: AppUser | null; current
   const [tempPw, setTempPw] = useState('') // shown after a create / reset
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
+  const [canDrive, setCanDrive] = useState(() => (user ? drivingUsersStore.has(user.id) : false)) // may be selected as a driver in Speed
   const set = <K extends keyof AppUser>(k: K, v: AppUser[K]) => setForm((f) => ({ ...f, [k]: v }))
 
   function toggleBranch(b: BranchCode) {
@@ -209,6 +211,7 @@ function UserModal({ user, currentId, onClose }: { user: AppUser | null; current
             is_employee: form.is_employee, employee_id: form.employee_id,
           })
           if (user && user.active !== form.active) await supaUsersStore.setActive(form.id, form.active)
+          drivingUsersStore.set(form.id, canDrive)
           onClose()
         }
         return
@@ -225,7 +228,7 @@ function UserModal({ user, currentId, onClose }: { user: AppUser | null; current
       }
       const payload = { ...form, username: form.username.trim(), full_name: form.full_name.trim(), employee_id, extra_branches: form.extra_branches.filter((b) => b !== form.branch) }
       if (isNew) usersStore.add(payload as NewUser)
-      else usersStore.update(form.id, payload)
+      else { usersStore.update(form.id, payload); drivingUsersStore.set(form.id, canDrive) }
       onClose()
     } catch (e) {
       setErr((e as Error).message)
@@ -317,6 +320,7 @@ function UserModal({ user, currentId, onClose }: { user: AppUser | null; current
           <label className="inline-flex items-center gap-2 text-sm text-navy"><input type="checkbox" checked={form.active} onChange={(e) => set('active', e.target.checked)} /> Account active</label>
           <label className="inline-flex items-center gap-2 text-sm text-navy"><input type="checkbox" checked={form.is_employee} onChange={(e) => set('is_employee', e.target.checked)} /> Is an employee (create HR profile)</label>
           {form.employee_id && <span className="text-xs text-status-good">Linked to HR profile.</span>}
+          {!isNew && <label className="inline-flex items-center gap-2 text-sm text-navy" title="Their name will appear in the driver list when confirming a speeding event."><input type="checkbox" checked={canDrive} onChange={(e) => setCanDrive(e.target.checked)} /> Allowed to drive</label>}
         </div>
       </div>
 
