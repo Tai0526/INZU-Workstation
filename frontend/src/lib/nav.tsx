@@ -115,6 +115,7 @@ export const NAV: NavNode[] = [
     pages: [
       { label: 'Overview', path: '/hr', blurb: 'Headcount and pending leave requests by branch, current leave balance snapshot.' },
       { label: 'Employees', path: '/hr/employees', blurb: 'Non-system staff and system employee records, each with branch, role and HOD assignment.' },
+      { label: 'Staff Schedule', path: '/hr/staff-schedule', blurb: 'Work-rest cycles for system users (21-on/7-off, or 7-on/7-off for route supervisors & bus controllers) — a Working/Off roster from each cycle’s first working day.' },
       { label: 'Leave', path: '/hr/leave', blurb: 'HOD-based approval: Safety→General Workers, Workshop→Mechanics, Route→Drivers; HR sees a consolidated view.' },
       { label: 'Reports', path: '/hr/reports', blurb: 'Leave and headcount reports in one place.' },
     ],

@@ -36,6 +36,7 @@ import CriticalSpares from '@/pages/workshop/CriticalSpares'
 import RcaLog from '@/pages/workshop/RcaLog'
 import HrOverview from '@/pages/hr/HrOverview'
 import Employees from '@/pages/hr/Employees'
+import StaffSchedule from '@/pages/hr/StaffSchedule'
 import HrLeave from '@/pages/hr/Leave'
 import HrReports from '@/pages/hr/HrReports'
 import DocumentsLibrary from '@/pages/documents/DocumentsLibrary'
@@ -82,6 +83,7 @@ const REAL_PAGES: Record<string, React.ComponentType> = {
   '/workshop/rca': RcaLog,
   '/hr': HrOverview,
   '/hr/employees': Employees,
+  '/hr/staff-schedule': StaffSchedule,
   '/hr/leave': HrLeave,
   '/hr/reports': HrReports,
   '/documents': DocumentsLibrary,
