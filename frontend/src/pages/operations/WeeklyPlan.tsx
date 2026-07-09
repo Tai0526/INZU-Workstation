@@ -214,35 +214,60 @@ export default function WeeklyPlan() {
       })
   }
   const periodLabel = `${period.start} → ${period.end}`
-  // Vehicle on the left, then the Day shift, then the Night shift — each driver
-  // with their hours in brackets. Portrait, compact, easy to read on one page.
+  // Crew handover sheet: the ON-DUTY crew split into Overtime / Day / Afternoon-
+  // Night (each driver shown with just their fleet number, no reg), then the
+  // OFF-DUTY crew with the car each driver was last assigned to. The crew letter
+  // in each heading is read from the drivers themselves. Portrait, one page.
   function planPdfTables(): PdfTable[] {
-    const regBy = new Map<string, string>()
-    ownedBuses.forEach((v) => regBy.set(v.fleet_no, v.reg_plate))
-    operatedAll.forEach((v) => regBy.set(v.fleet_no, v.reg_plate))
-    const vehicles = new Map<string, { day: string[]; night: string[] }>()
-    const workshop: string[] = []
+    const days = periodDates
+    const overtime: string[] = [], dayShift: string[] = [], nightShift: string[] = [], workshop: string[] = []
+    const onCrews = new Set<string>()
     for (const a of exportAssigns()) {
       const drv = driverById.get(a.driver_id)
-      const st = drv ? firstWorkingShift(drv, periodDates) : null
+      const name = cleanName(a.driver_name)
+      if (a.fleet_no === WORKSHOP) {
+        const c = a.overtime ? ` [OT ${datesInRange(a.cover_start || a.week_start, a.cover_end || a.week_end).length}d]` : ''
+        workshop.push(`${name}${c}`); continue
+      }
+      if (a.overtime) {
+        const d = datesInRange(a.cover_start || a.week_start, a.cover_end || a.week_end).length
+        overtime.push(`${name} — ${a.fleet_no} (${d}d)`); continue
+      }
+      const st = drv ? firstWorkingShift(drv, days) : null
       const isNight = st ? SHIFT_META[st].kind === 'night' : (drv ? effectiveKind(drv) === 'night' : false)
-      const hrs = drv && st ? dutyHours(drv, st).replace(/ · /g, ', ') : ''
-      const cover = a.overtime ? ` [OT ${datesInRange(a.cover_start || a.week_start, a.cover_end || a.week_end).length}d]` : ''
-      const entry = `${cleanName(a.driver_name)}${hrs ? ` (${hrs})` : ''}${cover}`
-      if (a.fleet_no === WORKSHOP) { workshop.push(`${cleanName(a.driver_name)}${cover}`); continue }
-      const v = vehicles.get(a.fleet_no) ?? { day: [], night: [] }
-      ;(isNight ? v.night : v.day).push(entry)
-      vehicles.set(a.fleet_no, v)
+      ;(isNight ? nightShift : dayShift).push(`${name} — ${a.fleet_no}`)
+      if (drv?.crew) onCrews.add(drv.crew)
     }
-    const rows = [...vehicles.entries()]
-      .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([fleet, v]) => [`${fleet}${regBy.get(fleet) ? `\n${regBy.get(fleet)}` : ''}`, v.day.join('\n') || '—', v.night.join('\n') || '—'])
-    const tables: PdfTable[] = [{
-      head: ['Vehicle', 'Day shift', 'Night shift'],
-      rows,
-      columnStyles: { 0: { fontStyle: 'bold', cellWidth: 84 } },
-    }]
-    if (workshop.length) tables.push({ heading: 'Workshop duty', head: ['Driver'], rows: workshop.map((w) => [w]) })
+    overtime.sort(); dayShift.sort(); nightShift.sort()
+
+    // Off-duty crew: resting this week (not covering overtime), with the car they last drove.
+    const otIds = new Set(otDaysByDriver.keys())
+    const offList = offDuty
+      .filter(({ d }) => !otIds.has(d.id))
+      .map(({ d }) => ({ name: cleanName(d.full_name), last: lastVehicleByDriver.get(d.id) || '—', crew: d.crew }))
+      .sort((a, b) => a.last.localeCompare(b.last) || a.name.localeCompare(b.name))
+    const offCrews = new Set(offList.map((o) => o.crew).filter(Boolean))
+    const crewLabel = (s: Set<string>) => (s.size ? ` (Crew ${[...s].sort().join('/')})` : '')
+
+    // Three shift columns side by side, padded to equal length so a big crew page-breaks cleanly.
+    const n = Math.max(overtime.length, dayShift.length, nightShift.length)
+    const onRows = n === 0 ? [['—', '—', '—']] : Array.from({ length: n }, (_, i) => [overtime[i] ?? '', dayShift[i] ?? '', nightShift[i] ?? ''])
+
+    const tables: PdfTable[] = [
+      {
+        heading: `On Duty${crewLabel(onCrews)}`,
+        head: ['Overtime', 'Day shift', 'Afternoon / Night shift'],
+        rows: onRows,
+        columnStyles: { 0: { cellWidth: 155 }, 1: { cellWidth: 180 }, 2: { cellWidth: 180 } },
+      },
+      {
+        heading: `Off Duty${crewLabel(offCrews)}`,
+        head: ['Driver', 'Last vehicle'],
+        rows: offList.length ? offList.map((o) => [o.name, o.last]) : [['—', '—']],
+        columnStyles: { 0: { cellWidth: 360 }, 1: { cellWidth: 155, fontStyle: 'bold' } },
+      },
+    ]
+    if (workshop.length) tables.push({ heading: 'Workshop / on-site duty', head: ['Driver'], rows: workshop.sort().map((w) => [w]) })
     return tables
   }
   const pdfSubtitle = () => { const n = exportAssigns().length; return `${srcLabel} · ${fmtDay(period.start)} → ${fmtDay(period.end)} · ${n} assignment${n === 1 ? '' : 's'}` }
