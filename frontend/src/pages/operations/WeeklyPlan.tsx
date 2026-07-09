@@ -214,59 +214,60 @@ export default function WeeklyPlan() {
       })
   }
   const periodLabel = `${period.start} → ${period.end}`
-  // Crew handover sheet: the ON-DUTY crew split into Overtime / Day / Afternoon-
-  // Night (each driver shown with just their fleet number, no reg), then the
-  // OFF-DUTY crew with the car each driver was last assigned to. The crew letter
-  // in each heading is read from the drivers themselves. Portrait, one page.
+  // Per-vehicle handover sheet (landscape): Overtime | Day | Fleet | Night | Off
+  // duty. Each row is a bus — its day and night drivers either side of the fleet
+  // number, any overtime cover on the left, and the off-duty driver (the one who
+  // last drove it, now resting) on the right. Crew letters read from the drivers.
   function planPdfTables(): PdfTable[] {
     const days = periodDates
-    const overtime: string[] = [], dayShift: string[] = [], nightShift: string[] = [], workshop: string[] = []
-    const onCrews = new Set<string>()
-    for (const a of exportAssigns()) {
-      const drv = driverById.get(a.driver_id)
-      const name = cleanName(a.driver_name)
-      if (a.fleet_no === WORKSHOP) {
-        const c = a.overtime ? ` [OT ${datesInRange(a.cover_start || a.week_start, a.cover_end || a.week_end).length}d]` : ''
-        workshop.push(`${name}${c}`); continue
-      }
-      if (a.overtime) {
-        const d = datesInRange(a.cover_start || a.week_start, a.cover_end || a.week_end).length
-        overtime.push(`${name} — ${a.fleet_no} (${d}d)`); continue
-      }
-      const st = drv ? firstWorkingShift(drv, days) : null
-      const isNight = st ? SHIFT_META[st].kind === 'night' : (drv ? effectiveKind(drv) === 'night' : false)
-      ;(isNight ? nightShift : dayShift).push(`${name} — ${a.fleet_no}`)
-      if (drv?.crew) onCrews.add(drv.crew)
+    const onCrews = new Set<string>(), offCrews = new Set<string>()
+    const crewOf = (id: string) => driverById.get(id)?.crew
+    const isNightDrv = (id: string) => {
+      const drv = driverById.get(id); if (!drv) return false
+      const st = firstWorkingShift(drv, days)
+      return st ? SHIFT_META[st].kind === 'night' : effectiveKind(drv) === 'night'
     }
-    overtime.sort(); dayShift.sort(); nightShift.sort()
 
-    // Off-duty crew: resting this week (not covering overtime), with the car they last drove.
-    const otIds = new Set(otDaysByDriver.keys())
-    const offList = offDuty
-      .filter(({ d }) => !otIds.has(d.id))
-      .map(({ d }) => ({ name: cleanName(d.full_name), last: lastVehicleByDriver.get(d.id) || '—', crew: d.crew }))
-      .sort((a, b) => a.last.localeCompare(b.last) || a.name.localeCompare(b.name))
-    const offCrews = new Set(offList.map((o) => o.crew).filter(Boolean))
-    const crewLabel = (s: Set<string>) => (s.size ? ` (Crew ${[...s].sort().join('/')})` : '')
+    const rows: (string | number)[][] = []
+    for (const slot of slots) {
+      if (slot.workshop) continue
+      const overtime: string[] = [], day: string[] = [], night: string[] = []
+      for (const a of assignedThis.get(slot.fleet) ?? []) {
+        const name = cleanName(a.driver_name)
+        if (a.overtime) {
+          const d = datesInRange(a.cover_start || a.week_start, a.cover_end || a.week_end).length
+          overtime.push(`${name} (${d}d)`)
+        } else {
+          ;(isNightDrv(a.driver_id) ? night : day).push(name)
+          const c = crewOf(a.driver_id); if (c) onCrews.add(c)
+        }
+      }
+      // Off duty for this bus = whoever last drove it and is resting this week.
+      const off = (lastByFleet.get(slot.fleet) ?? [])
+        .filter((l) => isOffThisWeek(l.driver_id))
+        .map((l) => { const c = crewOf(l.driver_id); if (c) offCrews.add(c); return cleanName(l.driver_name) })
+      if (!overtime.length && !day.length && !night.length && !off.length) continue
+      rows.push([overtime.join('\n') || '—', day.join('\n') || '—', slot.fleet, night.join('\n') || '—', off.join('\n') || '—'])
+    }
 
-    // Three shift columns side by side, padded to equal length so a big crew page-breaks cleanly.
-    const n = Math.max(overtime.length, dayShift.length, nightShift.length)
-    const onRows = n === 0 ? [['—', '—', '—']] : Array.from({ length: n }, (_, i) => [overtime[i] ?? '', dayShift[i] ?? '', nightShift[i] ?? ''])
-
-    const tables: PdfTable[] = [
-      {
-        heading: `On Duty${crewLabel(onCrews)}`,
-        head: ['Overtime', 'Day shift', 'Afternoon / Night shift'],
-        rows: onRows,
-        columnStyles: { 0: { cellWidth: 155 }, 1: { cellWidth: 180 }, 2: { cellWidth: 180 } },
+    const lbl = (verb: string, s: Set<string>) => (s.size ? `${verb} (Crew ${[...s].sort().join('/')})` : verb)
+    const tables: PdfTable[] = [{
+      heading: `${lbl('On Duty', onCrews)}     ·     ${lbl('Off Duty', offCrews)}`,
+      head: ['Overtime', 'Day', 'Fleet', 'Night', 'Off duty'],
+      rows: rows.length ? rows : [['—', '—', '—', '—', '—']],
+      columnStyles: {
+        0: { cellWidth: 150 }, 1: { cellWidth: 165 },
+        2: { cellWidth: 80, halign: 'center', fontStyle: 'bold' },
+        3: { cellWidth: 165 }, 4: { cellWidth: 165 },
       },
-      {
-        heading: `Off Duty${crewLabel(offCrews)}`,
-        head: ['Driver', 'Last vehicle'],
-        rows: offList.length ? offList.map((o) => [o.name, o.last]) : [['—', '—']],
-        columnStyles: { 0: { cellWidth: 360 }, 1: { cellWidth: 155, fontStyle: 'bold' } },
-      },
-    ]
+    }]
+
+    // Workshop / on-site duty — small trailing table.
+    const workshop: string[] = []
+    for (const a of exportAssigns()) if (a.fleet_no === WORKSHOP) {
+      const c = a.overtime ? ` [OT ${datesInRange(a.cover_start || a.week_start, a.cover_end || a.week_end).length}d]` : ''
+      workshop.push(`${cleanName(a.driver_name)}${c}`)
+    }
     if (workshop.length) tables.push({ heading: 'Workshop / on-site duty', head: ['Driver'], rows: workshop.sort().map((w) => [w]) })
     return tables
   }
@@ -276,7 +277,7 @@ export default function WeeklyPlan() {
       title: `Weekly Plan — ${branchLabel}`,
       subtitle: pdfSubtitle(),
       tables: planPdfTables(),
-      landscape: false,
+      landscape: true,
       dense: true,
       filename: `Weekly Plan - ${branchLabel} - ${srcLabel} - ${period.start}.pdf`,
     })
@@ -294,7 +295,7 @@ export default function WeeklyPlan() {
   }
   function saveToDocs() {
     if (weekAssigns.length === 0) return
-    const doc = buildTablePdf({ title: `Weekly Plan — ${branchLabel}`, subtitle: pdfSubtitle(), tables: planPdfTables(), landscape: false, dense: true })
+    const doc = buildTablePdf({ title: `Weekly Plan — ${branchLabel}`, subtitle: pdfSubtitle(), tables: planPdfTables(), landscape: true, dense: true })
     const blob = doc.output('blob')
     const fileName = `Weekly Plan - ${branchLabel} - ${srcLabel} - ${period.start}.pdf`
     const fileId = `wplan_${branch}_${period.start}_${Date.now()}`
