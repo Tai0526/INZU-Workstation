@@ -151,9 +151,10 @@ export default function SpeedEventModal({
   function escalate() {
     if (!editing) return
     if (!form.driver_name) { setError('Pick the driver before escalating.'); return }
-    // Persist any corrected driver first, then escalate from the corrected values.
+    // Confirm the event against the (corrected) driver, then escalate from those values.
     speedStore.update(editing.id, { driver_id: form.driver_id, driver_name: form.driver_name, notes: form.notes })
-    const ev = { ...editing, ...form } as SpeedEvent
+    if (form.status !== 'confirmed') speedStore.setStatus(editing.id, 'confirmed')
+    const ev = { ...editing, ...form, status: 'confirmed' as SpeedStatus } as SpeedEvent
     const branchEvents = allEvents.filter((e) => e.branch === ev.branch).map((e) => (e.id === ev.id ? ev : e))
     const over = overBy(ev)
     const offN = offenceNumberInBand(branchEvents, ev)
@@ -182,7 +183,10 @@ export default function SpeedEventModal({
     const ded = deductionsStore.forIncident(existingCase.id)
     if (ded) deductionsStore.remove(ded.id) // void the fine raised on the wrong driver
     casesStore.remove(existingCase.id)
-    if (editing.status === 'closed') speedStore.setStatus(editing.id, 'confirmed') // re-open for re-escalation
+    // The wrong driver's record must be clean: un-confirm the event and clear the
+    // driver, so it no longer counts against them and awaits the correct driver.
+    speedStore.update(editing.id, { status: 'pending', driver_id: '', driver_name: '', resolved_by: '', resolved_at: '' })
+    setForm((f) => ({ ...f, status: 'pending', driver_id: '', driver_name: '', resolved_by: '', resolved_at: '' }))
     setRetracting(false); setRetractReason(''); setError('')
   }
 
@@ -313,8 +317,8 @@ export default function SpeedEventModal({
       {editing && (
         <div className="mt-4 flex flex-wrap items-center gap-2 rounded-lg bg-canvas px-3 py-2.5">
           <span className="text-xs font-medium text-status-neutral">Status</span>
-          <StatusBadge tone={STATUS_META[editing.status].tone}>{STATUS_META[editing.status].label}</StatusBadge>
-          {editing.resolved_by && <span className="text-[11px] text-status-neutral">by {editing.resolved_by}</span>}
+          <StatusBadge tone={STATUS_META[form.status].tone}>{STATUS_META[form.status].label}</StatusBadge>
+          {form.resolved_by && <span className="text-[11px] text-status-neutral">by {form.resolved_by}</span>}
           {canEdit && (
             <div className="ml-auto flex flex-wrap gap-1.5">
               <Button onClick={() => decide('confirmed')}><Check size={14} /> Confirm</Button>
@@ -344,16 +348,20 @@ export default function SpeedEventModal({
                 <Button variant="secondary" onClick={() => { setRetracting(false); setRetractReason('') }}>Cancel</Button>
                 <Button variant="danger" onClick={retract}><RotateCcw size={14} /> Retract incident</Button>
               </div>
-              <p className="text-[11px] text-status-neutral">This deletes the incident (and voids any fine raised on the wrong driver). Correct the driver above, then escalate again — the reason stays on this event’s history.</p>
+              <p className="text-[11px] text-status-neutral">This deletes the incident, voids any fine, and clears the wrong driver so the event no longer counts against them. Pick the correct driver above, then re-escalate — the reason stays on this event’s history.</p>
             </div>
           )}
         </div>
       )}
-      {editing && editing.status === 'confirmed' && !existingCase && (
+      {editing && !existingCase && (form.status === 'confirmed' || trail.length > 0) && (
         <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-brand/30 bg-brand-tint/40 px-3 py-2.5">
           <ShieldAlert size={16} className="text-brand" />
-          <span className="flex-1 text-sm text-navy">Push this confirmed offence to Safety as a disciplinary incident — it carries the recommended charge and repeat history.{trail.length ? ' Correct the driver above first if it was wrong.' : ''}</span>
-          {canEdit && <Button onClick={escalate}>{trail.length ? 'Re-escalate' : 'Escalate to incident'}</Button>}
+          <span className="flex-1 text-sm text-navy">
+            {trail.length
+              ? 'The wrong driver’s record has been cleared. Pick the correct driver above, then re-escalate.'
+              : 'Push this confirmed offence to Safety as a disciplinary incident — it carries the recommended charge and repeat history.'}
+          </span>
+          {canEdit && <Button onClick={escalate} disabled={!form.driver_name}>{trail.length ? 'Re-escalate' : 'Escalate to incident'}</Button>}
         </div>
       )}
 
