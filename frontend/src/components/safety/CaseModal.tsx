@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { UploadCloud, FileText, ExternalLink, Gavel, History, Send, Clock, CheckCircle2, XCircle, Wallet } from 'lucide-react'
+import { UploadCloud, FileText, ExternalLink, Gavel, History, Send, Clock, MapPin, CheckCircle2, XCircle, Wallet } from 'lucide-react'
 import Modal from '@/components/ui/Modal'
 import Button from '@/components/ui/Button'
 import StatusBadge from '@/components/ui/StatusBadge'
@@ -10,6 +10,7 @@ import {
   type Decision, type CaseFile,
 } from '@/lib/safety/cases'
 import { useDeductions, DEDUCTION_STATUS_META } from '@/lib/payroll/deductions'
+import { useSpeedGeo } from '@/lib/speed/geo'
 
 const inputCls = 'w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand'
 const ALL_DECISIONS = Object.keys(DECISION_LABEL) as Decision[]
@@ -29,6 +30,7 @@ export default function CaseModal({
 }) {
   const all = useCases()
   const deductions = useDeductions()
+  const geoMap = useSpeedGeo()
   const c = all.find((x) => x.id === caseId) ?? null
   const chargeRef = useRef<HTMLInputElement>(null)
   const excRef = useRef<HTMLInputElement>(null)
@@ -70,6 +72,7 @@ export default function CaseModal({
   if (!c) return null
   const history = casesStore.historyForDriver(c.driver_id, c.driver_name, c.id)
   const isSpeed = c.source === 'speed'
+  const geo = isSpeed ? geoMap[c.event_id] : undefined
   const typeMeta = INCIDENT_TYPE_META[c.incident_type]
   const deduction = deductions.find((d) => d.incident_id === c.id)
 
@@ -174,6 +177,16 @@ export default function CaseModal({
             <Row label="Branch" value={c.branch === 'kansanshi' ? 'Kansanshi' : 'Trident'} />
           </div>
           {c.description && <Row label="What happened" value={c.description} />}
+        </div>
+      )}
+
+      {/* Geotab detail — how long, how far, and where it happened (carried from the speed event) */}
+      {isSpeed && geo && (
+        <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-black/10 bg-canvas px-3 py-2 text-xs text-status-neutral">
+          <span className="inline-flex items-center gap-1"><Clock size={13} /> <span className="font-medium text-navy">{geo.dur}s</span> over the limit</span>
+          <span><span className="font-medium text-navy">{geo.dist.toFixed(2)} km</span> while speeding</span>
+          {(geo.lat !== 0 || geo.lng !== 0) && <span className="inline-flex items-center gap-1"><MapPin size={13} /> {geo.lat.toFixed(5)}, {geo.lng.toFixed(5)}</span>}
+          {geo.loc && <span className="font-medium text-navy">{geo.loc}</span>}
         </div>
       )}
 

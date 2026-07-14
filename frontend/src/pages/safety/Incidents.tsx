@@ -15,6 +15,7 @@ import {
 import { SortTh, useSort, sortRows } from '@/components/ui/SortTh'
 import { monthKey, monthLabel } from '@/lib/speed/types'
 import { downloadTablePdf } from '@/lib/reports/pdfDoc'
+import { useSpeedGeo } from '@/lib/speed/geo'
 
 const VERDICT_ROLES: RoleKey[] = ['operations_manager', 'asst_operations_manager']
 
@@ -46,6 +47,7 @@ export default function Incidents() {
   const canVerdict = VERDICT_ROLES.includes(role)
 
   const all = useCases()
+  const geoMap = useSpeedGeo()
   const [q, setQ] = useState('')
   const [stage, setStage] = useState<'all' | CaseStage>('all')
   const [type, setType] = useState<'all' | IncidentType>('all')
@@ -90,8 +92,10 @@ export default function Incidents() {
   function exportAwaitingOps() {
     const list = [...scoped].filter((c) => c.stage === 'ops_review').sort((a, b) => a.event_datetime.localeCompare(b.event_datetime))
     const rows = list.map((c) => {
+      const g = c.source === 'speed' ? geoMap[c.event_id] : undefined
+      const geoLine = g ? `\n${g.dur}s over · ${g.dist.toFixed(2)} km${g.loc ? ` · ${g.loc}` : ''}${(g.lat || g.lng) ? `\n${g.lat.toFixed(5)}, ${g.lng.toFixed(5)}` : ''}` : ''
       const details = c.source === 'speed'
-        ? `+${c.over_by ?? 0} km/h (${c.recorded_speed ?? 0}/${c.speed_limit ?? 0})${c.rec_action ? ` · rec: ${c.rec_action}` : ''}${c.rec_fine ? ` · K${c.rec_fine.toLocaleString()}` : ''}${c.repeat_total ? ` · repeat ×${c.repeat_total}` : ''}`
+        ? `+${c.over_by ?? 0} km/h (${c.recorded_speed ?? 0}/${c.speed_limit ?? 0})${c.rec_action ? ` · rec: ${c.rec_action}` : ''}${c.rec_fine ? ` · K${c.rec_fine.toLocaleString()}` : ''}${c.repeat_total ? ` · repeat ×${c.repeat_total}` : ''}${geoLine}`
         : `${c.severity ? SEVERITY_META[c.severity].label + ' · ' : ''}${c.description || '—'}`.slice(0, 200)
       const proposal = c.proposal
         ? `${c.proposal.decisions.map((d) => DECISION_LABEL[d]).join(', ') || 'no action'}${c.proposal.fine_amount ? ` · fine K${c.proposal.fine_amount.toLocaleString()}` : ''}${c.proposal.proposed_by ? `\nby ${c.proposal.proposed_by}` : ''}`
@@ -191,11 +195,14 @@ export default function Incidents() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((c, i) => (
+              {rows.map((c, i) => {
+                const g = c.source === 'speed' ? geoMap[c.event_id] : undefined
+                return (
                 <tr key={c.id} className={`cursor-pointer ${i % 2 ? 'bg-canvas/40' : ''} hover:bg-canvas`} onClick={() => setOpenId(c.id)}>
                   <td className="px-4 py-2.5">
                     <div className="font-medium text-navy">{c.title || c.driver_name || INCIDENT_TYPE_META[c.incident_type].label}</div>
                     <div className="text-xs text-status-neutral">{[c.driver_name, c.vehicle_label, c.route].filter(Boolean).join(' · ') || '—'}</div>
+                    {g && <div className="mt-0.5 text-[11px] text-status-neutral/90"><span className="font-medium text-navy">{g.dur}s</span> over · {g.dist.toFixed(2)} km{g.loc ? ` · ${g.loc}` : ''}</div>}
                   </td>
                   <td className="px-4 py-2.5"><StatusBadge tone={INCIDENT_TYPE_META[c.incident_type].tone}>{INCIDENT_TYPE_META[c.incident_type].label}</StatusBadge></td>
                   <td className="px-4 py-2.5 text-status-neutral">{c.event_datetime.slice(0, 10)}</td>
@@ -205,7 +212,7 @@ export default function Incidents() {
                     <div className="mt-0.5 text-[11px] text-status-neutral">Step {currentStepIndex(c.stage) + 1}/{CASE_STEPS.length}</div>
                   </td>
                 </tr>
-              ))}
+              )})}
               {rows.length === 0 && (
                 <tr><td colSpan={5} className="px-4 py-12 text-center text-sm text-status-neutral">
                   <ShieldAlert size={22} className="mx-auto mb-2 text-status-neutral" />
