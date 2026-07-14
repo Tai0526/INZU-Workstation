@@ -6,6 +6,7 @@ import { canEdit } from '@/lib/permissions'
 import Button from '@/components/ui/Button'
 import StatusBadge from '@/components/ui/StatusBadge'
 import StatChips from '@/components/ui/StatChips'
+import { SortTh, useSort, sortRows } from '@/components/ui/SortTh'
 import SpeedEventModal from '@/components/speed/SpeedEventModal'
 import SpeedImportModal from '@/components/speed/SpeedImportModal'
 import { useSpeedEvents, speedStore } from '@/lib/speed/store'
@@ -34,6 +35,8 @@ export default function SpeedEvents() {
   const [month, setMonth] = useState('all')
   const [vehicle, setVehicle] = useState('all')
   const [driver, setDriver] = useState('all')
+  const [date, setDate] = useState('')
+  const { key: sortKey, dir, toggle } = useSort('when', 'desc')
 
   const branchEvents = useMemo(() => all.filter((e) => e.branch === branch), [all, branch])
 
@@ -67,8 +70,9 @@ export default function SpeedEvents() {
       .filter((e) => month === 'all' || monthKey(e.event_datetime) === month)
       .filter((e) => vehicle === 'all' || e.vehicle_label === vehicle)
       .filter((e) => driver === 'all' || e.driver_name === driver)
+      .filter((e) => !date || e.event_datetime.slice(0, 10) === date)
       .filter((e) => !term || [e.driver_name, e.vehicle_label, e.route].some((f) => f.toLowerCase().includes(term)))
-  }, [branchEvents, q, month, vehicle, driver])
+  }, [branchEvents, q, month, vehicle, driver, date])
 
   const counts = useMemo(() => ({
     total: scoped.length,
@@ -91,12 +95,19 @@ export default function SpeedEvents() {
     return m
   }, [branchEvents])
 
-  const rows = useMemo(
-    () => scoped
-      .filter((e) => statusFilter === 'all' || e.status === statusFilter)
-      .sort((a, b) => b.event_datetime.localeCompare(a.event_datetime)),
-    [scoped, statusFilter],
-  )
+  const rows = useMemo(() => {
+    const acc: Record<string, (e: SpeedEvent) => string | number> = {
+      when: (e) => e.event_datetime,
+      driver: (e) => (e.driver_name || '').toLowerCase(),
+      vehicle: (e) => e.vehicle_label || '',
+      route: (e) => (e.route || '').toLowerCase(),
+      speed: (e) => overBy(e),
+      charge: (e) => penaltyFor(overBy(e), offenceNumberInBand(branchEvents, e))?.fine ?? 0,
+      status: (e) => STATUS_META[e.status].label,
+    }
+    const filtered = scoped.filter((e) => statusFilter === 'all' || e.status === statusFilter)
+    return sortRows(filtered, acc[sortKey] ?? acc.when, dir)
+  }, [scoped, statusFilter, sortKey, dir, branchEvents])
 
   function openAdd() { setEditing(null); setModalOpen(true) }
   function openRow(e: SpeedEvent) { setEditing(e); setModalOpen(true) }
@@ -146,12 +157,13 @@ export default function SpeedEvents() {
           <option value="all">All drivers</option>
           {driverOpts.map((d) => <option key={d} value={d}>{d}</option>)}
         </select>
+        <input type="date" value={date} onChange={(e) => setDate(e.target.value)} title="Filter by date" className="rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand" />
         <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as any)} className="rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand">
           <option value="all">All statuses</option>
           {(Object.keys(STATUS_META) as SpeedStatus[]).map((s) => <option key={s} value={s}>{STATUS_META[s].label}</option>)}
         </select>
-        {(month !== 'all' || vehicle !== 'all' || driver !== 'all' || statusFilter !== 'all' || q) && (
-          <button onClick={() => { setMonth('all'); setVehicle('all'); setDriver('all'); setStatusFilter('all'); setQ('') }}
+        {(month !== 'all' || vehicle !== 'all' || driver !== 'all' || !!date || statusFilter !== 'all' || q) && (
+          <button onClick={() => { setMonth('all'); setVehicle('all'); setDriver('all'); setDate(''); setStatusFilter('all'); setQ('') }}
             className="rounded-lg border border-black/15 px-3 py-2 text-sm text-status-neutral hover:text-navy">Clear</button>
         )}
         <span className="ml-auto text-xs text-status-neutral">{rows.length} shown</span>
@@ -162,13 +174,13 @@ export default function SpeedEvents() {
           <table className="w-full text-left text-sm">
             <thead className="bg-navy text-white">
               <tr>
-                <th className="px-4 py-2.5 font-medium">Date / time</th>
-                <th className="px-4 py-2.5 font-medium">Driver</th>
-                <th className="px-4 py-2.5 font-medium">Vehicle</th>
-                <th className="px-4 py-2.5 font-medium">Route</th>
-                <th className="px-4 py-2.5 font-medium">Speed</th>
-                <th className="px-4 py-2.5 font-medium">Recommended charge</th>
-                <th className="px-4 py-2.5 font-medium">Status</th>
+                <SortTh label="Date / time" k="when" sortKey={sortKey} dir={dir} onSort={toggle} />
+                <SortTh label="Driver" k="driver" sortKey={sortKey} dir={dir} onSort={toggle} />
+                <SortTh label="Vehicle" k="vehicle" sortKey={sortKey} dir={dir} onSort={toggle} />
+                <SortTh label="Route" k="route" sortKey={sortKey} dir={dir} onSort={toggle} />
+                <SortTh label="Speed" k="speed" sortKey={sortKey} dir={dir} onSort={toggle} />
+                <SortTh label="Recommended charge" k="charge" sortKey={sortKey} dir={dir} onSort={toggle} />
+                <SortTh label="Status" k="status" sortKey={sortKey} dir={dir} onSort={toggle} />
               </tr>
             </thead>
             <tbody>

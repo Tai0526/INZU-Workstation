@@ -12,6 +12,8 @@ import {
   useCases, CASE_STAGE_META, CASE_STEPS, currentStepIndex, INCIDENT_TYPE_META, DECISION_LABEL,
   type CaseStage, type IncidentType, type DisciplinaryCase,
 } from '@/lib/safety/cases'
+import { SortTh, useSort, sortRows } from '@/components/ui/SortTh'
+import { monthKey, monthLabel } from '@/lib/speed/types'
 
 const VERDICT_ROLES: RoleKey[] = ['operations_manager', 'asst_operations_manager']
 
@@ -22,6 +24,15 @@ function detailOf(c: DisciplinaryCase): string {
   }
   if (c.proposal) return `Proposed: ${c.proposal.decisions.map((d) => DECISION_LABEL[d]).join(', ') || 'no action'}`
   return c.description ? c.description.slice(0, 60) : '—'
+}
+
+// Click-to-sort accessors, one per column.
+const CASE_SORT: Record<string, (c: DisciplinaryCase) => string | number> = {
+  incident: (c) => (c.title || c.driver_name || INCIDENT_TYPE_META[c.incident_type].label).toLowerCase(),
+  type: (c) => INCIDENT_TYPE_META[c.incident_type].label,
+  when: (c) => c.event_datetime,
+  detail: (c) => detailOf(c).toLowerCase(),
+  stage: (c) => currentStepIndex(c.stage),
 }
 
 export default function Incidents() {
@@ -37,28 +48,35 @@ export default function Incidents() {
   const [q, setQ] = useState('')
   const [stage, setStage] = useState<'all' | CaseStage>('all')
   const [type, setType] = useState<'all' | IncidentType>('all')
+  const [driver, setDriver] = useState('all')
+  const [month, setMonth] = useState('all')
+  const [date, setDate] = useState('')
   const [openId, setOpenId] = useState<string | null>(null)
   const [registerOpen, setRegisterOpen] = useState(false)
+  const { key: sortKey, dir, toggle } = useSort('when', 'desc')
+
+  const branchCases = useMemo(() => all.filter((c) => c.branch === branch), [all, branch])
+  const driverOpts = useMemo(() => [...new Set(branchCases.map((c) => c.driver_name).filter(Boolean))].sort(), [branchCases])
+  const monthOpts = useMemo(() => [...new Set(branchCases.map((c) => monthKey(c.event_datetime)).filter(Boolean))].sort().reverse(), [branchCases])
 
   const rows = useMemo(() => {
     const term = q.trim().toLowerCase()
-    return all
-      .filter((c) => c.branch === branch)
+    const filtered = branchCases
       .filter((c) => stage === 'all' || c.stage === stage)
       .filter((c) => type === 'all' || c.incident_type === type)
+      .filter((c) => driver === 'all' || c.driver_name === driver)
+      .filter((c) => month === 'all' || monthKey(c.event_datetime) === month)
+      .filter((c) => !date || c.event_datetime.slice(0, 10) === date)
       .filter((c) => !term || [c.title, c.driver_name, c.vehicle_label, c.route].some((f) => (f || '').toLowerCase().includes(term)))
-      .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
-  }, [all, branch, q, stage, type])
+    return sortRows(filtered, CASE_SORT[sortKey] ?? CASE_SORT.when, dir)
+  }, [branchCases, q, stage, type, driver, month, date, sortKey, dir])
 
-  const counts = useMemo(() => {
-    const b = all.filter((c) => c.branch === branch)
-    return {
-      total: b.length,
-      safety: b.filter((c) => c.stage === 'safety_review').length,
-      ops: b.filter((c) => c.stage === 'ops_review').length,
-      closed: b.filter((c) => c.stage === 'closed').length,
-    }
-  }, [all, branch])
+  const counts = useMemo(() => ({
+    total: branchCases.length,
+    safety: branchCases.filter((c) => c.stage === 'safety_review').length,
+    ops: branchCases.filter((c) => c.stage === 'ops_review').length,
+    closed: branchCases.filter((c) => c.stage === 'closed').length,
+  }), [branchCases])
 
   return (
     <div className="page space-y-5">
@@ -95,7 +113,19 @@ export default function Incidents() {
           <option value="ops_review">Awaiting Ops decision ({counts.ops})</option>
           <option value="closed">Closed ({counts.closed})</option>
         </select>
-        {canPrepare && <Button onClick={() => setRegisterOpen(true)}><Plus size={15} /> Register incident</Button>}
+        <select value={driver} onChange={(e) => setDriver(e.target.value)} className="rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand">
+          <option value="all">All drivers</option>
+          {driverOpts.map((d) => <option key={d} value={d}>{d}</option>)}
+        </select>
+        <select value={month} onChange={(e) => setMonth(e.target.value)} className="rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand">
+          <option value="all">All months</option>
+          {monthOpts.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+        </select>
+        <input type="date" value={date} onChange={(e) => setDate(e.target.value)} title="Filter by date" className="rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand" />
+        {(driver !== 'all' || month !== 'all' || !!date || type !== 'all' || stage !== 'all' || q) && (
+          <button onClick={() => { setDriver('all'); setMonth('all'); setDate(''); setType('all'); setStage('all'); setQ('') }} className="rounded-lg border border-black/15 px-3 py-2 text-sm text-status-neutral hover:text-navy">Clear</button>
+        )}
+        {canPrepare && <Button className="ml-auto" onClick={() => setRegisterOpen(true)}><Plus size={15} /> Register incident</Button>}
       </div>
 
       <div className="card overflow-hidden">
@@ -103,11 +133,11 @@ export default function Incidents() {
           <table className="w-full text-left text-sm">
             <thead className="bg-navy text-white">
               <tr>
-                <th className="px-4 py-2.5 font-medium">Incident</th>
-                <th className="px-4 py-2.5 font-medium">Type</th>
-                <th className="px-4 py-2.5 font-medium">When</th>
-                <th className="px-4 py-2.5 font-medium">Detail</th>
-                <th className="px-4 py-2.5 font-medium">Stage</th>
+                <SortTh label="Incident" k="incident" sortKey={sortKey} dir={dir} onSort={toggle} />
+                <SortTh label="Type" k="type" sortKey={sortKey} dir={dir} onSort={toggle} />
+                <SortTh label="When" k="when" sortKey={sortKey} dir={dir} onSort={toggle} />
+                <SortTh label="Detail" k="detail" sortKey={sortKey} dir={dir} onSort={toggle} />
+                <SortTh label="Stage" k="stage" sortKey={sortKey} dir={dir} onSort={toggle} />
               </tr>
             </thead>
             <tbody>
