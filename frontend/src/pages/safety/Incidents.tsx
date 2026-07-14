@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Search, ShieldAlert, Plus } from 'lucide-react'
+import { Search, ShieldAlert, Plus, FileText } from 'lucide-react'
 import { useAuth } from '@/auth/AuthContext'
 import { ROLES, BRANCHES, type RoleKey } from '@/lib/roles'
 import { canEdit } from '@/lib/permissions'
@@ -9,11 +9,12 @@ import StatChips from '@/components/ui/StatChips'
 import CaseModal from '@/components/safety/CaseModal'
 import RegisterIncidentModal from '@/components/safety/RegisterIncidentModal'
 import {
-  useCases, CASE_STAGE_META, CASE_STEPS, currentStepIndex, INCIDENT_TYPE_META, DECISION_LABEL,
+  useCases, CASE_STAGE_META, CASE_STEPS, currentStepIndex, INCIDENT_TYPE_META, DECISION_LABEL, SEVERITY_META,
   type CaseStage, type IncidentType, type DisciplinaryCase,
 } from '@/lib/safety/cases'
 import { SortTh, useSort, sortRows } from '@/components/ui/SortTh'
 import { monthKey, monthLabel } from '@/lib/speed/types'
+import { downloadTablePdf } from '@/lib/reports/pdfDoc'
 
 const VERDICT_ROLES: RoleKey[] = ['operations_manager', 'asst_operations_manager']
 
@@ -59,24 +60,70 @@ export default function Incidents() {
   const driverOpts = useMemo(() => [...new Set(branchCases.map((c) => c.driver_name).filter(Boolean))].sort(), [branchCases])
   const monthOpts = useMemo(() => [...new Set(branchCases.map((c) => monthKey(c.event_datetime)).filter(Boolean))].sort().reverse(), [branchCases])
 
-  const rows = useMemo(() => {
+  // Everything matching the filters EXCEPT the stage chip — so the chip counts
+  // reflect the current view (driver/month/date/type/search), and the table then
+  // applies the selected stage on top.
+  const scoped = useMemo(() => {
     const term = q.trim().toLowerCase()
-    const filtered = branchCases
-      .filter((c) => stage === 'all' || c.stage === stage)
+    return branchCases
       .filter((c) => type === 'all' || c.incident_type === type)
       .filter((c) => driver === 'all' || c.driver_name === driver)
       .filter((c) => month === 'all' || monthKey(c.event_datetime) === month)
       .filter((c) => !date || c.event_datetime.slice(0, 10) === date)
       .filter((c) => !term || [c.title, c.driver_name, c.vehicle_label, c.route].some((f) => (f || '').toLowerCase().includes(term)))
-    return sortRows(filtered, CASE_SORT[sortKey] ?? CASE_SORT.when, dir)
-  }, [branchCases, q, stage, type, driver, month, date, sortKey, dir])
+  }, [branchCases, q, type, driver, month, date])
 
   const counts = useMemo(() => ({
-    total: branchCases.length,
-    safety: branchCases.filter((c) => c.stage === 'safety_review').length,
-    ops: branchCases.filter((c) => c.stage === 'ops_review').length,
-    closed: branchCases.filter((c) => c.stage === 'closed').length,
-  }), [branchCases])
+    total: scoped.length,
+    safety: scoped.filter((c) => c.stage === 'safety_review').length,
+    ops: scoped.filter((c) => c.stage === 'ops_review').length,
+    closed: scoped.filter((c) => c.stage === 'closed').length,
+  }), [scoped])
+
+  const rows = useMemo(() => {
+    const filtered = scoped.filter((c) => stage === 'all' || c.stage === stage)
+    return sortRows(filtered, CASE_SORT[sortKey] ?? CASE_SORT.when, dir)
+  }, [scoped, stage, sortKey, dir])
+
+  // Share-with-stakeholders PDF of the incidents awaiting an Ops decision, with
+  // Safety's proposal and a list of what's attached to each. Respects the filters.
+  function exportAwaitingOps() {
+    const list = [...scoped].filter((c) => c.stage === 'ops_review').sort((a, b) => a.event_datetime.localeCompare(b.event_datetime))
+    const rows = list.map((c) => {
+      const details = c.source === 'speed'
+        ? `+${c.over_by ?? 0} km/h (${c.recorded_speed ?? 0}/${c.speed_limit ?? 0})${c.rec_action ? ` · rec: ${c.rec_action}` : ''}${c.rec_fine ? ` · K${c.rec_fine.toLocaleString()}` : ''}${c.repeat_total ? ` · repeat ×${c.repeat_total}` : ''}`
+        : `${c.severity ? SEVERITY_META[c.severity].label + ' · ' : ''}${c.description || '—'}`.slice(0, 200)
+      const proposal = c.proposal
+        ? `${c.proposal.decisions.map((d) => DECISION_LABEL[d]).join(', ') || 'no action'}${c.proposal.fine_amount ? ` · fine K${c.proposal.fine_amount.toLocaleString()}` : ''}${c.proposal.proposed_by ? `\nby ${c.proposal.proposed_by}` : ''}`
+        : (c.safety_report ? c.safety_report.slice(0, 120) : 'Not yet proposed')
+      const files = [
+        c.charge_statement && `Charge statement: ${c.charge_statement.file_name}`,
+        c.exculpatory && `Exculpatory: ${c.exculpatory.file_name}`,
+        c.memo && `Memo: ${c.memo.file_name}`,
+        c.incident_report && `Report: ${c.incident_report.file_name}`,
+      ].filter(Boolean).join('\n') || 'None attached'
+      return [
+        `${c.driver_name || c.title || INCIDENT_TYPE_META[c.incident_type].label}\n${INCIDENT_TYPE_META[c.incident_type].label}${c.vehicle_label ? ` · ${c.vehicle_label}` : ''}${c.route ? ` · ${c.route}` : ''}`,
+        c.event_datetime.slice(0, 10),
+        details,
+        proposal,
+        files,
+      ]
+    })
+    const today = new Date().toISOString().slice(0, 10)
+    downloadTablePdf({
+      title: `Incidents Awaiting Ops Decision — ${branchLabel}`,
+      subtitle: `${list.length} pending · generated ${today}`,
+      tables: [{
+        head: ['Incident', 'When', 'Details', "Safety's proposal", 'Attachments'],
+        rows: rows.length ? rows : [['—', '—', '—', '—', '—']],
+        columnStyles: { 0: { cellWidth: 130, fontStyle: 'bold' }, 1: { cellWidth: 58 }, 2: { cellWidth: 200 }, 3: { cellWidth: 150 }, 4: { cellWidth: 160 } },
+      }],
+      landscape: true,
+      dense: true,
+      filename: `Incidents Awaiting Ops - ${branchLabel} - ${today}.pdf`,
+    })
+  }
 
   return (
     <div className="page space-y-5">
@@ -125,7 +172,10 @@ export default function Incidents() {
         {(driver !== 'all' || month !== 'all' || !!date || type !== 'all' || stage !== 'all' || q) && (
           <button onClick={() => { setDriver('all'); setMonth('all'); setDate(''); setType('all'); setStage('all'); setQ('') }} className="rounded-lg border border-black/15 px-3 py-2 text-sm text-status-neutral hover:text-navy">Clear</button>
         )}
-        {canPrepare && <Button className="ml-auto" onClick={() => setRegisterOpen(true)}><Plus size={15} /> Register incident</Button>}
+        <div className="ml-auto flex gap-2">
+          <Button variant="secondary" onClick={exportAwaitingOps} disabled={counts.ops === 0} title="PDF of the incidents awaiting an Ops decision, with each one's attachments — for sharing with stakeholders."><FileText size={15} /> Awaiting-Ops PDF</Button>
+          {canPrepare && <Button onClick={() => setRegisterOpen(true)}><Plus size={15} /> Register incident</Button>}
+        </div>
       </div>
 
       <div className="card overflow-hidden">
