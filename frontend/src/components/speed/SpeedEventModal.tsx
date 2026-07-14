@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Check, AlertTriangle, XCircle, History, Ban, Clock, MapPin } from 'lucide-react'
+import { Check, AlertTriangle, XCircle, History, Ban, Clock, MapPin, RotateCcw } from 'lucide-react'
 import Modal from '@/components/ui/Modal'
 import Button from '@/components/ui/Button'
 import StatusBadge from '@/components/ui/StatusBadge'
@@ -16,6 +16,8 @@ import {
   SPEED_ZONES, effectiveLimit, bandFor, penaltyFor, penaltyTone, penaltyLabel, offenceNumberInBand,
 } from '@/lib/speed/types'
 import { casesStore, useCases, CASE_STAGE_META } from '@/lib/safety/cases'
+import { speedAuditStore, useSpeedAudit } from '@/lib/speed/audit'
+import { deductionsStore } from '@/lib/payroll/deductions'
 import { ShieldAlert } from 'lucide-react'
 
 const ordinals = ['', '1st', '2nd', '3rd', '4th', '5th', '6th']
@@ -54,6 +56,10 @@ export default function SpeedEventModal({
   const geo = editing ? geoMap[editing.id] : undefined
   const [form, setForm] = useState<SpeedEventInput | SpeedEvent>(() => (editing ? { ...editing } : empty(branch)))
   const [error, setError] = useState('')
+  const [retracting, setRetracting] = useState(false)
+  const [retractReason, setRetractReason] = useState('')
+  const auditMap = useSpeedAudit()
+  const trail = editing ? auditMap[editing.id] ?? [] : []
 
   // Registered drivers + any system users flagged "can drive" for this branch — the
   // pool the speeding driver is confirmed against (a route supervisor or bus
@@ -87,6 +93,8 @@ export default function SpeedEventModal({
   if (open && key !== lastKey) {
     setForm(editing ? { ...editing } : empty(branch))
     setError('')
+    setRetracting(false)
+    setRetractReason('')
     setLastKey(key)
   }
 
@@ -142,21 +150,40 @@ export default function SpeedEventModal({
   const existingCase = allCases.find((c) => c.event_id === editing?.id)
   function escalate() {
     if (!editing) return
-    const branchEvents = allEvents.filter((e) => e.branch === editing.branch)
-    const over = overBy(editing)
-    const offN = offenceNumberInBand(branchEvents, editing)
+    if (!form.driver_name) { setError('Pick the driver before escalating.'); return }
+    // Persist any corrected driver first, then escalate from the corrected values.
+    speedStore.update(editing.id, { driver_id: form.driver_id, driver_name: form.driver_name, notes: form.notes })
+    const ev = { ...editing, ...form } as SpeedEvent
+    const branchEvents = allEvents.filter((e) => e.branch === ev.branch).map((e) => (e.id === ev.id ? ev : e))
+    const over = overBy(ev)
+    const offN = offenceNumberInBand(branchEvents, ev)
     const pen = penaltyFor(over, offN)
     const repeatTotal = branchEvents.filter(
-      (e) => (e.driver_id || e.driver_name) === (editing.driver_id || editing.driver_name) && countsAgainstDriver(e),
+      (e) => (e.driver_id || e.driver_name) === (ev.driver_id || ev.driver_name) && countsAgainstDriver(e),
     ).length
     casesStore.create({
-      branch: editing.branch, event_id: editing.id, driver_id: editing.driver_id, driver_name: editing.driver_name,
-      vehicle_label: editing.vehicle_label, route: editing.route, event_datetime: editing.event_datetime,
-      over_by: over, recorded_speed: editing.recorded_speed, speed_limit: editing.speed_limit,
+      branch: ev.branch, event_id: ev.id, driver_id: ev.driver_id, driver_name: ev.driver_name,
+      vehicle_label: ev.vehicle_label, route: ev.route, event_datetime: ev.event_datetime,
+      over_by: over, recorded_speed: ev.recorded_speed, speed_limit: ev.speed_limit,
       rec_band: pen?.bandKey ?? '—', rec_action: pen?.action ?? 'No charge', rec_fine: pen?.fine ?? 0,
       rec_offence: pen?.offence ?? offN, repeat_total: repeatTotal,
     })
+    speedAuditStore.log(ev.id, trail.length ? 'Re-escalated to incident' : 'Escalated to incident',
+      `Driver: ${ev.driver_name}${pen?.action ? ` · ${pen.action}` : ''}${pen?.fine ? ` · K${pen.fine.toLocaleString()}` : ''}`)
     onClose()
+  }
+  /** Undo an escalation made in error (e.g. wrong driver): delete the incident,
+   *  void any fine raised on it, and keep the reason on this event's history. */
+  function retract() {
+    if (!editing || !existingCase) return
+    const reason = retractReason.trim()
+    if (!reason) { setError('Give a reason for retracting (e.g. wrong driver).'); return }
+    speedAuditStore.log(editing.id, 'Incident retracted', `${reason} — was ${existingCase.driver_name || 'unknown driver'} (${CASE_STAGE_META[existingCase.stage].label})`)
+    const ded = deductionsStore.forIncident(existingCase.id)
+    if (ded) deductionsStore.remove(ded.id) // void the fine raised on the wrong driver
+    casesStore.remove(existingCase.id)
+    if (editing.status === 'closed') speedStore.setStatus(editing.id, 'confirmed') // re-open for re-escalation
+    setRetracting(false); setRetractReason(''); setError('')
   }
 
   return (
@@ -299,18 +326,51 @@ export default function SpeedEventModal({
         </div>
       )}
 
-      {/* Escalation to disciplinary incident */}
-      {editing && editing.status === 'confirmed' && (
+      {/* Escalated → an incident, with the option to retract it (e.g. wrong driver) */}
+      {editing && existingCase && (
+        <div className="mt-3 rounded-lg border border-brand/30 bg-brand-tint/40 px-3 py-2.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <ShieldAlert size={16} className="text-brand" />
+            <span className="flex-1 text-sm text-navy">Escalated to incident — <span className="font-medium">{CASE_STAGE_META[existingCase.stage].label}</span>. Manage it in Safety → Incidents.</span>
+            {canEdit && !retracting && <Button variant="secondary" onClick={() => { setRetracting(true); setError('') }}><RotateCcw size={14} /> Retract</Button>}
+          </div>
+          {canEdit && retracting && (
+            <div className="mt-2 space-y-2 border-t border-brand/20 pt-2">
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium text-navy">Why are you retracting this incident?</span>
+                <textarea className={inputCls} rows={2} value={retractReason} onChange={(e) => setRetractReason(e.target.value)} placeholder="e.g. Wrong driver — it was actually … / raised in error / duplicate" />
+              </label>
+              <div className="flex justify-end gap-2">
+                <Button variant="secondary" onClick={() => { setRetracting(false); setRetractReason('') }}>Cancel</Button>
+                <Button variant="danger" onClick={retract}><RotateCcw size={14} /> Retract incident</Button>
+              </div>
+              <p className="text-[11px] text-status-neutral">This deletes the incident (and voids any fine raised on the wrong driver). Correct the driver above, then escalate again — the reason stays on this event’s history.</p>
+            </div>
+          )}
+        </div>
+      )}
+      {editing && editing.status === 'confirmed' && !existingCase && (
         <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-brand/30 bg-brand-tint/40 px-3 py-2.5">
           <ShieldAlert size={16} className="text-brand" />
-          {existingCase ? (
-            <span className="text-sm text-navy">Escalated to incident — <span className="font-medium">{CASE_STAGE_META[existingCase.stage].label}</span>. Manage it in Safety → Incidents.</span>
-          ) : (
-            <>
-              <span className="flex-1 text-sm text-navy">Push this confirmed offence to Safety as a disciplinary incident — it carries the recommended charge and repeat history.</span>
-              {canEdit && <Button onClick={escalate}>Escalate to incident</Button>}
-            </>
-          )}
+          <span className="flex-1 text-sm text-navy">Push this confirmed offence to Safety as a disciplinary incident — it carries the recommended charge and repeat history.{trail.length ? ' Correct the driver above first if it was wrong.' : ''}</span>
+          {canEdit && <Button onClick={escalate}>{trail.length ? 'Re-escalate' : 'Escalate to incident'}</Button>}
+        </div>
+      )}
+
+      {/* Escalation history (escalated / retracted / re-escalated) */}
+      {editing && trail.length > 0 && (
+        <div className="mt-4">
+          <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-status-neutral"><History size={13} /> Escalation history</div>
+          <ol className="relative space-y-2 border-l border-black/10 pl-4">
+            {[...trail].reverse().map((t, i) => (
+              <li key={i} className="relative">
+                <span className="absolute -left-[21px] top-1 h-2 w-2 rounded-full bg-brand ring-2 ring-white" />
+                <div className="text-xs font-medium text-navy">{t.action}</div>
+                {t.detail && <div className="text-[11px] text-status-neutral">{t.detail}</div>}
+                <div className="text-[10px] text-status-neutral">{new Date(t.at).toLocaleString()} · {t.by}</div>
+              </li>
+            ))}
+          </ol>
         </div>
       )}
 
