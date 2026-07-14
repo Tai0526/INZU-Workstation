@@ -13,7 +13,8 @@ import {
   type CaseStage, type IncidentType, type DisciplinaryCase,
 } from '@/lib/safety/cases'
 import { SortTh, useSort, sortRows } from '@/components/ui/SortTh'
-import { monthKey, monthLabel } from '@/lib/speed/types'
+import { monthKey, monthLabel, recommendationForEvent, penaltyLabel } from '@/lib/speed/types'
+import { useSpeedEvents } from '@/lib/speed/store'
 import { downloadTablePdf } from '@/lib/reports/pdfDoc'
 import { useSpeedGeo } from '@/lib/speed/geo'
 
@@ -48,6 +49,7 @@ export default function Incidents() {
 
   const all = useCases()
   const geoMap = useSpeedGeo()
+  const speedEvents = useSpeedEvents()
   const [q, setQ] = useState('')
   const [stage, setStage] = useState<'all' | CaseStage>('all')
   const [type, setType] = useState<'all' | IncidentType>('all')
@@ -94,8 +96,11 @@ export default function Incidents() {
     const rows = list.map((c) => {
       const g = c.source === 'speed' ? geoMap[c.event_id] : undefined
       const geoLine = g ? `\n${g.dur}s over · ${g.dist.toFixed(2)} km${g.loc ? ` · ${g.loc}` : ''}${(g.lat || g.lng) ? `\n${g.lat.toFixed(5)}, ${g.lng.toFixed(5)}` : ''}` : ''
+      const rec = c.source === 'speed' ? recommendationForEvent(speedEvents, c.event_id) : null
+      const recAction = rec?.action ?? c.rec_action
+      const recFine = rec?.fine ?? c.rec_fine ?? 0
       const details = c.source === 'speed'
-        ? `+${c.over_by ?? 0} km/h (${c.recorded_speed ?? 0}/${c.speed_limit ?? 0})${c.rec_action ? ` · rec: ${c.rec_action}` : ''}${c.rec_fine ? ` · K${c.rec_fine.toLocaleString()}` : ''}${c.repeat_total ? ` · repeat ×${c.repeat_total}` : ''}${geoLine}`
+        ? `+${c.over_by ?? 0} km/h (${c.recorded_speed ?? 0}/${c.speed_limit ?? 0})${recAction ? ` · rec: ${recAction}` : ''}${recFine ? ` · K${recFine.toLocaleString()}` : ''}${c.repeat_total ? ` · repeat ×${c.repeat_total}` : ''}${geoLine}`
         : `${c.severity ? SEVERITY_META[c.severity].label + ' · ' : ''}${c.description || '—'}`.slice(0, 200)
       const proposal = c.proposal
         ? `${c.proposal.decisions.map((d) => DECISION_LABEL[d]).join(', ') || 'no action'}${c.proposal.fine_amount ? ` · fine K${c.proposal.fine_amount.toLocaleString()}` : ''}${c.proposal.proposed_by ? `\nby ${c.proposal.proposed_by}` : ''}`
@@ -197,6 +202,10 @@ export default function Incidents() {
             <tbody>
               {rows.map((c, i) => {
                 const g = c.source === 'speed' ? geoMap[c.event_id] : undefined
+                const liveRec = c.source === 'speed' ? recommendationForEvent(speedEvents, c.event_id) : null
+                const detail = c.source === 'speed'
+                  ? `+${c.over_by ?? 0} km/h · ${liveRec ? penaltyLabel(liveRec) : (c.rec_action || '—')}`
+                  : detailOf(c)
                 return (
                 <tr key={c.id} className={`cursor-pointer ${i % 2 ? 'bg-canvas/40' : ''} hover:bg-canvas`} onClick={() => setOpenId(c.id)}>
                   <td className="px-4 py-2.5">
@@ -206,7 +215,7 @@ export default function Incidents() {
                   </td>
                   <td className="px-4 py-2.5"><StatusBadge tone={INCIDENT_TYPE_META[c.incident_type].tone}>{INCIDENT_TYPE_META[c.incident_type].label}</StatusBadge></td>
                   <td className="px-4 py-2.5 text-status-neutral">{c.event_datetime.slice(0, 10)}</td>
-                  <td className="px-4 py-2.5 text-navy">{detailOf(c)}</td>
+                  <td className="px-4 py-2.5 text-navy">{detail}</td>
                   <td className="px-4 py-2.5">
                     <StatusBadge tone={CASE_STAGE_META[c.stage].tone}>{CASE_STAGE_META[c.stage].label}</StatusBadge>
                     <div className="mt-0.5 text-[11px] text-status-neutral">Step {currentStepIndex(c.stage) + 1}/{CASE_STEPS.length}</div>

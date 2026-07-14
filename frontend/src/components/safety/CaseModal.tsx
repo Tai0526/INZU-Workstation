@@ -11,6 +11,8 @@ import {
 } from '@/lib/safety/cases'
 import { useDeductions, DEDUCTION_STATUS_META } from '@/lib/payroll/deductions'
 import { useSpeedGeo } from '@/lib/speed/geo'
+import { useSpeedEvents } from '@/lib/speed/store'
+import { recommendationForEvent, penaltyLabel } from '@/lib/speed/types'
 
 const inputCls = 'w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand'
 const ALL_DECISIONS = Object.keys(DECISION_LABEL) as Decision[]
@@ -31,7 +33,11 @@ export default function CaseModal({
   const all = useCases()
   const deductions = useDeductions()
   const geoMap = useSpeedGeo()
+  const speedEvents = useSpeedEvents()
   const c = all.find((x) => x.id === caseId) ?? null
+  // Live recommendation, recomputed from the current events (the case's stored
+  // rec_* is a snapshot at escalation and can be stale — see the Speed Events page).
+  const liveRec = c && c.source === 'speed' ? recommendationForEvent(speedEvents, c.event_id) : null
   const chargeRef = useRef<HTMLInputElement>(null)
   const excRef = useRef<HTMLInputElement>(null)
   const memoRef = useRef<HTMLInputElement>(null)
@@ -58,7 +64,7 @@ export default function CaseModal({
     setLastId(c.id)
     setReport(c.safety_report)
     setPropDecisions(c.proposal?.decisions ?? [])
-    setPropFine(c.proposal?.fine_amount ?? c.rec_fine ?? 0)
+    setPropFine(c.proposal?.fine_amount ?? liveRec?.fine ?? c.rec_fine ?? 0)
     setOpsDecisions(c.proposal?.decisions ?? [])
     setOpsFine(c.proposal?.fine_amount ?? 0)
     setOpsNotes('')
@@ -151,12 +157,12 @@ export default function CaseModal({
         <CaseStepper stage={c.stage} />
       </div>
 
-      {/* Speed recommendation snapshot */}
+      {/* System recommendation — recomputed live so it stays correct as the driver's offences change */}
       {isSpeed && (
         <div className="mb-4 rounded-xl border border-brand/30 bg-brand-tint/40 px-4 py-3">
-          <div className="text-[10px] font-semibold uppercase tracking-wide text-[#8a4513]">System recommendation (at escalation)</div>
-          <div className="mt-0.5 text-sm font-bold text-navy">{c.rec_action}{(c.rec_fine ?? 0) > 0 ? ` · K${c.rec_fine!.toLocaleString()}` : ''}</div>
-          <div className="text-xs text-status-neutral">{c.rec_band} km/h band · offence #{c.rec_offence} in band · {c.repeat_total} total prior offence(s)</div>
+          <div className="text-[10px] font-semibold uppercase tracking-wide text-[#8a4513]">System recommendation</div>
+          <div className="mt-0.5 text-sm font-bold text-navy">{liveRec ? penaltyLabel(liveRec) : `${c.rec_action}${(c.rec_fine ?? 0) > 0 ? ` · K${c.rec_fine!.toLocaleString()}` : ''}`}</div>
+          <div className="text-xs text-status-neutral">{liveRec?.bandKey ?? c.rec_band} km/h band · offence #{liveRec?.offence ?? c.rec_offence} in band · {c.repeat_total} total prior offence(s)</div>
         </div>
       )}
 

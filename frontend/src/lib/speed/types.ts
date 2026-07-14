@@ -128,6 +128,20 @@ export function offenceNumberInBand(events: SpeedEvent[], event: SpeedEvent): nu
   return same.findIndex((e) => e.id === event.id) + 1
 }
 
+/**
+ * The CURRENT recommended penalty for a given event id, recomputed from the
+ * present event set. An incident stores a snapshot of the recommendation taken
+ * at escalation, which goes stale if the driver's offence count later changes
+ * (e.g. an earlier event is confirmed afterwards). Recomputing here keeps the
+ * incident's recommendation in step with the Speed Events page. Null if the
+ * event is gone or no longer counts.
+ */
+export function recommendationForEvent(events: SpeedEvent[], eventId: string): Penalty | null {
+  const ev = events.find((e) => e.id === eventId)
+  if (!ev) return null
+  return penaltyFor(overBy(ev), offenceNumberInBand(events.filter((e) => e.branch === ev.branch), ev))
+}
+
 export function penaltyTone(p: Penalty | null): StatusTone {
   if (!p) return 'neutral'
   if (p.dismissal || p.action.includes('Final')) return 'critical'
