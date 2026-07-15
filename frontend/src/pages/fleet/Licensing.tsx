@@ -4,6 +4,7 @@ import clsx from 'clsx'
 import { useAuth } from '@/auth/AuthContext'
 import { ROLES, BRANCHES } from '@/lib/roles'
 import { canEdit } from '@/lib/permissions'
+import { useDeepLink } from '@/lib/ui/deeplink'
 import StatChips from '@/components/ui/StatChips'
 import VehicleDocsModal from '@/components/fleet/VehicleDocsModal'
 import { useVehicles } from '@/lib/fleet/store'
@@ -33,6 +34,7 @@ export default function Licensing() {
   const docs = useDocuments()
   const [q, setQ] = useState('')
   const [filter, setFilter] = useState<FilterKey>('all')
+  useDeepLink(['filter'], (p) => { const f = p.get('filter'); if (f) setFilter(f as FilterKey) })
   const [picked, setPicked] = useState<Vehicle | null>(null)
 
   const fleet = useMemo(() => {

@@ -8,6 +8,7 @@ import clsx from 'clsx'
 import { useAuth } from '@/auth/AuthContext'
 import { ROLES, BRANCHES, type BranchCode } from '@/lib/roles'
 import { canEdit } from '@/lib/permissions'
+import { useDeepLink } from '@/lib/ui/deeplink'
 import Modal from '@/components/ui/Modal'
 import Button from '@/components/ui/Button'
 import StatusBadge from '@/components/ui/StatusBadge'
@@ -57,6 +58,7 @@ export default function MonthlyInspections() {
   const [month, setMonth] = useState(thisMonth())
   const [q, setQ] = useState('')
   const [stateFilter, setStateFilter] = useState<'all' | 'attention' | InspState>('all')
+  useDeepLink(['state'], (p) => { const s = p.get('state'); if (s) setStateFilter(s as InspState | 'attention') })
   const [schedule, setSchedule] = useState<{ v?: Vehicle } | null>(null)
   const [inspect, setInspect] = useState<Row | null>(null)
   const [raiseFor, setRaiseFor] = useState<{ insp: MonthlyInspection; fault: string } | null>(null)

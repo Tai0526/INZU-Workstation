@@ -4,6 +4,7 @@ import clsx from 'clsx'
 import { useAuth } from '@/auth/AuthContext'
 import { ROLES, BRANCHES, type BranchCode } from '@/lib/roles'
 import { canEdit } from '@/lib/permissions'
+import { useDeepLink } from '@/lib/ui/deeplink'
 import Modal from '@/components/ui/Modal'
 import Button from '@/components/ui/Button'
 import KpiCard from '@/components/ui/KpiCard'
@@ -145,8 +146,13 @@ function IssuancesTab({ issuances, genFuel, branch, branchLabel, vehicles, drive
   const [routesOpen, setRoutesOpen] = useState(false)
   const [editing, setEditing] = useState<FuelIssuance | null>(null)
   const [genModal, setGenModal] = useState<{ open: boolean; editing: GenFuel | null; kind: DrawKind }>({ open: false, editing: null, kind: 'generator' })
+  // Deep-link from the dashboard / notifications: ?draw=pending focuses the draws
+  // awaiting the Ops sign-off (the authorisation queue).
+  const [pendingOnly, setPendingOnly] = useState(false)
+  useDeepLink(['draw'], (p) => { if (p.get('draw') === 'pending') setPendingOnly(true) })
   const onEdit = (i: FuelIssuance) => setEditing(i)
   const genRows = useMemo(() => [...genFuel].sort((a, b) => b.date.localeCompare(a.date)), [genFuel])
+  const shownDraws = pendingOnly ? genRows.filter((g) => g.status === 'pending') : genRows
   const drawTone = (s: GenFuel['status']) => (s === 'approved' ? 'good' : s === 'pending' ? 'warning' : 'critical')
   const drawLabel = (s: GenFuel['status']) => (s === 'approved' ? 'Approved' : s === 'pending' ? 'Pending auth' : 'Rejected')
 
@@ -239,14 +245,15 @@ function IssuancesTab({ issuances, genFuel, branch, branchLabel, vehicles, drive
       {/* Non-vehicle fuel draws — generators (auto) and visitor fuel (authorised) */}
       {genRows.length > 0 && (
         <div className="card overflow-hidden">
-          <div className="flex items-center gap-2 border-b border-black/5 px-5 py-3.5"><Zap size={16} className="text-brand" /><h3 className="font-display text-sm font-bold text-navy">Generator &amp; visitor fuel</h3><span className="text-xs text-status-neutral">non-vehicle draws — visitor fuel needs Ops authorisation</span></div>
+          <div className="flex items-center gap-2 border-b border-black/5 px-5 py-3.5"><Zap size={16} className="text-brand" /><h3 className="font-display text-sm font-bold text-navy">Generator &amp; visitor fuel</h3><span className="text-xs text-status-neutral">non-vehicle draws — visitor fuel needs Ops authorisation</span>{pendingOnly && <button onClick={() => setPendingOnly(false)} className="ml-auto inline-flex items-center gap-1 rounded-full bg-status-warning/15 px-2.5 py-0.5 text-[11px] font-semibold text-[#8a6d10] hover:bg-status-warning/25">Awaiting authorisation · show all</button>}</div>
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
               <thead className="bg-canvas text-status-neutral"><tr>
                 <th className="px-5 py-2 font-medium">Date</th><th className="px-4 py-2 font-medium">Type</th><th className="px-4 py-2 font-medium">Recipient</th><th className="px-4 py-2 text-right font-medium">Litres</th><th className="px-4 py-2 font-medium">Status</th><th className="px-4 py-2 font-medium">Authorised by</th>{(canManage || canAuthorize) && <th className="px-4 py-2" />}
               </tr></thead>
               <tbody>
-                {genRows.map((g) => (
+                {shownDraws.length === 0 && <tr><td colSpan={(canManage || canAuthorize) ? 7 : 6} className="px-5 py-6 text-center text-sm text-status-neutral">No draws awaiting authorisation.</td></tr>}
+                {shownDraws.map((g) => (
                   <tr key={g.id} className="border-t border-black/5">
                     <td className="px-5 py-2 text-navy">{g.date}</td>
                     <td className="px-4 py-2 text-status-neutral">{DRAW_LABEL[g.kind]}</td>

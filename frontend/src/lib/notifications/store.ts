@@ -156,7 +156,7 @@ export function useNotifications(branch: BranchCode, role?: RoleKey, userName?: 
       id: `speed:${e.id}:confirmed`, severity: 'warning', audience: SPEED_ACTORS,
       title: `Confirmed speeding: ${e.driver_name}`,
       detail: `+${overBy(e)} km/h over on ${e.route || 'route'} — escalate to an incident for Safety.`,
-      date: e.updated_at || e.event_datetime, link: '/speed/events',
+      date: e.updated_at || e.event_datetime, link: '/speed/events?status=confirmed',
     })
   }
 
@@ -168,7 +168,7 @@ export function useNotifications(branch: BranchCode, role?: RoleKey, userName?: 
       id: `speed:pending:${pendingSpeed.length}`, severity: 'warning', audience: SPEED_ACTORS,
       title: `${pendingSpeed.length} speeding event${pendingSpeed.length === 1 ? '' : 's'} need a driver confirmed`,
       detail: 'Geotab events imported without a driver — after speaking to the driver, confirm who it was or write it off.',
-      date: latest.event_datetime.slice(0, 10), link: '/speed/events',
+      date: latest.event_datetime.slice(0, 10), link: '/speed/events?status=pending',
     })
   }
 
@@ -179,7 +179,7 @@ export function useNotifications(branch: BranchCode, role?: RoleKey, userName?: 
       id: `fueldraw:${g.id}:pending`, severity: 'warning', audience: OPS_DECIDERS,
       title: `Fuel authorisation needed: ${g.recipient}`,
       detail: `${DRAW_LABEL[g.kind]}${g.vehicle_reg ? ` (${g.vehicle_reg})` : ''} — ${g.litres} L awaiting your approval.`,
-      date: g.date, link: '/operations/fuel',
+      date: g.date, link: '/operations/fuel?draw=pending',
     })
   }
 
@@ -204,7 +204,7 @@ export function useNotifications(branch: BranchCode, role?: RoleKey, userName?: 
       id: `docs:missing:${missingDocs}`, severity: 'warning', audience: WORKSHOP_ACTORS,
       title: `${missingDocs} vehicle${missingDocs === 1 ? '' : 's'} missing required documents`,
       detail: 'Upload the outstanding licensing documents (road tax, fitness, insurance, FQM inspection).',
-      date: new Date().toISOString().slice(0, 10), link: '/fleet/licensing',
+      date: new Date().toISOString().slice(0, 10), link: '/fleet/licensing?filter=noncompliant',
     })
   }
 
@@ -268,7 +268,7 @@ export function useNotifications(branch: BranchCode, role?: RoleKey, userName?: 
         id: `veh:${v.id}:grounded`, severity: 'warning', audience: null,
         title: `${v.fleet_no} grounded`,
         detail: `${v.reg_plate} is out of service — excluded from fuel & allocation.`,
-        date: v.updated_at, link: '/fleet/vehicles',
+        date: v.updated_at, link: '/fleet/vehicles?status=grounded',
       })
     } else if (v.status === 'under_repair') {
       // Planners need to know a bus is unavailable so they don't assign it.
@@ -289,14 +289,14 @@ export function useNotifications(branch: BranchCode, role?: RoleKey, userName?: 
         id: `job:${j.id}:signoff`, severity: 'warning', audience: OPS_DECIDERS,
         title: `Job card needs sign-off: ${j.fleet_no}`,
         detail: `${j.fault} — repaired${j.completed_by ? ` by ${j.completed_by}` : ''}. Approve to return it to service.`,
-        date: j.completed_at || j.updated_at, link: '/workshop/jobcards',
+        date: j.completed_at || j.updated_at, link: '/workshop/jobcards?status=awaiting_approval',
       })
     } else if (j.status === 'open' && j.rejected_note) {
       items.push({
         id: `job:${j.id}:sentback`, severity: 'warning', audience: WORKSHOP_ACTORS,
         title: `Job card sent back: ${j.fleet_no}`,
         detail: `Needs more work: ${j.rejected_note}`,
-        date: j.updated_at, link: '/workshop/jobcards',
+        date: j.updated_at, link: '/workshop/jobcards?status=open',
       })
     }
   }
@@ -306,7 +306,7 @@ export function useNotifications(branch: BranchCode, role?: RoleKey, userName?: 
   if (unactioned > 0) items.push({
     id: `chk:unactioned:${unactioned}`, severity: 'warning', audience: WORKSHOP_ACTORS,
     title: `${unactioned} checklist${unactioned === 1 ? '' : 's'} with faults to action`,
-    detail: 'Driver-reported faults waiting for a job card.', date: today, link: '/workshop/checklists',
+    detail: 'Driver-reported faults waiting for a job card.', date: today, link: '/workshop/checklists?job=unactioned',
   })
   // Service due by distance (live odometer from Fuel) or time — for Workshop + Ops.
   const branchIssuances = fuelIssuances.filter((i) => i.branch === branch)
@@ -316,12 +316,12 @@ export function useNotifications(branch: BranchCode, role?: RoleKey, userName?: 
   if (overdueSvc > 0) items.push({
     id: `pm:overdue:${overdueSvc}`, severity: 'warning', audience: WORKSHOP_ACTORS,
     title: `${overdueSvc} bus${overdueSvc === 1 ? '' : 'es'} overdue for service`,
-    detail: 'Past the service interval (distance or time). Book it in PM Schedules.', date: today, link: '/workshop/pm',
+    detail: 'Past the service interval (distance or time). Book it in PM Schedules.', date: today, link: '/workshop/pm?status=overdue',
   })
   if (soonSvc > 0) items.push({
     id: `pm:soon:${soonSvc}`, severity: 'info', audience: WORKSHOP_ACTORS,
     title: `${soonSvc} bus${soonSvc === 1 ? '' : 'es'} due for service soon`,
-    detail: 'Approaching the service interval — plan ahead in PM Schedules.', date: today, link: '/workshop/pm',
+    detail: 'Approaching the service interval — plan ahead in PM Schedules.', date: today, link: '/workshop/pm?status=soon',
   })
   const lowSpares = spares.filter((s) => s.branch === branch && spareLow(s)).length
   if (lowSpares > 0) items.push({
@@ -348,13 +348,13 @@ export function useNotifications(branch: BranchCode, role?: RoleKey, userName?: 
     id: `insp:overdue:${inspOverdue}`, severity: 'warning', audience: WORKSHOP_ACTORS,
     title: `${inspOverdue} bus${inspOverdue === 1 ? '' : 'es'} overdue for monthly inspection`,
     detail: `${inspWorst ? `Worst is ${inspWorst} day${inspWorst === 1 ? '' : 's'} overdue. ` : ''}Assign a mechanic and inspect before the month closes.`,
-    date: today, link: '/workshop/inspections',
+    date: today, link: '/workshop/inspections?state=overdue',
   })
   if (inspDue > 0) items.push({
     id: `insp:due:${inspDue}`, severity: 'info', audience: WORKSHOP_ACTORS,
     title: `${inspDue} bus${inspDue === 1 ? '' : 'es'} still need this month's inspection`,
     detail: 'Schedule a mechanic so every bus is inspected at least once this month.',
-    date: today, link: '/workshop/inspections',
+    date: today, link: '/workshop/inspections?state=attention',
   })
 
   // ── Petty cash — every party alerted at each handoff; the requester is notified

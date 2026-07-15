@@ -3,6 +3,7 @@ import { Plus, Search, Wrench, AlertTriangle } from 'lucide-react'
 import { useAuth } from '@/auth/AuthContext'
 import { ROLES, BRANCHES } from '@/lib/roles'
 import { canEdit } from '@/lib/permissions'
+import { useDeepLink } from '@/lib/ui/deeplink'
 import StatusBadge from '@/components/ui/StatusBadge'
 import KpiCard from '@/components/ui/KpiCard'
 import Modal from '@/components/ui/Modal'
@@ -32,6 +33,7 @@ export default function ToolInspections() {
   const all = useTools()
   const [q, setQ] = useState('')
   const [condition, setCondition] = useState<'all' | ToolCondition>('all')
+  useDeepLink(['condition'], (p) => { const c = p.get('condition'); if (c) setCondition(c as ToolCondition) })
   const [editId, setEditId] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
   const [draft, setDraft] = useState<Draft>(blankDraft)

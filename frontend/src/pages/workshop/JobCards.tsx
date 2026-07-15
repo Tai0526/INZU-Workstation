@@ -5,6 +5,7 @@ import {
 import { useAuth } from '@/auth/AuthContext'
 import { ROLES, BRANCHES, type BranchCode } from '@/lib/roles'
 import { canEdit } from '@/lib/permissions'
+import { useDeepLink } from '@/lib/ui/deeplink'
 import Modal from '@/components/ui/Modal'
 import Button from '@/components/ui/Button'
 import StatusBadge from '@/components/ui/StatusBadge'
@@ -41,6 +42,7 @@ export default function JobCards() {
   const jobs = useJobCards().filter((j) => j.branch === branch)
 
   const [filter, setFilter] = useState<'all' | JobCard['status']>('all')
+  useDeepLink(['status'], (p) => { const s = p.get('status'); if (s) setFilter(s as JobCard['status']) })
   const [raiseOpen, setRaiseOpen] = useState(false)
   const [signoff, setSignoff] = useState<JobCard | null>(null)
   const [reject, setReject] = useState<JobCard | null>(null)

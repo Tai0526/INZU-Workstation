@@ -3,6 +3,7 @@ import { Plus, Search, CheckCircle2, Circle, UploadCloud, FileText, ExternalLink
 import { useAuth } from '@/auth/AuthContext'
 import { ROLES, BRANCHES } from '@/lib/roles'
 import { canEdit } from '@/lib/permissions'
+import { useDeepLink } from '@/lib/ui/deeplink'
 import StatusBadge from '@/components/ui/StatusBadge'
 import KpiCard from '@/components/ui/KpiCard'
 import Modal from '@/components/ui/Modal'
@@ -37,6 +38,7 @@ export default function CapTracker() {
   const all = useCap()
   const [q, setQ] = useState('')
   const [status, setStatus] = useState<'all' | CapStatus>('all')
+  useDeepLink(['status'], (p) => { const s = p.get('status'); if (s) setStatus(s as CapStatus) })
   const [editId, setEditId] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT)

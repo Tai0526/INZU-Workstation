@@ -3,6 +3,7 @@ import { Plus, Search, Upload, Download, AlertTriangle } from 'lucide-react'
 import { useAuth } from '@/auth/AuthContext'
 import { ROLES, BRANCHES } from '@/lib/roles'
 import { canEdit } from '@/lib/permissions'
+import { useDeepLink } from '@/lib/ui/deeplink'
 import Button from '@/components/ui/Button'
 import StatusBadge from '@/components/ui/StatusBadge'
 import StatChips from '@/components/ui/StatChips'
@@ -29,6 +30,7 @@ export default function SpeedEvents() {
   const all = useSpeedEvents()
   const [q, setQ] = useState('')
   const [statusFilter, setStatusFilter] = useState<'all' | SpeedStatus>('all')
+  useDeepLink(['status'], (p) => { const s = p.get('status'); if (s) setStatusFilter(s as SpeedStatus) })
   const [editing, setEditing] = useState<SpeedEvent | null>(null)
   const [modalOpen, setModalOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)

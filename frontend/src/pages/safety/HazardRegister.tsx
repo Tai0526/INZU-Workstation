@@ -3,6 +3,7 @@ import { Plus, Search, AlertTriangle } from 'lucide-react'
 import { useAuth } from '@/auth/AuthContext'
 import { ROLES, BRANCHES } from '@/lib/roles'
 import { canEdit } from '@/lib/permissions'
+import { useDeepLink } from '@/lib/ui/deeplink'
 import StatusBadge from '@/components/ui/StatusBadge'
 import KpiCard from '@/components/ui/KpiCard'
 import Modal from '@/components/ui/Modal'
@@ -42,6 +43,7 @@ export default function HazardRegister() {
   const all = useHazards()
   const [q, setQ] = useState('')
   const [status, setStatus] = useState<'all' | HazardStatus>('all')
+  useDeepLink(['status'], (p) => { const s = p.get('status'); if (s) setStatus(s as HazardStatus) })
   const [editId, setEditId] = useState<string | null>(null)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [err, setErr] = useState('')

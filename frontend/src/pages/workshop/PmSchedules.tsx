@@ -4,6 +4,7 @@ import clsx from 'clsx'
 import { useAuth } from '@/auth/AuthContext'
 import { ROLES, BRANCHES } from '@/lib/roles'
 import { canEdit } from '@/lib/permissions'
+import { useDeepLink } from '@/lib/ui/deeplink'
 import Modal from '@/components/ui/Modal'
 import Button from '@/components/ui/Button'
 import StatusBadge from '@/components/ui/StatusBadge'
@@ -33,6 +34,7 @@ export default function PmSchedules() {
   const today = new Date().toISOString().slice(0, 10)
   const [q, setQ] = useState('')
   const [stateFilter, setStateFilter] = useState<'all' | PmState>('all')
+  useDeepLink(['status'], (p) => { const s = p.get('status'); if (s) setStateFilter(s as PmState) })
   const [editing, setEditing] = useState<{ fleet_no: string; reg_no: string; latestOdo: number | null } | null>(null)
 
   const odoByFleet = useMemo(() => {

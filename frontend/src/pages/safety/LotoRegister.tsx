@@ -3,6 +3,7 @@ import { Plus, Search, Lock, AlertTriangle } from 'lucide-react'
 import { useAuth } from '@/auth/AuthContext'
 import { ROLES, BRANCHES } from '@/lib/roles'
 import { canEdit } from '@/lib/permissions'
+import { useDeepLink } from '@/lib/ui/deeplink'
 import StatusBadge from '@/components/ui/StatusBadge'
 import KpiCard from '@/components/ui/KpiCard'
 import Modal from '@/components/ui/Modal'
@@ -26,6 +27,7 @@ export default function LotoRegister() {
   const all = useLoto()
   const [q, setQ] = useState('')
   const [status, setStatus] = useState<'all' | LotoStatus>('all')
+  useDeepLink(['status'], (p) => { const s = p.get('status'); if (s) setStatus(s as LotoStatus) })
   const [openId, setOpenId] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
 

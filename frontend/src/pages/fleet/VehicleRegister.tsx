@@ -5,6 +5,7 @@ import {
 import { useAuth } from '@/auth/AuthContext'
 import { ROLES, BRANCHES } from '@/lib/roles'
 import { canEdit } from '@/lib/permissions'
+import { useDeepLink } from '@/lib/ui/deeplink'
 import Button from '@/components/ui/Button'
 import StatusBadge from '@/components/ui/StatusBadge'
 import VehicleFormModal from '@/components/fleet/VehicleFormModal'
@@ -26,6 +27,7 @@ export default function VehicleRegister() {
   const all = useVehicles()
   const [q, setQ] = useState('')
   const [statusFilter, setStatusFilter] = useState<'all' | VehicleStatus>('all')
+  useDeepLink(['status'], (p) => { const s = p.get('status'); if (s) setStatusFilter(s as VehicleStatus) })
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: 'fleet_no', dir: 1 })
 
   const [formOpen, setFormOpen] = useState(false)

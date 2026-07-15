@@ -5,6 +5,7 @@ import clsx from 'clsx'
 import { useAuth } from '@/auth/AuthContext'
 import { ROLES, BRANCHES, type BranchCode } from '@/lib/roles'
 import { canEdit } from '@/lib/permissions'
+import { useDeepLink } from '@/lib/ui/deeplink'
 import Modal from '@/components/ui/Modal'
 import Button from '@/components/ui/Button'
 import StatusBadge from '@/components/ui/StatusBadge'
@@ -42,6 +43,11 @@ export default function DailyChecklists() {
   const [month, setMonth] = useState('all')
   const [date, setDate] = useState('')
   const [jobFilter, setJobFilter] = useState<'all' | 'jobcard' | 'unactioned' | 'ok'>('all')
+  useDeepLink(['job', 'date', 'month'], (p) => {
+    const j = p.get('job'); if (j) setJobFilter(j as 'all' | 'jobcard' | 'unactioned' | 'ok')
+    const d = p.get('date'); if (d) setDate(d)
+    const m = p.get('month'); if (m) setMonth(m)
+  })
 
   const today = new Date().toISOString().slice(0, 10)
   const monthOpts = useMemo(() => [...new Set(checklists.map((c) => c.date.slice(0, 7)).filter(Boolean))].sort().reverse(), [checklists])
