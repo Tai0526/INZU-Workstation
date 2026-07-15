@@ -32,6 +32,11 @@ export const JOB_CATEGORY_LABEL: Record<JobCategory, string> = {
   mechanical: 'Mechanical', tyre: 'Tyre', electrical: 'Electrical', body: 'Body', service: 'Service', other: 'Other',
 }
 
+/** A scanned copy / photo of the physical job card (proof of the work done). */
+export interface JobFile { id: string; name: string; at: string; by: string }
+/** One entry in a workshop item's audit trail. */
+export interface WsTrail { at: string; by: string; action: string; detail?: string }
+
 export interface JobCard {
   id: string
   branch: BranchCode
@@ -54,6 +59,8 @@ export interface JobCard {
   rejected_note: string
   notes: string
   checklist_id: string // the Daily Checklist this job came from ('' if raised directly)
+  card_files?: JobFile[] // scanned/photographed physical job card(s) — required before sign-off
+  trail?: WsTrail[] // audit trail: raised / repaired / approved / rejected / files
   created_by: string; created_at: string; updated_by: string; updated_at: string
 }
 export type JobCardInput = Omit<JobCard, 'id' | 'created_by' | 'created_at' | 'updated_by' | 'updated_at'>

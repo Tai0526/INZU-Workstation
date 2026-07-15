@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import {
-  Plus, Wrench, Check, X, Bus, Clock, Trash2, CheckCircle2, RotateCcw, ShieldCheck, AlertTriangle, UserRound,
+  Plus, Wrench, Check, X, Bus, Clock, Trash2, CheckCircle2, RotateCcw, ShieldCheck, AlertTriangle, UserRound, Paperclip, FileText, History,
 } from 'lucide-react'
 import { useAuth } from '@/auth/AuthContext'
 import { ROLES, BRANCHES, type BranchCode } from '@/lib/roles'
@@ -14,8 +14,9 @@ import { STATUS_META, type VehicleStatus } from '@/lib/fleet/types'
 import { useDrivers } from '@/lib/drivers/store'
 import { useEmployees } from '@/lib/hr/store'
 import {
-  useJobCards, raiseJobCard, submitForSignoff, decideJob, reopenJob, removeJob, tyresStore,
+  useJobCards, raiseJobCard, submitForSignoff, decideJob, reopenJob, removeJob, tyresStore, addJobFile, removeJobFile,
 } from '@/lib/workshop/store'
+import { putFile, viewFile, deleteFile } from '@/lib/storage/fileStore'
 import {
   type JobCard, type JobCardInput, type JobSeverity, type JobCategory,
   JOB_STATUS_META, SEVERITY_META, JOB_CATEGORY_LABEL, TYRE_POSITIONS,
@@ -43,6 +44,7 @@ export default function JobCards() {
   const [raiseOpen, setRaiseOpen] = useState(false)
   const [signoff, setSignoff] = useState<JobCard | null>(null)
   const [reject, setReject] = useState<JobCard | null>(null)
+  const [review, setReview] = useState<JobCard | null>(null)
 
   const rows = useMemo(
     () => jobs
@@ -123,15 +125,17 @@ export default function JobCards() {
                   <td className="px-3 py-2 align-top text-status-neutral"><span className="inline-flex items-center gap-1"><Clock size={11} /> {fmt(j.reported_at)}</span></td>
                   <td className="px-3 py-2 align-top"><StatusBadge tone={JOB_STATUS_META[j.status].tone}>{JOB_STATUS_META[j.status].label}</StatusBadge></td>
                   <td className="px-3 py-2 align-top">
-                    <div className="flex justify-end gap-1">
+                    <div className="flex items-center justify-end gap-1">
+                      {(j.card_files?.length ?? 0) > 0 && (
+                        <button onClick={() => setReview(j)} className="inline-flex items-center gap-0.5 rounded-md px-1.5 py-1 text-[11px] text-status-neutral hover:bg-navy/5 hover:text-navy" title="View the scanned job card">
+                          <Paperclip size={12} /> {j.card_files!.length}
+                        </button>
+                      )}
                       {canManage && j.status === 'open' && (
                         <button onClick={() => setSignoff(j)} className="inline-flex items-center gap-1 rounded-md bg-navy px-2 py-1 text-xs font-medium text-white hover:bg-navy-secondary" title="Mark repaired"><CheckCircle2 size={13} /> Repaired</button>
                       )}
                       {canApprove && j.status === 'awaiting_approval' && (
-                        <>
-                          <button onClick={() => decideJob(j.id, true)} className="rounded-md p-1.5 text-status-good hover:bg-status-good/10" title="Approve — back in service"><Check size={15} /></button>
-                          <button onClick={() => setReject(j)} className="rounded-md p-1.5 text-status-critical hover:bg-status-critical/10" title="Reject — needs more work"><X size={15} /></button>
-                        </>
+                        <button onClick={() => setReview(j)} className="inline-flex items-center gap-1 rounded-md bg-navy px-2 py-1 text-xs font-medium text-white hover:bg-navy-secondary" title="Review the work + scanned card, then sign off"><ShieldCheck size={13} /> Review &amp; sign off</button>
                       )}
                       {canManage && j.status === 'awaiting_approval' && !canApprove && <span className="text-[11px] text-status-neutral">with Asst Ops</span>}
                       {canManage && j.status === 'closed' && (
@@ -162,6 +166,7 @@ export default function JobCards() {
 
       <RaiseModal open={raiseOpen} onClose={() => setRaiseOpen(false)} branch={branch} vehicles={vehicles} drivers={drivers} mechanics={mechanics} />
       <SignoffModal job={signoff} onClose={() => setSignoff(null)} />
+      <ReviewModal job={review} onClose={() => setReview(null)} canApprove={canApprove} onReject={(jc) => { setReview(null); setReject(jc) }} />
       <RejectModal job={reject} onClose={() => setReject(null)} />
     </div>
   )
@@ -229,30 +234,59 @@ function RaiseModal({ open, onClose, branch, vehicles, drivers, mechanics }: { o
 
 const emptyTyre = () => ({ position: TYRE_POSITIONS[0], brand: '', serial: '', odometer: '', cost: '' })
 function SignoffModal({ job, onClose }: { job: JobCard | null; onClose: () => void }) {
+  const liveJobs = useJobCards()
   const [work, setWork] = useState('')
   const [tyre, setTyre] = useState(emptyTyre())
   const [key, setKey] = useState('')
+  const jc = job ? (liveJobs.find((j) => j.id === job.id) ?? job) : null
   if (job && key !== job.id) { setKey(job.id); setWork(job.work_done || ''); setTyre(emptyTyre()) }
-  if (!job) return null
-  const isTyre = job.category === 'tyre'
+  if (!jc) return null
+  const isTyre = jc.category === 'tyre'
+  const files = jc.card_files ?? []
+  const ready = !!work.trim() && files.length > 0
   function save() {
-    submitForSignoff(job!.id, work)
+    if (!ready) return
+    submitForSignoff(jc!.id, work)
     if (isTyre && tyre.brand.trim()) {
       tyresStore.add({
-        branch: job!.branch, fleet_no: job!.fleet_no, reg_no: job!.reg_no, position: tyre.position,
+        branch: jc!.branch, fleet_no: jc!.fleet_no, reg_no: jc!.reg_no, position: tyre.position,
         brand: tyre.brand.trim(), serial: tyre.serial.trim(), fitted_date: new Date().toISOString().slice(0, 10),
         odometer: Number(tyre.odometer) || 0, cost_usd: tyre.cost ? Number(tyre.cost) : null,
-        reason: 'Replaced via job card', job_id: job!.id, notes: '',
+        reason: 'Replaced via job card', job_id: jc!.id, notes: '',
       })
     }
     onClose()
   }
   const setT = (patch: Partial<ReturnType<typeof emptyTyre>>) => setTyre((p) => ({ ...p, ...patch }))
   return (
-    <Modal open={!!job} onClose={onClose} title={`Mark repaired — ${job.fleet_no}`} subtitle="Describe the work done. This sends the bus to the Asst Operations Manager to sign back into service."
-      footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={save} disabled={!work.trim()}><CheckCircle2 size={15} /> Submit for sign-off</Button></>}>
+    <Modal open={!!job} onClose={onClose} title={`Mark repaired — ${jc.fleet_no}`} subtitle="Describe the work, attach the signed job card, then send it to the Asst Operations Manager to sign back into service."
+      footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={save} disabled={!ready}><CheckCircle2 size={15} /> Submit for sign-off</Button></>}>
       <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Work done</span>
         <textarea className={inputCls} rows={3} placeholder="e.g. Replaced front brake pads, bled the system, road-tested" value={work} onChange={(e) => setWork(e.target.value)} autoFocus /></label>
+
+      {/* Physical job card — required so the Asst Ops Manager can see the work before signing off */}
+      <div className="mt-3 rounded-lg border border-black/10 p-3">
+        <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-navy"><Paperclip size={13} className="text-brand" /> Scanned / photographed job card <span className="font-normal text-status-critical">· required</span></div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {files.map((f) => (
+            <span key={f.id} className="inline-flex items-center gap-1 rounded-full bg-navy/5 px-2 py-0.5 text-[11px] text-navy" title={`Attached by ${f.by} · ${f.at.slice(0, 10)}`}>
+              <FileText size={11} className="text-brand" />
+              <button onClick={() => viewFile(f.id, f.name)} className="max-w-[160px] truncate hover:underline">{f.name}</button>
+              <button onClick={() => { removeJobFile(jc!.id, f.id); void deleteFile(f.id) }} className="text-status-neutral hover:text-status-critical" title="Remove"><X size={11} /></button>
+            </span>
+          ))}
+          <label className="inline-flex cursor-pointer items-center gap-1 rounded-full border border-dashed border-brand/40 px-2 py-0.5 text-[11px] font-medium text-brand hover:border-brand">
+            <Plus size={11} /> Attach
+            <input type="file" accept=".pdf,image/*" className="hidden" onChange={async (e) => {
+              const file = e.target.files?.[0]; if (!file) return
+              const fid = `jc_${jc!.id}_${Date.now()}_${Math.round(Math.random() * 1e6)}`
+              try { await putFile(fid, file); addJobFile(jc!.id, { id: fid, name: file.name }) } catch { /* upload failed */ }
+              e.target.value = ''
+            }} />
+          </label>
+        </div>
+        {files.length === 0 && <p className="mt-1 text-[11px] text-status-neutral">Attach a photo or scan of the physical job card — it can’t be submitted for sign-off without it.</p>}
+      </div>
 
       {isTyre && (
         <div className="mt-3 rounded-lg border border-black/10 p-3">
@@ -270,6 +304,59 @@ function SignoffModal({ job, onClose }: { job: JobCard | null; onClose: () => vo
       )}
 
       <p className="mt-2 inline-flex items-center gap-1.5 text-[11px] text-status-neutral"><AlertTriangle size={12} /> The bus stays in the workshop until the Asst Ops Manager approves.</p>
+    </Modal>
+  )
+}
+
+function ReviewModal({ job, onClose, canApprove, onReject }: { job: JobCard | null; onClose: () => void; canApprove: boolean; onReject: (j: JobCard) => void }) {
+  const liveJobs = useJobCards()
+  const jc = job ? (liveJobs.find((j) => j.id === job.id) ?? job) : null
+  if (!jc) return null
+  const files = jc.card_files ?? []
+  const trail = jc.trail ?? []
+  const canDecide = canApprove && jc.status === 'awaiting_approval'
+  function approve() { if (files.length === 0) return; decideJob(jc!.id, true); onClose() }
+  return (
+    <Modal open={!!job} onClose={onClose} size="lg" title={`Job card — ${jc.fleet_no}`}
+      subtitle={`${jc.reg_no} · ${SEVERITY_META[jc.severity].label.replace(' — grounds the bus', '')} · ${JOB_CATEGORY_LABEL[jc.category]}`}
+      footer={canDecide
+        ? <div className="flex w-full items-center justify-between">
+            <Button variant="danger" onClick={() => onReject(jc!)}><X size={15} /> Send back</Button>
+            <div className="flex gap-2"><Button variant="secondary" onClick={onClose}>Close</Button><Button onClick={approve} disabled={files.length === 0}><Check size={15} /> Approve &amp; sign back</Button></div>
+          </div>
+        : <Button variant="secondary" onClick={onClose}>Close</Button>}>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div><div className="text-[10px] uppercase tracking-wide text-status-neutral">Fault</div><div className="text-sm text-navy">{jc.fault}</div></div>
+        <div><div className="text-[10px] uppercase tracking-wide text-status-neutral">Mechanics</div><div className="text-sm text-navy">{jc.mechanics.length ? jc.mechanics.join(', ') : '—'}</div></div>
+        <div className="sm:col-span-2"><div className="text-[10px] uppercase tracking-wide text-status-neutral">Work done</div><div className="text-sm text-navy">{jc.work_done || '—'}{jc.completed_by ? <span className="text-status-neutral"> · by {jc.completed_by}</span> : ''}</div></div>
+      </div>
+
+      <div className="mt-3 rounded-lg border border-black/10 p-3">
+        <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-navy"><Paperclip size={13} className="text-brand" /> Signed job card</div>
+        {files.length ? (
+          <div className="flex flex-wrap gap-1.5">
+            {files.map((f) => (
+              <button key={f.id} onClick={() => viewFile(f.id, f.name)} className="inline-flex items-center gap-1 rounded-full bg-navy/5 px-2 py-0.5 text-[11px] text-navy hover:bg-navy/10"><FileText size={11} className="text-brand" /> <span className="max-w-[180px] truncate">{f.name}</span></button>
+            ))}
+          </div>
+        ) : <p className="text-[11px] text-status-critical">No job card attached — the workshop must attach it before you can sign off.</p>}
+      </div>
+
+      {trail.length > 0 && (
+        <div className="mt-4">
+          <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-status-neutral"><History size={13} /> History</div>
+          <ol className="relative space-y-2 border-l border-black/10 pl-4">
+            {[...trail].reverse().map((t, i) => (
+              <li key={i} className="relative">
+                <span className="absolute -left-[21px] top-1 h-2 w-2 rounded-full bg-brand ring-2 ring-white" />
+                <div className="text-xs font-medium text-navy">{t.action}</div>
+                {t.detail && <div className="text-[11px] text-status-neutral">{t.detail}</div>}
+                <div className="text-[10px] text-status-neutral">{new Date(t.at).toLocaleString()} · {t.by}</div>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
     </Modal>
   )
 }

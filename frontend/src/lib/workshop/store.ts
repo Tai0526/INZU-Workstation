@@ -3,7 +3,7 @@ import { getActor } from '@/lib/audit/actor'
 import { createSyncConfig } from '@/lib/supabase/syncTable'
 import { vehiclesStore } from '@/lib/fleet/store'
 import {
-  type JobCard, type JobCardInput, type JobSeverity, SEVERITY_META,
+  type JobCard, type JobCardInput, type JobFile, type JobSeverity, SEVERITY_META,
   type Checklist, type TyreRecord, type Spare, type Rca,
   type PmConfig, DEFAULT_PM, type MechCrew, type MechShiftKind, DEFAULT_MECH_CREWS, crewOnDate,
 } from './types'
@@ -40,6 +40,25 @@ function makeConfigList<T extends WithAudit>(key: string, lsKey: string) {
 export const jobCardsStore = makeConfigList<JobCard>('workshop_jobcards', 'inzu_workshop_jobcards')
 export const useJobCards = () => useSyncExternalStore(jobCardsStore.subscribe, jobCardsStore.get, jobCardsStore.get)
 
+/** Append an audit-trail entry to a job card (stamped with actor + time). */
+export function logJob(id: string, action: string, detail?: string) {
+  const jc = jobCardsStore.list().find((x) => x.id === id)
+  jobCardsStore.update(id, { trail: [...(jc?.trail ?? []), { at: stampNow(), by: who(), action, detail }] })
+}
+/** Attach a scanned/photographed physical job card (proof of the work). */
+export function addJobFile(id: string, file: { id: string; name: string }) {
+  const jc = jobCardsStore.list().find((x) => x.id === id)
+  const rec: JobFile = { id: file.id, name: file.name, at: stampNow(), by: who() }
+  jobCardsStore.update(id, { card_files: [...(jc?.card_files ?? []), rec] })
+  logJob(id, 'Job-card copy attached', file.name)
+}
+export function removeJobFile(id: string, fileId: string) {
+  const jc = jobCardsStore.list().find((x) => x.id === id)
+  const f = (jc?.card_files ?? []).find((x) => x.id === fileId)
+  jobCardsStore.update(id, { card_files: (jc?.card_files ?? []).filter((x) => x.id !== fileId) })
+  if (f) logJob(id, 'Job-card copy removed', f.name)
+}
+
 // Set a vehicle's status by fleet number within a branch. `vehicles.status` is a
 // real column on the existing table, so this persists (and the notifications feed
 // alerts planners/everyone when a bus is under repair / grounded).
@@ -50,7 +69,10 @@ function setVehicleStatus(branch: string, fleet_no: string, status: 'active' | '
 
 /** Raise a job card — the bus goes into the workshop (or grounded) immediately. */
 export function raiseJobCard(input: JobCardInput): JobCard {
-  const jc = jobCardsStore.add({ ...input, status: 'open', reported_by: who(), reported_at: stampNow() })
+  const jc = jobCardsStore.add({
+    ...input, status: 'open', reported_by: who(), reported_at: stampNow(), card_files: [],
+    trail: [{ at: stampNow(), by: who(), action: 'Job card raised', detail: `${SEVERITY_META[input.severity].label.replace(' — grounds the bus', '')} · ${input.fault}`.slice(0, 110) }],
+  })
   setVehicleStatus(input.branch, input.fleet_no, input.vehicle_status)
   return jc
 }
@@ -75,6 +97,7 @@ export function raiseJobFromChecklist(c: Checklist, opts: { severity?: JobSeveri
 /** Supervisor marks the repair complete → awaits the Asst Ops Manager's sign-off. */
 export function submitForSignoff(id: string, work_done: string) {
   jobCardsStore.update(id, { status: 'awaiting_approval', work_done: work_done.trim(), completed_by: who(), completed_at: stampNow() })
+  logJob(id, 'Marked repaired — submitted for sign-off', work_done.trim().slice(0, 110))
 }
 
 /** Asst Ops decision: approve → bus back in service & card closed; reject → back to the workshop. */
@@ -84,8 +107,10 @@ export function decideJob(id: string, approve: boolean, note = '') {
   if (approve) {
     jobCardsStore.update(id, { status: 'closed', approved_by: who(), approved_at: stampNow(), rejected_note: '' })
     setVehicleStatus(jc.branch, jc.fleet_no, 'active')
+    logJob(id, 'Approved — signed back into service')
   } else {
     jobCardsStore.update(id, { status: 'open', rejected_note: note.trim(), approved_by: '', approved_at: '', completed_by: '', completed_at: '' })
+    logJob(id, 'Sent back for more work', note.trim())
   }
 }
 
@@ -95,6 +120,7 @@ export function reopenJob(id: string) {
   if (!jc) return
   jobCardsStore.update(id, { status: 'open', completed_by: '', completed_at: '', approved_by: '', approved_at: '' })
   setVehicleStatus(jc.branch, jc.fleet_no, jc.vehicle_status)
+  logJob(id, 'Reopened — back into the workshop')
 }
 
 /** Remove a card. If the bus is still in the workshop because of it, return it to service. */
