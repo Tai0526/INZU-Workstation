@@ -3,9 +3,10 @@ import { getActor } from '@/lib/audit/actor'
 import { createSyncConfig } from '@/lib/supabase/syncTable'
 import { vehiclesStore } from '@/lib/fleet/store'
 import {
-  type JobCard, type JobCardInput, type JobFile, type JobSeverity, SEVERITY_META,
+  type JobCard, type JobCardInput, type JobFile, type JobSeverity, type JobCategory, SEVERITY_META,
   type Checklist, type TyreRecord, type Spare, type Rca,
   type PmConfig, DEFAULT_PM, type MechCrew, type MechShiftKind, DEFAULT_MECH_CREWS, crewOnDate,
+  type MonthlyInspection, type MonthlyInspectionInput,
 } from './types'
 
 function newId() {
@@ -145,6 +146,49 @@ export const useSpares = () => useSyncExternalStore(sparesStore.subscribe, spare
 // ── Failure / RCA log ───────────────────────────────────────────────────
 export const rcaStore = makeConfigList<Rca>('workshop_rca', 'inzu_workshop_rca')
 export const useRca = () => useSyncExternalStore(rcaStore.subscribe, rcaStore.get, rcaStore.get)
+
+// ── Monthly vehicle inspections (thorough, once per calendar month) ─────
+export const inspectionsStore = makeConfigList<MonthlyInspection>('workshop_inspections', 'inzu_workshop_inspections')
+export const useInspections = () => useSyncExternalStore(inspectionsStore.subscribe, inspectionsStore.get, inspectionsStore.get)
+
+/** Append an audit-trail entry to a monthly inspection (stamped with actor + time). */
+export function logInspection(id: string, action: string, detail?: string) {
+  const it = inspectionsStore.list().find((x) => x.id === id)
+  inspectionsStore.update(id, { trail: [...(it?.trail ?? []), { at: stampNow(), by: who(), action, detail }] })
+}
+/** Schedule a vehicle's monthly inspection — assign a mechanic on a date. */
+export function scheduleInspection(input: MonthlyInspectionInput): MonthlyInspection {
+  return inspectionsStore.add({
+    ...input, status: 'scheduled',
+    trail: [{ at: stampNow(), by: who(), action: 'Inspection scheduled', detail: `${input.mechanic || 'Unassigned'} · ${input.scheduled_date}` }],
+  })
+}
+/** Reassign / reschedule an existing inspection (keeps the trail). */
+export function rescheduleInspection(id: string, mechanic: string, scheduled_date: string) {
+  inspectionsStore.update(id, { mechanic, scheduled_date })
+  logInspection(id, 'Rescheduled', `${mechanic || 'Unassigned'} · ${scheduled_date}`)
+}
+/** Record the completed inspection (findings, result, odometer). */
+export function completeInspection(id: string, patch: Partial<MonthlyInspection>) {
+  inspectionsStore.update(id, { ...patch, status: 'done', done_date: patch.done_date || stampNow().slice(0, 10) })
+  logInspection(id, 'Inspection completed', patch.result ?? '')
+}
+/** Raise a job card from an inspection finding; links it back to the inspection. */
+export function raiseJobFromInspection(insp: MonthlyInspection, opts: { fault: string; severity?: JobSeverity; category?: JobCategory; mechanics?: string[] }): JobCard {
+  const severity = opts.severity ?? 'major'
+  const jc = raiseJobCard({
+    branch: insp.branch, fleet_no: insp.fleet_no, reg_no: insp.reg_no, driver_name: '',
+    fault: opts.fault, severity, category: opts.category ?? 'mechanical',
+    vehicle_status: SEVERITY_META[severity].grounds ? 'grounded' : 'under_repair',
+    mechanics: opts.mechanics ?? (insp.mechanic ? [insp.mechanic] : []), status: 'open', work_done: '',
+    reported_by: '', reported_at: '', completed_by: '', completed_at: '', approved_by: '', approved_at: '',
+    rejected_note: '', notes: `From ${insp.month} monthly inspection`, checklist_id: '',
+  })
+  const it = inspectionsStore.list().find((x) => x.id === insp.id)
+  inspectionsStore.update(insp.id, { job_ids: [...(it?.job_ids ?? []), jc.id] })
+  logInspection(insp.id, 'Job card raised from inspection', opts.fault.slice(0, 110))
+  return jc
+}
 
 // ── PM / service schedules (per vehicle fleet_no) ───────────────────────
 const pmCfg = createSyncConfig<Record<string, PmConfig>>({ key: 'workshop_pm', lsKey: 'inzu_workshop_pm', default: {} })

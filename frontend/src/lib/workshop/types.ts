@@ -175,6 +175,86 @@ export function pmService(cfg: PmConfig, latestOdo: number | null, todayISO: str
   return { state: overdue ? 'overdue' : soon ? 'soon' : 'ok', dueDate, daysLeft, dueOdo, kmLeft, progress: Math.max(0, kmProg, dayProg), latestOdo }
 }
 
+// ── Monthly vehicle inspection (thorough, at least once per calendar month) ──
+// Every vehicle must get one detailed inspection a month. A mechanic is assigned
+// a date; after the inspection the findings are recorded, and any jobs found are
+// raised as job cards. Ops/Asst Ops see which buses haven't been done — overdue,
+// with how many days — so nothing slips through a whole month unchecked.
+export type InspectionStatus = 'scheduled' | 'done'
+export type InspectionResult = 'pass' | 'advisory' | 'fail'
+export const INSPECTION_RESULT_META: Record<InspectionResult, { label: string; tone: StatusTone }> = {
+  pass: { label: 'Passed', tone: 'good' },
+  advisory: { label: 'Advisories', tone: 'warning' },
+  fail: { label: 'Failed — jobs raised', tone: 'critical' },
+}
+export interface InspectionItem { key: string; label: string; ok: boolean; note: string }
+export const INSPECTION_GROUPS = ['Engine & drivetrain', 'Brakes, tyres & steering', 'Electrical', 'Body, cabin & safety'] as const
+export const INSPECTION_POINTS: { key: string; label: string; group: (typeof INSPECTION_GROUPS)[number] }[] = [
+  { group: 'Engine & drivetrain', key: 'engine', label: 'Engine — oil, coolant, leaks, belts' },
+  { group: 'Engine & drivetrain', key: 'transmission', label: 'Gearbox, clutch & transmission' },
+  { group: 'Engine & drivetrain', key: 'exhaust', label: 'Exhaust & emissions' },
+  { group: 'Engine & drivetrain', key: 'fuel_sys', label: 'Fuel system & filters' },
+  { group: 'Brakes, tyres & steering', key: 'brakes', label: 'Brakes — pads, discs, lines, handbrake' },
+  { group: 'Brakes, tyres & steering', key: 'suspension', label: 'Suspension & shocks' },
+  { group: 'Brakes, tyres & steering', key: 'steering', label: 'Steering & alignment' },
+  { group: 'Brakes, tyres & steering', key: 'tyres', label: 'Tyres & wheels — tread, pressure, wheel nuts' },
+  { group: 'Electrical', key: 'lights', label: 'Lights, indicators & reflectors' },
+  { group: 'Electrical', key: 'battery', label: 'Battery & charging' },
+  { group: 'Electrical', key: 'instruments', label: 'Gauges, wipers & horn' },
+  { group: 'Body, cabin & safety', key: 'body', label: 'Body, doors, mirrors & windscreen' },
+  { group: 'Body, cabin & safety', key: 'seats', label: 'Seats & seatbelts' },
+  { group: 'Body, cabin & safety', key: 'safety_kit', label: 'Fire extinguisher, first-aid & triangles' },
+]
+export const freshInspectionItems = (): InspectionItem[] => INSPECTION_POINTS.map((p) => ({ key: p.key, label: p.label, ok: true, note: '' }))
+
+export interface MonthlyInspection {
+  id: string
+  branch: BranchCode
+  month: string          // yyyy-mm this inspection covers
+  fleet_no: string
+  reg_no: string
+  mechanic: string       // assigned mechanic (full name)
+  scheduled_date: string // yyyy-mm-dd planned
+  status: InspectionStatus
+  done_date: string      // yyyy-mm-dd actually inspected ('' until done)
+  odometer: number
+  items: InspectionItem[]
+  result: InspectionResult
+  findings: string       // what needs work / summary
+  notes: string
+  job_ids: string[]      // job cards raised from this inspection
+  trail?: WsTrail[]      // audit trail: scheduled / rescheduled / completed / jobs raised
+  created_by: string; created_at: string; updated_by: string; updated_at: string
+}
+export type MonthlyInspectionInput = Omit<MonthlyInspection, 'id' | 'created_by' | 'created_at' | 'updated_by' | 'updated_at'>
+export const inspectionFaults = (i: MonthlyInspection) => i.items.filter((x) => !x.ok)
+
+export type InspState = 'done' | 'overdue' | 'today' | 'upcoming' | 'unscheduled'
+export const INSP_STATE_META: Record<InspState, { label: string; tone: StatusTone }> = {
+  done: { label: 'Inspected', tone: 'good' },
+  overdue: { label: 'Overdue', tone: 'critical' },
+  today: { label: 'Due today', tone: 'warning' },
+  upcoming: { label: 'Scheduled', tone: 'neutral' },
+  unscheduled: { label: 'Not scheduled', tone: 'warning' },
+}
+/** Last calendar day of a yyyy-mm month, as yyyy-mm-dd (timezone-safe). */
+export function monthEnd(month: string): string {
+  const [y, m] = month.split('-').map(Number)
+  const day = new Date(y, m, 0).getDate() // day 0 of the next month = last day of this one
+  return `${month}-${String(day).padStart(2, '0')}`
+}
+export interface InspStatusInfo { state: InspState; dueDate: string; daysOver: number }
+/** Where a vehicle's monthly inspection stands. Its due date is the scheduled date,
+ *  or the month-end if it was never scheduled; overdue counts the days past due. */
+export function inspectionStatus(insp: MonthlyInspection | undefined, month: string, todayISO: string): InspStatusInfo {
+  if (insp && insp.status === 'done') return { state: 'done', dueDate: insp.done_date || insp.scheduled_date, daysOver: 0 }
+  const due = insp?.scheduled_date || monthEnd(month)
+  const days = Math.round((new Date(`${todayISO}T00:00:00`).getTime() - new Date(`${due}T00:00:00`).getTime()) / DAY)
+  if (days > 0) return { state: 'overdue', dueDate: due, daysOver: days }
+  if (days === 0) return { state: 'today', dueDate: due, daysOver: 0 }
+  return { state: insp ? 'upcoming' : 'unscheduled', dueDate: due, daysOver: 0 }
+}
+
 // ── Critical spares (inventory) ─────────────────────────────────────────
 export interface Spare {
   id: string

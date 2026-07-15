@@ -31,6 +31,8 @@ import {
 import { useGenFuel, useIssuances, useReceipts, useFuelConfig } from '@/lib/fuel/store'
 import { computeStock, isApprovedDraw } from '@/lib/fuel/types'
 import { useMileage } from '@/lib/operations/store'
+import { useInspections } from '@/lib/workshop/store'
+import { inspectionStatus, type MonthlyInspection } from '@/lib/workshop/types'
 import KpiCard from '@/components/ui/KpiCard'
 import OpsInsight from '@/components/dashboard/OpsInsight'
 import StoryCard, { type Story } from '@/components/dashboard/StoryCard'
@@ -76,6 +78,7 @@ const ITEM_OWNER: Record<string, RoleKey> = {
   loto: 'workshop_supervisor', tools: 'workshop_supervisor', 'tools-due': 'workshop_supervisor',
   mil: 'operations_manager', 'fuel-auth': 'operations_manager',
   'mil-entry': 'tracker', 'fuel-entry': 'fuel_controller', 'alloc-entry': 'bus_controller',
+  insp: 'workshop_supervisor',
 }
 const ownerOf = (i: Item): RoleKey => ITEM_OWNER[i.id] ?? i.actors[0]
 
@@ -243,6 +246,27 @@ export default function Dashboard() {
     }
   }, [classes, cases, events, hazards, cap, compliance, drivers, loto, tools, draws, mileage])
 
+  // Monthly vehicle inspection coverage for this month — which buses aren't done.
+  const inspections = useInspections().filter((i) => i.branch === branch)
+  const insp = useMemo(() => {
+    const month = today.slice(0, 7)
+    const byFleet = new Map<string, MonthlyInspection>()
+    for (const it of inspections) {
+      if (it.month !== month) continue
+      const cur = byFleet.get(it.fleet_no)
+      if (!cur || it.status === 'done' || it.updated_at > cur.updated_at) byFleet.set(it.fleet_no, it)
+    }
+    let overdue = 0, dueToday = 0, unscheduled = 0, worstOver = 0, done = 0
+    for (const v of fleet) {
+      const st = inspectionStatus(byFleet.get(v.fleet_no), month, today)
+      if (st.state === 'overdue') { overdue++; worstOver = Math.max(worstOver, st.daysOver) }
+      else if (st.state === 'today') dueToday++
+      else if (st.state === 'unscheduled') unscheduled++
+      else if (st.state === 'done') done++
+    }
+    return { overdue, dueToday, unscheduled, worstOver, done }
+  }, [inspections, fleet, today])
+
   // ── Action / attention items — live from the stores, tagged with who acts ──
   const allItems = useMemo<Item[]>(() => {
     const items: Item[] = []
@@ -289,6 +313,14 @@ export default function Dashboard() {
     else if (r.toolsDue > 0)
       push({ id: 'tools-due', severity: 'action', icon: Wrench, title: `${r.toolsDue} tool ${plural(r.toolsDue, 'inspection')} due`, detail: 'Run the periodic tool inspection.', link: '/safety/tools', actors: WORKSHOP })
 
+    // Monthly vehicle inspection — who hasn't inspected their buses this month (Ops/Asst Ops oversee, Workshop acts)
+    if (insp.overdue > 0)
+      push({ id: 'insp', severity: insp.worstOver >= 7 ? 'critical' : 'warning', icon: ClipboardCheck, title: `${insp.overdue} ${plural(insp.overdue, 'bus', 'buses')} overdue for monthly inspection`, detail: insp.worstOver ? `Worst is ${insp.worstOver} ${plural(insp.worstOver, 'day')} overdue — assign a mechanic and inspect.` : 'Past due — assign a mechanic and inspect.', link: '/workshop/inspections', actors: [...OPS, 'workshop_supervisor'] })
+    else if (insp.dueToday > 0)
+      push({ id: 'insp', severity: 'warning', icon: ClipboardCheck, title: `${insp.dueToday} monthly ${plural(insp.dueToday, 'inspection')} due today`, detail: 'Scheduled for today — complete the inspection.', link: '/workshop/inspections', actors: [...OPS, 'workshop_supervisor'] })
+    else if (insp.unscheduled > 0)
+      push({ id: 'insp', severity: 'action', icon: ClipboardCheck, title: `${insp.unscheduled} ${plural(insp.unscheduled, 'bus', 'buses')} not scheduled for inspection`, detail: 'Assign a mechanic so every bus is inspected this month.', link: '/workshop/inspections', actors: [...OPS, 'workshop_supervisor'] })
+
     // Operations (real)
     if (r.mileagePending > 0)
       push({ id: 'mil', severity: 'action', icon: RouteIcon, title: `${r.mileagePending} mileage ${plural(r.mileagePending, 'entry', 'entries')} to approve`, detail: 'Daily mileage submitted by the Tracker.', link: '/operations/mileage', actors: OPS })
@@ -305,7 +337,7 @@ export default function Dashboard() {
       push({ id: 'alloc-entry', severity: 'action', icon: RouteIcon, title: "Set today's bus allocation", detail: 'Assign bus, route and driver for the day.', link: '/operations/allocation', actors: ['bus_controller'] })
 
     return items
-  }, [real, r, allocToday, mileageToday, fuelToday])
+  }, [real, r, insp, allocToday, mileageToday, fuelToday])
 
   // Execs (MD / Directors) + admin oversee the whole branch rather than holding
   // personal action items, so their "Needs your attention" IS the branch watch —

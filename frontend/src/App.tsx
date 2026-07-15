@@ -32,6 +32,7 @@ import JobCards from '@/pages/workshop/JobCards'
 import MechanicsSchedule from '@/pages/workshop/MechanicsSchedule'
 import DailyChecklists from '@/pages/workshop/DailyChecklists'
 import PmSchedules from '@/pages/workshop/PmSchedules'
+import MonthlyInspections from '@/pages/workshop/MonthlyInspections'
 import TyreManagement from '@/pages/workshop/TyreManagement'
 import CriticalSpares from '@/pages/workshop/CriticalSpares'
 import RcaLog from '@/pages/workshop/RcaLog'
@@ -78,6 +79,7 @@ const REAL_PAGES: Record<string, React.ComponentType> = {
   '/workshop': WorkshopOverview,
   '/workshop/checklists': DailyChecklists,
   '/workshop/pm': PmSchedules,
+  '/workshop/inspections': MonthlyInspections,
   '/workshop/jobcards': JobCards,
   '/workshop/mechanics': MechanicsSchedule,
   '/workshop/tyres': TyreManagement,

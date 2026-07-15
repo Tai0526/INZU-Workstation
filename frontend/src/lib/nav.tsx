@@ -92,6 +92,7 @@ export const NAV: NavNode[] = [
       { label: 'Overview', path: '/workshop', blurb: 'Overdue PM, critical spares below minimum, open RCA, plus fault insights by driver/vehicle/technician/part.' },
       { label: 'Daily Checklists', path: '/workshop/checklists', blurb: 'One per vehicle per day; any failed item auto-creates a draft Job Card tied to the driver and vehicle.' },
       { label: 'PM Schedules', path: '/workshop/pm', blurb: 'OEM/PM tracker per vehicle and component, with its own inspection form feeding Job Cards.' },
+      { label: 'Monthly Inspection', path: '/workshop/inspections', blurb: 'Every bus inspected at least once a month — assign a mechanic on a date, record the detailed findings, and raise Job Cards. Ops see who is overdue.' },
       { label: 'Job Cards', path: '/workshop/jobcards', blurb: 'Raised from checklist, PM inspection, or standalone; multi-mechanic; closure needs evidence; tyre jobs write to Tyre Management.' },
       { label: 'Mechanics Schedule', path: '/workshop/mechanics', blurb: 'Work & rest roster for the workshop mechanics (pulled from HR → Employees) — working days and Day/Night shift per mechanic.' },
       { label: 'Tyre Management', path: '/workshop/tyres', blurb: 'Per-vehicle tyre history, auto-populated from tyre-related Job Card closures and directly editable.' },

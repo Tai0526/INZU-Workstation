@@ -12,8 +12,8 @@ import { overBy, isGlitch } from '@/lib/speed/types'
 import { useGenFuel, useIssuances } from '@/lib/fuel/store'
 import { DRAW_LABEL, latestOdometer } from '@/lib/fuel/types'
 import { useMileage } from '@/lib/operations/store'
-import { useJobCards, useChecklists, useSpares, usePm } from '@/lib/workshop/store'
-import { checklistFaults, spareLow, pmService, DEFAULT_PM } from '@/lib/workshop/types'
+import { useJobCards, useChecklists, useSpares, usePm, useInspections } from '@/lib/workshop/store'
+import { checklistFaults, spareLow, pmService, DEFAULT_PM, inspectionStatus, type MonthlyInspection } from '@/lib/workshop/types'
 import { useReqs as usePettyReqs, useLedger as usePettyLedger, useActingApprover } from '@/lib/pettycash/store'
 import { fmtK, balanceOf } from '@/lib/pettycash/types'
 import { registerCrossTabSync } from '@/lib/storage/sync'
@@ -108,6 +108,7 @@ export function useNotifications(branch: BranchCode, role?: RoleKey, userName?: 
   const checklists = useChecklists()
   const spares = useSpares()
   const pm = usePm()
+  const inspections = useInspections()
   const pettyReqs = usePettyReqs()
   const pettyLedger = usePettyLedger()
   const pettyActing = useActingApprover()
@@ -327,6 +328,33 @@ export function useNotifications(branch: BranchCode, role?: RoleKey, userName?: 
     id: `spares:low:${lowSpares}`, severity: 'warning', audience: WORKSHOP_ACTORS,
     title: `${lowSpares} critical spare${lowSpares === 1 ? '' : 's'} below minimum`,
     detail: 'Reorder before they run out.', date: today, link: '/workshop/spares',
+  })
+  // Monthly inspection coverage — buses not yet inspected this month (Workshop does it, Ops oversees).
+  const inspMonth = today.slice(0, 7)
+  const inspByFleet = new Map<string, MonthlyInspection>()
+  for (const it of inspections) {
+    if (it.branch !== branch || it.month !== inspMonth) continue
+    const cur = inspByFleet.get(it.fleet_no)
+    if (!cur || it.status === 'done' || it.updated_at > cur.updated_at) inspByFleet.set(it.fleet_no, it)
+  }
+  let inspOverdue = 0, inspDue = 0, inspWorst = 0
+  for (const v of vehicles) {
+    if (v.branch !== branch) continue
+    const st = inspectionStatus(inspByFleet.get(v.fleet_no), inspMonth, today)
+    if (st.state === 'overdue') { inspOverdue++; inspWorst = Math.max(inspWorst, st.daysOver) }
+    else if (st.state === 'today' || st.state === 'unscheduled') inspDue++
+  }
+  if (inspOverdue > 0) items.push({
+    id: `insp:overdue:${inspOverdue}`, severity: 'warning', audience: WORKSHOP_ACTORS,
+    title: `${inspOverdue} bus${inspOverdue === 1 ? '' : 'es'} overdue for monthly inspection`,
+    detail: `${inspWorst ? `Worst is ${inspWorst} day${inspWorst === 1 ? '' : 's'} overdue. ` : ''}Assign a mechanic and inspect before the month closes.`,
+    date: today, link: '/workshop/inspections',
+  })
+  if (inspDue > 0) items.push({
+    id: `insp:due:${inspDue}`, severity: 'info', audience: WORKSHOP_ACTORS,
+    title: `${inspDue} bus${inspDue === 1 ? '' : 'es'} still need this month's inspection`,
+    detail: 'Schedule a mechanic so every bus is inspected at least once this month.',
+    date: today, link: '/workshop/inspections',
   })
 
   // ── Petty cash — every party alerted at each handoff; the requester is notified
