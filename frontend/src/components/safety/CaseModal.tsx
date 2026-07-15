@@ -1,10 +1,10 @@
 import { useRef, useState } from 'react'
-import { UploadCloud, FileText, ExternalLink, Gavel, History, Send, Clock, MapPin, CheckCircle2, XCircle, Wallet } from 'lucide-react'
+import { UploadCloud, FileText, ExternalLink, Gavel, History, Send, Clock, MapPin, CheckCircle2, XCircle, Wallet, X } from 'lucide-react'
 import Modal from '@/components/ui/Modal'
 import Button from '@/components/ui/Button'
 import StatusBadge from '@/components/ui/StatusBadge'
 import CaseStepper from '@/components/safety/CaseStepper'
-import { putFile, viewFile } from '@/lib/storage/fileStore'
+import { putFile, viewFile, deleteFile } from '@/lib/storage/fileStore'
 import {
   useCases, casesStore, CASE_STAGE_META, DECISION_LABEL, INCIDENT_TYPE_META, SEVERITY_META,
   type Decision, type CaseFile,
@@ -93,6 +93,20 @@ export default function CaseModal({
     const label = kind === 'charge' ? 'Charge statement attached' : kind === 'exc' ? 'Exculpatory form attached' : kind === 'report' ? 'Incident report attached' : 'Memo attached'
     casesStore.update(c!.id, patch)
     casesStore.log(c!.id, label, file.name)
+  }
+  /** Remove an attached file (wrong file / want to change it) — deletes it and clears the slot. */
+  function removeCaseFile(kind: 'charge' | 'exc' | 'memo' | 'report') {
+    const cur = kind === 'charge' ? c!.charge_statement : kind === 'exc' ? c!.exculpatory : kind === 'report' ? c!.incident_report : c!.memo
+    if (!cur) return
+    if (!window.confirm(`Remove "${cur.file_name}"? You can then attach the correct file.`)) return
+    const patch = kind === 'charge' ? { charge_statement: null }
+      : kind === 'exc' ? { exculpatory: null }
+      : kind === 'report' ? { incident_report: null }
+      : { memo: null }
+    const label = kind === 'charge' ? 'Charge statement removed' : kind === 'exc' ? 'Exculpatory form removed' : kind === 'report' ? 'Incident report removed' : 'Memo removed'
+    casesStore.update(c!.id, patch)
+    void deleteFile(cur.file_id)
+    casesStore.log(c!.id, label, cur.file_name)
   }
   async function uploadFineDoc(file: File) {
     const fileId = `${c!.id}_fine_${Date.now()}`.replace(/\s/g, '')
@@ -229,15 +243,15 @@ export default function CaseModal({
       <div className="mt-5">
         <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-status-neutral">Evidence</div>
         <div className="grid gap-2 sm:grid-cols-2">
-          {!isSpeed && <EvidenceSlot label="Incident report" file={c.incident_report} canEdit={canPrepare && c.stage !== 'closed'} onPick={() => reportRef.current?.click()} onView={() => view(c.incident_report)} />}
-          <EvidenceSlot label="Charge statement" file={c.charge_statement} canEdit={canPrepare && c.stage === 'safety_review'} onPick={() => chargeRef.current?.click()} onView={() => view(c.charge_statement)} />
-          <EvidenceSlot label="Driver exculpatory form" file={c.exculpatory} canEdit={canPrepare && c.stage === 'safety_review'} onPick={() => excRef.current?.click()} onView={() => view(c.exculpatory)} />
-          <EvidenceSlot label="Memo" file={c.memo} canEdit={canPrepare && c.stage === 'safety_review'} onPick={() => memoRef.current?.click()} onView={() => view(c.memo)} />
+          {!isSpeed && <EvidenceSlot label="Incident report" file={c.incident_report} canEdit={canPrepare && c.stage !== 'closed'} onPick={() => reportRef.current?.click()} onView={() => view(c.incident_report)} onRemove={() => removeCaseFile('report')} />}
+          <EvidenceSlot label="Charge statement" file={c.charge_statement} canEdit={canPrepare && c.stage === 'safety_review'} onPick={() => chargeRef.current?.click()} onView={() => view(c.charge_statement)} onRemove={() => removeCaseFile('charge')} />
+          <EvidenceSlot label="Driver exculpatory form" file={c.exculpatory} canEdit={canPrepare && c.stage === 'safety_review'} onPick={() => excRef.current?.click()} onView={() => view(c.exculpatory)} onRemove={() => removeCaseFile('exc')} />
+          <EvidenceSlot label="Memo" file={c.memo} canEdit={canPrepare && c.stage === 'safety_review'} onPick={() => memoRef.current?.click()} onView={() => view(c.memo)} onRemove={() => removeCaseFile('memo')} />
         </div>
-        <input ref={reportRef} type="file" accept=".pdf,image/*,.doc,.docx" className="hidden" onChange={(e) => e.target.files?.[0] && uploadCaseFile('report', e.target.files[0])} />
-        <input ref={chargeRef} type="file" accept=".pdf,image/*" className="hidden" onChange={(e) => e.target.files?.[0] && uploadCaseFile('charge', e.target.files[0])} />
-        <input ref={excRef} type="file" accept=".pdf,image/*" className="hidden" onChange={(e) => e.target.files?.[0] && uploadCaseFile('exc', e.target.files[0])} />
-        <input ref={memoRef} type="file" accept=".pdf,image/*" className="hidden" onChange={(e) => e.target.files?.[0] && uploadCaseFile('memo', e.target.files[0])} />
+        <input ref={reportRef} type="file" accept=".pdf,image/*,.doc,.docx" className="hidden" onChange={(e) => { if (e.target.files?.[0]) uploadCaseFile('report', e.target.files[0]); e.target.value = '' }} />
+        <input ref={chargeRef} type="file" accept=".pdf,image/*" className="hidden" onChange={(e) => { if (e.target.files?.[0]) uploadCaseFile('charge', e.target.files[0]); e.target.value = '' }} />
+        <input ref={excRef} type="file" accept=".pdf,image/*" className="hidden" onChange={(e) => { if (e.target.files?.[0]) uploadCaseFile('exc', e.target.files[0]); e.target.value = '' }} />
+        <input ref={memoRef} type="file" accept=".pdf,image/*" className="hidden" onChange={(e) => { if (e.target.files?.[0]) uploadCaseFile('memo', e.target.files[0]); e.target.value = '' }} />
       </div>
 
       {/* ── Stage: Safety review (write report + propose verdict) ── */}
@@ -402,12 +416,15 @@ export default function CaseModal({
   )
 }
 
-function EvidenceSlot({ label, file, canEdit, onPick, onView }: { label: string; file: CaseFile | null; canEdit: boolean; onPick: () => void; onView: () => void }) {
+function EvidenceSlot({ label, file, canEdit, onPick, onView, onRemove }: { label: string; file: CaseFile | null; canEdit: boolean; onPick: () => void; onView: () => void; onRemove?: () => void }) {
   return (
     <div className="rounded-lg border border-black/10 bg-white p-3">
       <div className="mb-1.5 text-xs font-medium text-navy">{label}</div>
       {file ? (
-        <button onClick={onView} className="inline-flex items-center gap-1 text-sm text-brand hover:underline"><FileText size={14} /> {file.file_name} <ExternalLink size={11} /></button>
+        <div className="flex items-center gap-2">
+          <button onClick={onView} className="inline-flex min-w-0 items-center gap-1 text-sm text-brand hover:underline"><FileText size={14} className="shrink-0" /> <span className="truncate">{file.file_name}</span> <ExternalLink size={11} className="shrink-0" /></button>
+          {canEdit && onRemove && <button onClick={onRemove} title="Remove / change this file" className="ml-auto shrink-0 rounded p-1 text-status-neutral hover:bg-status-critical/10 hover:text-status-critical"><X size={14} /></button>}
+        </div>
       ) : canEdit ? (
         <button onClick={onPick} className="inline-flex items-center gap-1.5 rounded-lg border border-dashed border-navy/25 px-3 py-1.5 text-xs text-status-neutral hover:border-brand hover:text-brand"><UploadCloud size={14} /> Attach</button>
       ) : (
