@@ -124,14 +124,14 @@ export function useNotifications(branch: BranchCode, role?: RoleKey, userName?: 
         id: `case:${c.id}:safety_review`, severity: 'warning', audience: SAFETY_ACTORS, viewer: true,
         title: `Incident with Safety: ${what}`,
         detail: 'Investigate, attach evidence and propose a verdict to Ops.',
-        date: c.updated_at, link: '/safety/incidents',
+        date: c.updated_at, link: `/safety/incidents?case=${c.id}`,
       })
     } else if (c.stage === 'ops_review') {
       items.push({
         id: `case:${c.id}:ops_review`, severity: 'critical', audience: OPS_DECIDERS, viewer: true,
         title: `Verdict awaiting your decision: ${what}`,
         detail: `Safety proposed ${c.proposal?.decisions.length ? 'a verdict' : 'an outcome'} — approve or reject it.`,
-        date: c.updated_at, link: '/safety/incidents',
+        date: c.updated_at, link: `/safety/incidents?case=${c.id}`,
       })
     } else if (c.stage === 'closed' && c.verdict) {
       // Inform Safety that Ops has responded.
@@ -141,7 +141,7 @@ export function useNotifications(branch: BranchCode, role?: RoleKey, userName?: 
         detail: c.verdict.outcome === 'approved'
           ? `Ops approved the verdict${c.verdict.fine_amount ? ` (fine K${c.verdict.fine_amount.toLocaleString()})` : ''}.`
           : 'Ops rejected the proposed verdict.',
-        date: c.verdict.decided_at || c.updated_at, link: '/safety/incidents',
+        date: c.verdict.decided_at || c.updated_at, link: `/safety/incidents?case=${c.id}`,
       })
     }
   }

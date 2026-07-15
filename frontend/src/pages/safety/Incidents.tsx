@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react'
-import { Search, ShieldAlert, Plus, FileText } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import { Search, ShieldAlert, Plus, FileText, Gavel } from 'lucide-react'
 import { useAuth } from '@/auth/AuthContext'
 import { ROLES, BRANCHES, type RoleKey } from '@/lib/roles'
 import { canEdit } from '@/lib/permissions'
@@ -134,6 +135,68 @@ export default function Incidents() {
     })
   }
 
+  // Share-with-stakeholders PDF of the DECIDED incidents (Ops approved / rejected),
+  // showing the outcome + fine + who decided, and what's attached. Respects filters.
+  function exportDecided() {
+    const list = [...scoped].filter((c) => c.stage === 'closed').sort((a, b) => a.event_datetime.localeCompare(b.event_datetime))
+    const rows = list.map((c) => {
+      const rec = c.source === 'speed' ? recommendationForEvent(speedEvents, c.event_id) : null
+      const recAction = rec?.action ?? c.rec_action
+      const recFine = rec?.fine ?? c.rec_fine ?? 0
+      const details = c.source === 'speed'
+        ? `+${c.over_by ?? 0} km/h (${c.recorded_speed ?? 0}/${c.speed_limit ?? 0})${recAction ? ` · rec: ${recAction}` : ''}${recFine ? ` · K${recFine.toLocaleString()}` : ''}`
+        : `${c.severity ? SEVERITY_META[c.severity].label + ' · ' : ''}${c.description || '—'}`.slice(0, 180)
+      const v = c.verdict
+      const outcome = v
+        ? (v.outcome === 'approved'
+          ? `APPROVED: ${v.decisions.map((d) => DECISION_LABEL[d]).join(', ') || 'no action'}${v.fine_amount ? ` · fine K${v.fine_amount.toLocaleString()}` : ''}${v.fine_amount && v.to_payroll ? ' · to payroll' : ''}`
+          : `REJECTED${v.notes ? `: ${v.notes}` : ''}`) + `\nby ${v.decided_by} · ${v.decided_at.slice(0, 10)}`
+        : '—'
+      const files = [
+        c.charge_statement && `Charge statement: ${c.charge_statement.file_name}`,
+        c.exculpatory && `Exculpatory: ${c.exculpatory.file_name}`,
+        c.memo && `Memo: ${c.memo.file_name}`,
+        c.incident_report && `Report: ${c.incident_report.file_name}`,
+        v?.fine_file && `Fine doc: ${v.fine_file.file_name}`,
+      ].filter(Boolean).join('\n') || 'None attached'
+      return [
+        `${c.driver_name || c.title || INCIDENT_TYPE_META[c.incident_type].label}\n${INCIDENT_TYPE_META[c.incident_type].label}${c.vehicle_label ? ` · ${c.vehicle_label}` : ''}`,
+        c.event_datetime.slice(0, 10),
+        details,
+        outcome,
+        files,
+      ]
+    })
+    const today = new Date().toISOString().slice(0, 10)
+    downloadTablePdf({
+      title: `Incident Decisions — ${branchLabel}`,
+      subtitle: `${list.length} decided · generated ${today}`,
+      tables: [{
+        head: ['Incident', 'When', 'Details', 'Ops decision', 'Attachments'],
+        rows: rows.length ? rows : [['—', '—', '—', '—', '—']],
+        columnStyles: { 0: { cellWidth: 120, fontStyle: 'bold' }, 1: { cellWidth: 58 }, 2: { cellWidth: 175 }, 3: { cellWidth: 185 }, 4: { cellWidth: 160 } },
+      }],
+      landscape: true,
+      dense: true,
+      filename: `Incident Decisions - ${branchLabel} - ${today}.pdf`,
+    })
+  }
+
+  // Deep-link from the dashboard / notifications: ?stage= pre-filters the list,
+  // ?case= opens that incident. Cleared from the URL once applied.
+  const [searchParams, setSearchParams] = useSearchParams()
+  useEffect(() => {
+    const st = searchParams.get('stage')
+    const cid = searchParams.get('case')
+    if (!st && !cid) return
+    if (st && ['safety_review', 'ops_review', 'closed'].includes(st)) setStage(st as CaseStage)
+    if (cid) setOpenId(cid)
+    setSearchParams({}, { replace: true }) // consume the param so it doesn't stick
+  }, [searchParams, setSearchParams])
+
+  // A row that needs THIS user to act (so approvers can spot theirs at a glance).
+  const needsMe = (c: DisciplinaryCase) => (c.stage === 'ops_review' && canVerdict) || (c.stage === 'safety_review' && canPrepare)
+
   return (
     <div className="page space-y-5">
       <p className="max-w-3xl text-sm text-status-neutral">
@@ -183,6 +246,7 @@ export default function Incidents() {
         )}
         <div className="ml-auto flex gap-2">
           <Button variant="secondary" onClick={exportAwaitingOps} disabled={counts.ops === 0} title="PDF of the incidents awaiting an Ops decision, with each one's attachments — for sharing with stakeholders."><FileText size={15} /> Awaiting-Ops PDF</Button>
+          <Button variant="secondary" onClick={exportDecided} disabled={counts.closed === 0} title="PDF of the incidents Ops has decided (approved / rejected), with the outcome, fine and attachments — for stakeholders."><Gavel size={15} /> Decisions PDF</Button>
           {canPrepare && <Button onClick={() => setRegisterOpen(true)}><Plus size={15} /> Register incident</Button>}
         </div>
       </div>
@@ -207,7 +271,7 @@ export default function Incidents() {
                   ? `+${c.over_by ?? 0} km/h · ${liveRec ? penaltyLabel(liveRec) : (c.rec_action || '—')}`
                   : detailOf(c)
                 return (
-                <tr key={c.id} className={`cursor-pointer ${i % 2 ? 'bg-canvas/40' : ''} hover:bg-canvas`} onClick={() => setOpenId(c.id)}>
+                <tr key={c.id} className={`cursor-pointer ${needsMe(c) ? 'bg-brand-tint/25 hover:bg-brand-tint/40' : `${i % 2 ? 'bg-canvas/40' : ''} hover:bg-canvas`}`} onClick={() => setOpenId(c.id)}>
                   <td className="px-4 py-2.5">
                     <div className="font-medium text-navy">{c.title || c.driver_name || INCIDENT_TYPE_META[c.incident_type].label}</div>
                     <div className="text-xs text-status-neutral">{[c.driver_name, c.vehicle_label, c.route].filter(Boolean).join(' · ') || '—'}</div>
@@ -218,6 +282,7 @@ export default function Incidents() {
                   <td className="px-4 py-2.5 text-navy">{detail}</td>
                   <td className="px-4 py-2.5">
                     <StatusBadge tone={CASE_STAGE_META[c.stage].tone}>{CASE_STAGE_META[c.stage].label}</StatusBadge>
+                    {needsMe(c) && <div className="mt-1 inline-flex items-center gap-1 rounded-full bg-brand px-2 py-0.5 text-[10px] font-bold text-white">{c.stage === 'ops_review' ? 'Your decision' : 'Your review'}</div>}
                     <div className="mt-0.5 text-[11px] text-status-neutral">Step {currentStepIndex(c.stage) + 1}/{CASE_STEPS.length}</div>
                   </td>
                 </tr>
