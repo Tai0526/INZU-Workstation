@@ -9,11 +9,11 @@ import {
 import { useCases, CASE_STAGE_META, INCIDENT_TYPE_META } from '@/lib/safety/cases'
 import { useSpeedEvents } from '@/lib/speed/store'
 import { overBy, isGlitch } from '@/lib/speed/types'
-import { useGenFuel } from '@/lib/fuel/store'
-import { DRAW_LABEL } from '@/lib/fuel/types'
+import { useGenFuel, useIssuances } from '@/lib/fuel/store'
+import { DRAW_LABEL, latestOdometer } from '@/lib/fuel/types'
 import { useMileage } from '@/lib/operations/store'
 import { useJobCards, useChecklists, useSpares, usePm } from '@/lib/workshop/store'
-import { checklistFaults, spareLow, pmStatus, DEFAULT_PM } from '@/lib/workshop/types'
+import { checklistFaults, spareLow, pmService, DEFAULT_PM } from '@/lib/workshop/types'
 import { useReqs as usePettyReqs, useLedger as usePettyLedger, useActingApprover } from '@/lib/pettycash/store'
 import { fmtK, balanceOf } from '@/lib/pettycash/types'
 import { registerCrossTabSync } from '@/lib/storage/sync'
@@ -102,6 +102,7 @@ export function useNotifications(branch: BranchCode, role?: RoleKey, userName?: 
   const cases = useCases()
   const speed = useSpeedEvents()
   const draws = useGenFuel()
+  const fuelIssuances = useIssuances()
   const mileage = useMileage()
   const jobCards = useJobCards()
   const checklists = useChecklists()
@@ -306,11 +307,20 @@ export function useNotifications(branch: BranchCode, role?: RoleKey, userName?: 
     title: `${unactioned} checklist${unactioned === 1 ? '' : 's'} with faults to action`,
     detail: 'Driver-reported faults waiting for a job card.', date: today, link: '/workshop/checklists',
   })
-  const overdueSvc = vehicles.filter((v) => v.branch === branch && pmStatus(pm[v.fleet_no] ?? DEFAULT_PM, today).state === 'overdue').length
+  // Service due by distance (live odometer from Fuel) or time — for Workshop + Ops.
+  const branchIssuances = fuelIssuances.filter((i) => i.branch === branch)
+  const pmStates = vehicles.filter((v) => v.branch === branch).map((v) => pmService(pm[v.fleet_no] ?? DEFAULT_PM, latestOdometer(branchIssuances, v.fleet_no), today).state)
+  const overdueSvc = pmStates.filter((s) => s === 'overdue').length
+  const soonSvc = pmStates.filter((s) => s === 'soon').length
   if (overdueSvc > 0) items.push({
     id: `pm:overdue:${overdueSvc}`, severity: 'warning', audience: WORKSHOP_ACTORS,
     title: `${overdueSvc} bus${overdueSvc === 1 ? '' : 'es'} overdue for service`,
-    detail: 'Schedule a service in PM Schedules.', date: today, link: '/workshop/pm',
+    detail: 'Past the service interval (distance or time). Book it in PM Schedules.', date: today, link: '/workshop/pm',
+  })
+  if (soonSvc > 0) items.push({
+    id: `pm:soon:${soonSvc}`, severity: 'info', audience: WORKSHOP_ACTORS,
+    title: `${soonSvc} bus${soonSvc === 1 ? '' : 'es'} due for service soon`,
+    detail: 'Approaching the service interval — plan ahead in PM Schedules.', date: today, link: '/workshop/pm',
   })
   const lowSpares = spares.filter((s) => s.branch === branch && spareLow(s)).length
   if (lowSpares > 0) items.push({

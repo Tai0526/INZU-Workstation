@@ -52,6 +52,17 @@ export function kmMoved(i: FuelIssuance): number {
 export function kmPerLitre(i: FuelIssuance): number | null {
   return !isOpen(i) && i.liters_given > 0 ? kmMoved(i) / i.liters_given : null
 }
+/** The latest known odometer reading for a fleet, from its fuel issuances. Fuel is
+ *  captured at every refuel, so this is the freshest odometer the app has. */
+export function latestOdometer(issuances: FuelIssuance[], fleet: string): number | null {
+  let best: number | null = null
+  for (const i of issuances) {
+    if (i.fleet_no !== fleet) continue
+    const o = Math.max(i.opening_mileage || 0, i.closing_mileage || 0)
+    if (best == null || o > best) best = o
+  }
+  return best
+}
 
 // ── Fuel received into the depot tank ──────────────────────────────────
 export interface FuelReceipt extends Audited {

@@ -158,7 +158,7 @@ export const usePm = () => useSyncExternalStore(pmCfg.subscribe, pmCfg.get, pmCf
 /** Record that a service was done (resets the clock). */
 export function logService(fleet_no: string, date: string, odo: number, intervalDays?: number, notes = '') {
   const cur = pmStore.for(fleet_no)
-  pmStore.set(fleet_no, { interval_days: intervalDays || cur.interval_days, last_service_date: date, last_service_odo: odo, notes })
+  pmStore.set(fleet_no, { ...cur, interval_days: intervalDays || cur.interval_days, last_service_date: date, last_service_odo: odo, notes })
 }
 
 // ── Mechanics crews & roster (crew-based work/rest, like the drivers) ────

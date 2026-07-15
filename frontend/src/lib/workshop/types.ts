@@ -117,8 +117,11 @@ export interface TyreRecord {
 export type TyreInput = Omit<TyreRecord, 'id' | 'created_by' | 'created_at' | 'updated_by' | 'updated_at'>
 
 // ── PM / service schedules (per vehicle) ────────────────────────────────
-export interface PmConfig { interval_days: number; last_service_date: string; last_service_odo: number; notes: string }
-export const DEFAULT_PM: PmConfig = { interval_days: 90, last_service_date: '', last_service_odo: 0, notes: '' }
+// A service is due by DISTANCE (every interval_km, from the last-service odometer)
+// or by TIME (every interval_days), whichever comes first. The live odometer is
+// read from the Fuel module (captured at every refuel).
+export interface PmConfig { interval_days: number; interval_km: number; last_service_date: string; last_service_odo: number; notes: string }
+export const DEFAULT_PM: PmConfig = { interval_days: 90, interval_km: 10000, last_service_date: '', last_service_odo: 0, notes: '' }
 export type PmState = 'ok' | 'soon' | 'overdue' | 'unset'
 export const PM_META: Record<PmState, { label: string; tone: StatusTone }> = {
   ok: { label: 'On schedule', tone: 'good' },
@@ -127,14 +130,49 @@ export const PM_META: Record<PmState, { label: string; tone: StatusTone }> = {
   unset: { label: 'Not scheduled', tone: 'neutral' },
 }
 const DAY = 86_400_000
-/** Compute next-service date and status from a PM config. */
+export const PM_SOON_KM = 1000 // flag as "due soon" within this many km
+export const PM_SOON_DAYS = 14
+/** Days-only status (kept for the notifications roll-up that has no odometer). */
 export function pmStatus(cfg: PmConfig, todayISO: string): { state: PmState; dueDate: string; daysLeft: number | null } {
   if (!cfg.last_service_date || !cfg.interval_days) return { state: 'unset', dueDate: '', daysLeft: null }
   const due = new Date(`${cfg.last_service_date}T00:00:00`).getTime() + cfg.interval_days * DAY
   const dueDate = new Date(due).toISOString().slice(0, 10)
   const daysLeft = Math.round((due - new Date(`${todayISO}T00:00:00`).getTime()) / DAY)
-  const state: PmState = daysLeft < 0 ? 'overdue' : daysLeft <= 14 ? 'soon' : 'ok'
+  const state: PmState = daysLeft < 0 ? 'overdue' : daysLeft <= PM_SOON_DAYS ? 'soon' : 'ok'
   return { state, dueDate, daysLeft }
+}
+
+export interface PmService {
+  state: PmState
+  dueDate: string        // yyyy-mm-dd from the time interval ('' if none)
+  daysLeft: number | null
+  dueOdo: number | null  // odometer at which the next service falls due
+  kmLeft: number | null  // km until due (negative = overdue by distance)
+  progress: number       // 0..1+ of the interval consumed (>1 = overdue)
+  latestOdo: number | null
+}
+/** Odometer-aware status: due by km OR by days, whichever is closer. */
+export function pmService(cfg: PmConfig, latestOdo: number | null, todayISO: string): PmService {
+  const hasKm = (cfg.interval_km || 0) > 0 && (cfg.last_service_odo || 0) > 0 && latestOdo != null
+  const hasDays = (cfg.interval_days || 0) > 0 && !!cfg.last_service_date
+  if (!hasKm && !hasDays) return { state: 'unset', dueDate: '', daysLeft: null, dueOdo: null, kmLeft: null, progress: 0, latestOdo }
+
+  let dueOdo: number | null = null, kmLeft: number | null = null, kmProg = 0
+  if (hasKm) {
+    dueOdo = cfg.last_service_odo + cfg.interval_km
+    kmLeft = dueOdo - (latestOdo as number)
+    kmProg = ((latestOdo as number) - cfg.last_service_odo) / cfg.interval_km
+  }
+  let dueDate = '', daysLeft: number | null = null, dayProg = 0
+  if (hasDays) {
+    const due = new Date(`${cfg.last_service_date}T00:00:00`).getTime() + cfg.interval_days * DAY
+    dueDate = new Date(due).toISOString().slice(0, 10)
+    daysLeft = Math.round((due - new Date(`${todayISO}T00:00:00`).getTime()) / DAY)
+    dayProg = 1 - daysLeft / cfg.interval_days
+  }
+  const overdue = (kmLeft != null && kmLeft < 0) || (daysLeft != null && daysLeft < 0)
+  const soon = (kmLeft != null && kmLeft <= PM_SOON_KM) || (daysLeft != null && daysLeft <= PM_SOON_DAYS)
+  return { state: overdue ? 'overdue' : soon ? 'soon' : 'ok', dueDate, daysLeft, dueOdo, kmLeft, progress: Math.max(0, kmProg, dayProg), latestOdo }
 }
 
 // ── Critical spares (inventory) ─────────────────────────────────────────
