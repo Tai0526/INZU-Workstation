@@ -258,6 +258,7 @@ export default function Dashboard() {
     }
     let overdue = 0, dueToday = 0, unscheduled = 0, worstOver = 0, done = 0
     for (const v of fleet) {
+      if (v.status === 'grounded') continue // grounded buses are out of the inspection cycle
       const st = inspectionStatus(byFleet.get(v.fleet_no), month, today)
       if (st.state === 'overdue') { overdue++; worstOver = Math.max(worstOver, st.daysOver) }
       else if (st.state === 'today') dueToday++

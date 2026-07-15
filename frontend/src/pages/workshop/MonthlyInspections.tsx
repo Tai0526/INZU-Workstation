@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   ClipboardCheck, Search, Download, Plus, Bus, Check, X, Wrench, Gauge,
-  CalendarClock, CheckCircle2, AlertTriangle, History, ArrowRight, CalendarPlus,
+  CalendarClock, CheckCircle2, AlertTriangle, History, ArrowRight, CalendarPlus, RefreshCw, Printer,
 } from 'lucide-react'
 import clsx from 'clsx'
 import { useAuth } from '@/auth/AuthContext'
@@ -18,8 +18,8 @@ import { useEmployees } from '@/lib/hr/store'
 import { useIssuances } from '@/lib/fuel/store'
 import { latestOdometer } from '@/lib/fuel/types'
 import {
-  useInspections, useJobCards,
-  scheduleInspection, rescheduleInspection, completeInspection, raiseJobFromInspection,
+  useInspections, useJobCards, useMechRoster, mechRosterStore, mechShiftOnDate,
+  scheduleInspection, rescheduleInspection, completeInspection, raiseJobFromInspection, generateInspectionSchedule,
 } from '@/lib/workshop/store'
 import {
   type MonthlyInspection, type InspectionItem, type InspectionResult, type InspState,
@@ -29,6 +29,7 @@ import {
   freshInspectionItems, inspectionFaults, inspectionStatus, monthEnd,
 } from '@/lib/workshop/types'
 import { downloadTablePdf } from '@/lib/reports/pdfDoc'
+import { buildInspectionPlan, type MechAvail } from '@/lib/workshop/schedule'
 
 const inputCls = 'w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand'
 const selectCls = 'rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand'
@@ -47,12 +48,16 @@ export default function MonthlyInspections() {
   const branch = user!.branch
   const branchLabel = BRANCHES.find((b) => b.code === branch)!.short
   const canManage = canEdit(role, 'workshop') // Workshop Supervisor / Admin schedule & inspect
+  // Only Ops / Asst Ops / Admin can regenerate the whole month's schedule.
+  const canRegen = role === 'operations_manager' || role === 'asst_operations_manager' || role === 'administrator'
 
-  const vehicles = useVehicles().filter((v) => v.branch === branch) as unknown as Vehicle[]
+  // Grounded buses are out of service — excluded from the monthly inspection cycle.
+  const vehicles = useVehicles().filter((v) => v.branch === branch && v.status !== 'grounded') as unknown as Vehicle[]
   const mechanics = useEmployees().filter((e) => e.branch === branch && e.status === 'active' && e.job_role === 'Mechanic')
   const issuances = useIssuances().filter((i) => i.branch === branch)
   const inspections = useInspections().filter((i) => i.branch === branch)
   const jobs = useJobCards()
+  useMechRoster() // re-render when crews / rosters change (feeds the auto-scheduler)
 
   const today = new Date().toISOString().slice(0, 10)
   const [month, setMonth] = useState(thisMonth())
@@ -62,6 +67,8 @@ export default function MonthlyInspections() {
   const [schedule, setSchedule] = useState<{ v?: Vehicle } | null>(null)
   const [inspect, setInspect] = useState<Row | null>(null)
   const [raiseFor, setRaiseFor] = useState<{ insp: MonthlyInspection; fault: string } | null>(null)
+  const [regenOpen, setRegenOpen] = useState(false)
+  const [schedOpen, setSchedOpen] = useState(false)
 
   const odoByFleet = useMemo(() => {
     const m = new Map<string, number | null>()
@@ -107,6 +114,26 @@ export default function MonthlyInspections() {
   const coverage = all.length ? Math.round((counts.done / all.length) * 100) : 0
   const worstOver = all.reduce((m, r) => Math.max(m, r.daysOver), 0)
 
+  // Each mechanic's working days in a month, from their crew roster (fallback: every
+  // non-Sunday if they aren't on a crew yet) — drives the auto-schedule generator.
+  const availFor = (m: string): MechAvail[] => {
+    const end = Number(monthEnd(m).slice(8, 10))
+    const dates: string[] = []
+    for (let d = 1; d <= end; d++) dates.push(`${m}-${String(d).padStart(2, '0')}`)
+    return mechanics.map((mech) => {
+      const hasCrew = !!mechRosterStore.crewOf(mech.id)
+      const days = dates.filter((d) => (hasCrew ? mechShiftOnDate(mech.id, d) !== null : new Date(`${d}T00:00:00`).getDay() !== 0))
+      return { id: mech.id, name: mech.full_name, days }
+    })
+  }
+  // Scheduled inspections for the month (ignores the search box) — for the printable
+  // per-mechanic schedule.
+  const scheduleEntries = useMemo(() => (
+    vehicles
+      .map((v) => { const insp = recByFleet.get(v.fleet_no); if (!insp || !insp.scheduled_date) return null; return { fleet_no: v.fleet_no, reg_no: v.reg_plate, mechanic: insp.mechanic, date: insp.scheduled_date, state: inspectionStatus(insp, month, today).state } })
+      .filter(Boolean) as { fleet_no: string; reg_no: string; mechanic: string; date: string; state: InspState }[]
+  ), [vehicles, recByFleet, month, today])
+
   function exportPdf() {
     const pdfRows = rows.map((r) => [
       `${r.v.fleet_no}\n${r.v.reg_plate}`,
@@ -135,9 +162,13 @@ export default function MonthlyInspections() {
     <div className="page space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <p className="max-w-2xl text-sm text-status-neutral">
-          Every bus in <span className="font-medium text-navy">{branchLabel}</span> gets a thorough inspection <span className="font-medium text-navy">at least once a month</span>. Assign a mechanic on a date, record the detailed findings, and raise a job card for anything that needs work. Buses not yet done rise to the top.
+          Every in-service bus in <span className="font-medium text-navy">{branchLabel}</span> gets a thorough inspection <span className="font-medium text-navy">at least once a month</span> (grounded buses are excluded). <span className="font-medium text-navy">Regenerate</span> auto-assigns each bus a mechanic and a date from their work roster; record the findings and raise a job card for anything that needs work.
         </p>
-        <Button variant="secondary" onClick={exportPdf}><Download size={15} /> Export</Button>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="secondary" onClick={() => setSchedOpen(true)}><Printer size={15} /> Print schedule</Button>
+          <Button variant="secondary" onClick={exportPdf}><Download size={15} /> Export</Button>
+          {canRegen && <Button onClick={() => setRegenOpen(true)}><RefreshCw size={15} /> Regenerate</Button>}
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-2 sm:max-w-2xl sm:grid-cols-4">
@@ -236,6 +267,8 @@ export default function MonthlyInspections() {
       <ScheduleModal target={schedule} onClose={() => setSchedule(null)} branch={branch} month={month} vehicles={vehicles} mechanics={mechanics} inspections={inspections} />
       <InspectionModal target={inspect} onClose={() => setInspect(null)} branch={branch} month={month} canManage={canManage} mechanics={mechanics} jobs={jobs} onRaise={(insp, fault) => { setInspect(null); setRaiseFor({ insp, fault }) }} jobLabel={jobLabel} />
       <RaiseFromInspectionModal target={raiseFor} onClose={() => setRaiseFor(null)} mechanics={mechanics} />
+      <RegenerateModal open={regenOpen} onClose={() => setRegenOpen(false)} branch={branch} defaultMonth={month} vehicles={vehicles} inspections={inspections} availFor={availFor} onGenerated={(m) => { setMonth(m); setRegenOpen(false) }} />
+      <ScheduleExportModal open={schedOpen} onClose={() => setSchedOpen(false)} branchLabel={branchLabel} month={month} entries={scheduleEntries} />
     </div>
   )
 }
@@ -488,6 +521,128 @@ function RaiseFromInspectionModal({ target, onClose, mechanics }: { target: { in
         <label className="block sm:col-span-2"><span className="mb-1 block text-xs font-medium text-navy">Assign mechanic(s)</span>
           <SearchableMultiSelect className={inputCls} placeholder="Search mechanic(s)…" values={mechs} onChange={setMechs} options={mechanics.map((m) => ({ value: m.full_name, label: m.full_name }))} emptyText="No mechanics in HR" /></label>
       </div>
+    </Modal>
+  )
+}
+
+// ── Regenerate the whole month's schedule (Ops / Asst Ops / Admin) ───────
+function RegenerateModal({ open, onClose, branch, defaultMonth, vehicles, inspections, availFor, onGenerated }: {
+  open: boolean; onClose: () => void; branch: BranchCode; defaultMonth: string; vehicles: Vehicle[]
+  inspections: MonthlyInspection[]; availFor: (m: string) => MechAvail[]; onGenerated: (month: string) => void
+}) {
+  const [month, setMonth] = useState(defaultMonth)
+  const [wasOpen, setWasOpen] = useState(false)
+  if (open && !wasOpen) { setWasOpen(true); setMonth(defaultMonth) }
+  if (!open && wasOpen) setWasOpen(false)
+  if (!open) return null
+
+  const [y, m] = defaultMonth.split('-').map(Number)
+  const nd = new Date(y, m, 1) // first of the month after the current selection
+  const nextMonth = `${nd.getFullYear()}-${String(nd.getMonth() + 1).padStart(2, '0')}`
+  const doneSet = new Set(inspections.filter((i) => i.month === month && i.status === 'done').map((i) => i.fleet_no))
+  const toSchedule = vehicles.filter((v) => !doneSet.has(v.fleet_no))
+  const avail = availFor(month)
+  const availMechs = avail.filter((a) => a.days.length > 0)
+  const workdays = availMechs.reduce((s, a) => s + a.days.length, 0)
+  const canGo = toSchedule.length > 0 && availMechs.length > 0
+
+  function go() {
+    if (!canGo) return
+    generateInspectionSchedule(branch, month, buildInspectionPlan(toSchedule, avail))
+    onGenerated(month)
+  }
+  return (
+    <Modal open={open} onClose={onClose} title="Regenerate inspection schedule"
+      subtitle={`Randomly assign every in-service bus a mechanic and a date for ${monthLabel(month)}, using each mechanic's work roster. Buses already inspected this month are kept.`}
+      footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={go} disabled={!canGo}><RefreshCw size={15} /> Regenerate {monthLabel(month)}</Button></>}>
+      <div className="flex flex-wrap items-end gap-2">
+        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Month</span><input type="month" className={inputCls} value={month} onChange={(e) => setMonth(e.target.value)} /></label>
+        <button onClick={() => setMonth(defaultMonth)} className={clsx('rounded-lg border px-3 py-2 text-xs font-medium', month === defaultMonth ? 'border-brand bg-brand-tint/40 text-[#8a4513]' : 'border-black/15 text-navy hover:bg-canvas')}>This month</button>
+        <button onClick={() => setMonth(nextMonth)} className={clsx('rounded-lg border px-3 py-2 text-xs font-medium', month === nextMonth ? 'border-brand bg-brand-tint/40 text-[#8a4513]' : 'border-black/15 text-navy hover:bg-canvas')}>Next month</button>
+      </div>
+      <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+        <div className="rounded-lg border border-black/10 bg-white px-3 py-2"><div className="text-lg font-bold text-navy">{toSchedule.length}</div><div className="text-[11px] text-status-neutral">buses to assign</div></div>
+        <div className="rounded-lg border border-black/10 bg-white px-3 py-2"><div className="text-lg font-bold text-navy">{availMechs.length}</div><div className="text-[11px] text-status-neutral">mechanics available</div></div>
+        <div className="rounded-lg border border-black/10 bg-white px-3 py-2"><div className="text-lg font-bold text-navy">{workdays}</div><div className="text-[11px] text-status-neutral">working days</div></div>
+      </div>
+      {availMechs.length === 0
+        ? <p className="mt-3 rounded-lg bg-status-critical/5 px-3 py-2 text-[11px] text-status-critical">No mechanics available for {monthLabel(month)} — add mechanics in HR → Employees, and set their crews in Mechanics Schedule.</p>
+        : <p className="mt-3 rounded-lg bg-brand-tint/40 px-3 py-2 text-[11px] text-[#8a4513]">Each bus is randomly assigned to an available mechanic on one of their rostered days, spread across the month. Manual assignments are replaced; completed inspections are untouched. Grounded buses are excluded.</p>}
+    </Modal>
+  )
+}
+
+// Mon–Sun weeks that overlap a yyyy-mm month (for the weekly schedule print).
+function weeksOf(month: string): { start: string; end: string }[] {
+  const first = `${month}-01`
+  const last = `${month}-${String(Number(monthEnd(month).slice(8, 10))).padStart(2, '0')}`
+  const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  const d0 = new Date(`${first}T00:00:00`)
+  d0.setDate(d0.getDate() - ((d0.getDay() + 6) % 7)) // back to the Monday on/before the 1st
+  const weeks: { start: string; end: string }[] = []
+  for (let i = 0; i < 6; i++) {
+    const s = new Date(d0); s.setDate(d0.getDate() + i * 7)
+    const e = new Date(s); e.setDate(s.getDate() + 6)
+    if (iso(e) < first || iso(s) > last) continue // only weeks that touch the month
+    weeks.push({ start: iso(s), end: iso(e) })
+  }
+  return weeks
+}
+
+// ── Printable per-mechanic schedule (whole month or a single week) ──────
+function ScheduleExportModal({ open, onClose, branchLabel, month, entries }: {
+  open: boolean; onClose: () => void; branchLabel: string; month: string
+  entries: { fleet_no: string; reg_no: string; mechanic: string; date: string; state: InspState }[]
+}) {
+  const weeks = useMemo(() => weeksOf(month), [month])
+  const [scope, setScope] = useState<'month' | number>('month')
+  const [wasOpen, setWasOpen] = useState(false)
+  if (open && !wasOpen) { setWasOpen(true); setScope('month') }
+  if (!open && wasOpen) setWasOpen(false)
+  if (!open) return null
+
+  const range = scope === 'month' ? null : weeks[scope]
+  const scoped = entries.filter((e) => !range || (e.date >= range.start && e.date <= range.end))
+
+  function download() {
+    const byMech = new Map<string, typeof scoped>()
+    for (const e of scoped) { const k = e.mechanic || 'Unassigned'; if (!byMech.has(k)) byMech.set(k, []); byMech.get(k)!.push(e) }
+    const tables = [...byMech.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([mech, list]) => ({
+      heading: `${mech} — ${list.length} bus${list.length === 1 ? '' : 'es'}`,
+      head: ['Date', 'Bus', 'Reg', 'Status'],
+      rows: [...list].sort((a, b) => a.date.localeCompare(b.date) || a.fleet_no.localeCompare(b.fleet_no, undefined, { numeric: true }))
+        .map((e) => [fmt(e.date), e.fleet_no, e.reg_no, e.state === 'done' ? 'Inspected' : INSP_STATE_META[e.state].label]),
+    }))
+    const scopeLbl = range ? `${fmt(range.start)}–${fmt(range.end)}` : monthLabel(month)
+    downloadTablePdf({
+      title: `Inspection Schedule — ${branchLabel}`,
+      subtitle: `${scopeLbl} · ${scoped.length} inspection${scoped.length === 1 ? '' : 's'} · by mechanic`,
+      tables: tables.length ? tables : [{ head: ['Date', 'Bus', 'Reg', 'Status'], rows: [['—', '—', '—', '—']] }],
+      dense: true,
+      filename: `Inspection Schedule - ${branchLabel} - ${range ? `${range.start} to ${range.end}` : month}.pdf`,
+    })
+    onClose()
+  }
+  return (
+    <Modal open={open} onClose={onClose} title="Print inspection schedule"
+      subtitle="Hand each mechanic their run — which buses to inspect and when. Download the whole month or a single week."
+      footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={download} disabled={scoped.length === 0}><Printer size={15} /> Download PDF</Button></>}>
+      <div className="space-y-2">
+        <label className="flex items-center gap-2 rounded-lg border border-black/10 px-3 py-2 text-sm">
+          <input type="radio" name="sched-scope" checked={scope === 'month'} onChange={() => setScope('month')} /> <span className="font-medium text-navy">Whole month</span> <span className="text-status-neutral">— {monthLabel(month)}</span>
+          <span className="ml-auto text-[11px] text-status-neutral">{entries.length} bus{entries.length === 1 ? '' : 'es'}</span>
+        </label>
+        {weeks.map((w, i) => {
+          const n = entries.filter((e) => e.date >= w.start && e.date <= w.end).length
+          return (
+            <label key={i} className="flex items-center gap-2 rounded-lg border border-black/10 px-3 py-2 text-sm">
+              <input type="radio" name="sched-scope" checked={scope === i} onChange={() => setScope(i)} /> <span className="font-medium text-navy">Week {i + 1}</span> <span className="text-status-neutral">— {fmt(w.start)} to {fmt(w.end)}</span>
+              <span className="ml-auto text-[11px] text-status-neutral">{n} bus{n === 1 ? '' : 'es'}</span>
+            </label>
+          )
+        })}
+      </div>
+      <p className="mt-3 text-[11px] text-status-neutral">{scoped.length} inspection{scoped.length === 1 ? '' : 's'} in this selection, grouped by mechanic. Grounded buses are excluded.</p>
     </Modal>
   )
 }

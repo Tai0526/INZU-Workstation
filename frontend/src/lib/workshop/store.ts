@@ -1,12 +1,14 @@
 import { useSyncExternalStore } from 'react'
+import type { BranchCode } from '@/lib/roles'
 import { getActor } from '@/lib/audit/actor'
 import { createSyncConfig } from '@/lib/supabase/syncTable'
 import { vehiclesStore } from '@/lib/fleet/store'
+import type { PlanEntry } from './schedule'
 import {
   type JobCard, type JobCardInput, type JobFile, type JobSeverity, type JobCategory, SEVERITY_META,
   type Checklist, type TyreRecord, type Spare, type Rca,
   type PmConfig, DEFAULT_PM, type MechCrew, type MechShiftKind, DEFAULT_MECH_CREWS, crewOnDate,
-  type MonthlyInspection, type MonthlyInspectionInput,
+  type MonthlyInspection, type MonthlyInspectionInput, freshInspectionItems,
 } from './types'
 
 function newId() {
@@ -34,6 +36,8 @@ function makeConfigList<T extends WithAudit>(key: string, lsKey: string) {
       cfg.set(cfg.get().map((x) => (x.id === id ? { ...x, ...patch, id: x.id, updated_by: who(), updated_at: stampNow() } : x)))
     },
     remove(id: string) { cfg.set(cfg.get().filter((x) => x.id !== id)) },
+    /** Replace the whole list in one write (used by bulk generators). */
+    setAll(items: T[]) { cfg.set(items) },
   }
 }
 
@@ -188,6 +192,30 @@ export function raiseJobFromInspection(insp: MonthlyInspection, opts: { fault: s
   inspectionsStore.update(insp.id, { job_ids: [...(it?.job_ids ?? []), jc.id] })
   logInspection(insp.id, 'Job card raised from inspection', opts.fault.slice(0, 110))
   return jc
+}
+/**
+ * Auto-schedule a month's inspections from a generated plan. Completed inspections
+ * for that month are kept; the outstanding (scheduled-but-not-done) ones are
+ * replaced. Grounded buses should already be excluded from the plan. Returns how
+ * many inspections were scheduled. Triggered by Ops / Asst Ops / Admin.
+ */
+export function generateInspectionSchedule(branch: BranchCode, month: string, plan: PlanEntry[]): number {
+  const now = stampNow(); const actor = who()
+  const list = inspectionsStore.list()
+  const doneFleets = new Set(list.filter((i) => i.branch === branch && i.month === month && i.status === 'done').map((i) => i.fleet_no))
+  // Drop the outstanding records for this month; keep completed ones and every other month.
+  const kept = list.filter((i) => !(i.branch === branch && i.month === month && i.status !== 'done'))
+  const additions: MonthlyInspection[] = plan
+    .filter((p) => !doneFleets.has(p.fleet_no))
+    .map((p) => ({
+      id: newId(), branch, month, fleet_no: p.fleet_no, reg_no: p.reg_no, mechanic: p.mechanic,
+      scheduled_date: p.scheduled_date, status: 'scheduled', done_date: '', odometer: 0,
+      items: freshInspectionItems(), result: 'pass', findings: '', notes: '', job_ids: [],
+      trail: [{ at: now, by: actor, action: 'Auto-scheduled', detail: `${p.mechanic || 'Unassigned'} · ${p.scheduled_date}` }],
+      created_by: actor, created_at: now, updated_by: actor, updated_at: now,
+    }))
+  inspectionsStore.setAll([...kept, ...additions])
+  return additions.length
 }
 
 // ── PM / service schedules (per vehicle fleet_no) ───────────────────────

@@ -339,7 +339,7 @@ export function useNotifications(branch: BranchCode, role?: RoleKey, userName?: 
   }
   let inspOverdue = 0, inspDue = 0, inspWorst = 0
   for (const v of vehicles) {
-    if (v.branch !== branch) continue
+    if (v.branch !== branch || v.status === 'grounded') continue // grounded buses are out of the inspection cycle
     const st = inspectionStatus(inspByFleet.get(v.fleet_no), inspMonth, today)
     if (st.state === 'overdue') { inspOverdue++; inspWorst = Math.max(inspWorst, st.daysOver) }
     else if (st.state === 'today' || st.state === 'unscheduled') inspDue++
