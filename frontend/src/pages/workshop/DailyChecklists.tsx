@@ -19,7 +19,9 @@ import {
 } from '@/lib/workshop/types'
 
 const inputCls = 'w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand'
+const selectCls = 'rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand'
 const fmt = (iso: string) => { try { return new Date(`${iso}T00:00:00`).toLocaleDateString('en', { weekday: 'short', day: '2-digit', month: 'short' }) } catch { return iso } }
+const monthLabel = (ym: string) => { const [y, m] = ym.split('-').map(Number); return new Date(y, m - 1, 1).toLocaleDateString('en', { month: 'short', year: 'numeric' }) }
 
 export default function DailyChecklists() {
   const { user } = useAuth()
@@ -37,9 +39,26 @@ export default function DailyChecklists() {
 
   const [newOpen, setNewOpen] = useState(false)
   const [raiseFor, setRaiseFor] = useState<Checklist | null>(null)
+  const [month, setMonth] = useState('all')
+  const [date, setDate] = useState('')
+  const [jobFilter, setJobFilter] = useState<'all' | 'jobcard' | 'unactioned' | 'ok'>('all')
 
-  const rows = useMemo(() => [...checklists].sort((a, b) => b.date.localeCompare(a.date) || b.created_at.localeCompare(a.created_at)), [checklists])
   const today = new Date().toISOString().slice(0, 10)
+  const monthOpts = useMemo(() => [...new Set(checklists.map((c) => c.date.slice(0, 7)).filter(Boolean))].sort().reverse(), [checklists])
+  const rows = useMemo(() => {
+    const filtered = checklists.filter((c) =>
+      (month === 'all' || c.date.slice(0, 7) === month) &&
+      (!date || c.date === date) &&
+      (jobFilter === 'all'
+        || (jobFilter === 'jobcard' && c.job_ids.length > 0)
+        || (jobFilter === 'unactioned' && checklistFaults(c).length > 0 && c.job_ids.length === 0)
+        || (jobFilter === 'ok' && checklistFaults(c).length === 0)))
+    // Today's entries first, then newest date.
+    return filtered.sort((a, b) =>
+      (a.date === today ? 0 : 1) - (b.date === today ? 0 : 1)
+      || b.date.localeCompare(a.date)
+      || b.created_at.localeCompare(a.created_at))
+  }, [checklists, month, date, jobFilter, today])
   const counts = {
     today: checklists.filter((c) => c.date === today).length,
     faults: checklists.filter((c) => checklistFaults(c).length > 0).length,
@@ -60,12 +79,29 @@ export default function DailyChecklists() {
         <div className={`rounded-xl border px-3 py-2 ${counts.unactioned ? 'border-status-critical/40 bg-status-critical/5' : 'border-black/10 bg-white'}`}><div className={`text-lg font-bold leading-none ${counts.unactioned ? 'text-status-critical' : 'text-navy'}`}>{counts.unactioned}</div><div className="mt-0.5 text-[11px] text-status-neutral">Not yet actioned</div></div>
       </div>
 
-      {canLog && <Button onClick={() => setNewOpen(true)}><Plus size={15} /> New checklist</Button>}
+      <div className="flex flex-wrap items-center gap-2">
+        <select value={month} onChange={(e) => setMonth(e.target.value)} className={selectCls}>
+          <option value="all">All months</option>
+          {monthOpts.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+        </select>
+        <input type="date" value={date} onChange={(e) => setDate(e.target.value)} title="Filter to a date" className={selectCls} />
+        <select value={jobFilter} onChange={(e) => setJobFilter(e.target.value as any)} className={selectCls}>
+          <option value="all">All checklists</option>
+          <option value="unactioned">Faults · no job card</option>
+          <option value="jobcard">Became a job card</option>
+          <option value="ok">All OK</option>
+        </select>
+        {(month !== 'all' || !!date || jobFilter !== 'all') && (
+          <button onClick={() => { setMonth('all'); setDate(''); setJobFilter('all') }} className="rounded-lg border border-black/15 px-3 py-2 text-xs text-status-neutral hover:text-navy">Clear</button>
+        )}
+        <span className="text-[11px] text-status-neutral">{rows.length} shown</span>
+        {canLog && <Button className="ml-auto" onClick={() => setNewOpen(true)}><Plus size={15} /> New checklist</Button>}
+      </div>
 
       {rows.length === 0 ? (
         <div className="card flex flex-col items-center gap-2 py-12 text-center text-sm text-status-neutral">
           <ClipboardList size={26} className="text-status-neutral/60" />
-          No checklists yet. {canLog && 'Record a driver’s pre-trip inspection.'}
+          {checklists.length === 0 ? <>No checklists yet. {canLog && 'Record a driver’s pre-trip inspection.'}</> : 'No checklists match these filters.'}
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
