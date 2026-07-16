@@ -10,6 +10,7 @@ import { exportReportPDF, exportReportWord } from '@/lib/reports/exporter'
 import { useHrPeople, type HrPerson } from '@/lib/hr/directory'
 import { useDriverLeave } from '@/lib/drivers/leave'
 import { useEmployeeLeave } from '@/lib/hr/leave'
+import { useLeaveLedger } from '@/lib/hr/leaveLedger'
 import { useDrivers } from '@/lib/drivers/store'
 import { useCases } from '@/lib/safety/cases'
 import { useTraining, useCompliance } from '@/lib/safety/registers'
@@ -32,6 +33,7 @@ export default function HrReports() {
   const people = useHrPeople(branch)
   const driverLeave = useDriverLeave()
   const empLeave = useEmployeeLeave()
+  const ledger = useLeaveLedger().filter((e) => e.branch === branch)
   const drivers = useDrivers().filter((d) => d.branch === branch)
   const cases = useCases().filter((c) => c.branch === branch)
   const training = useTraining().filter((t) => t.branch === branch)
@@ -46,14 +48,13 @@ export default function HrReports() {
   const editing = editingId ? reports.find((r) => r.id === editingId) ?? null : null
 
   // ── Auto-fill: derive what live data can tell us for a report's date range ──
-  const branchIds = useMemo(() => new Set(people.map((p) => p.id)), [people])
   function deriveMetrics(start: string, end: string): Partial<HrReport> {
     const inR = (d?: string) => !!d && d.slice(0, 10) >= start && d.slice(0, 10) <= end
     const active = people.filter((p) => p.status === 'active').length
-    const onLeaveIds = new Set<string>()
-    for (const [id, lp] of Object.entries(empLeave)) if (branchIds.has(id) && overlaps(lp.start, lp.end, start, end)) onLeaveIds.add(id)
-    for (const [id, lp] of Object.entries(driverLeave)) if (branchIds.has(id) && overlaps(lp.start, lp.end, start, end)) onLeaveIds.add(id)
-    const onLeave = onLeaveIds.size
+    // Leave split by type, from the leave ledger (people with any spell overlapping the period).
+    const leaveInPeriod = ledger.filter((e) => e.kind === 'leave' && overlaps(e.start, e.end, start, end))
+    const peopleWith = (types: string[]) => new Set(leaveInPeriod.filter((e) => types.includes(e.type)).map((e) => e.person_id)).size
+    const onLeave = new Set(leaveInPeriod.map((e) => e.person_id)).size
     const suspended = drivers.filter((d) => (d.status as string) === 'suspended').length
     const present = Math.max(0, active - onLeave - suspended)
     const hired = drivers.filter((d) => inR(d.date_hired)).length
@@ -64,6 +65,7 @@ export default function HrReports() {
     const inductions = compliance.filter((c) => /induction/i.test(c.category) && inR(c.issued)).length
     return {
       scheduled: active, present, suspended,
+      sick_leave: peopleWith(['sick']), annual_leave: peopleWith(['annual']), compassionate_leave: peopleWith(['compassionate']), parental_leave: peopleWith(['maternity', 'paternity']),
       new_hires: hired, movements_new: hired,
       safety_incidents: incidents,
       disciplinary_hearings: verdicts.length,
@@ -74,10 +76,7 @@ export default function HrReports() {
     }
   }
   function onLeaveCount(start: string, end: string): number {
-    const ids = new Set<string>()
-    for (const [id, lp] of Object.entries(empLeave)) if (branchIds.has(id) && overlaps(lp.start, lp.end, start, end)) ids.add(id)
-    for (const [id, lp] of Object.entries(driverLeave)) if (branchIds.has(id) && overlaps(lp.start, lp.end, start, end)) ids.add(id)
-    return ids.size
+    return new Set(ledger.filter((e) => e.kind === 'leave' && overlaps(e.start, e.end, start, end)).map((e) => e.person_id)).size
   }
 
   function createReport(period: HrPeriod, anchor: string) {
