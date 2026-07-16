@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import {
-  Search, CheckCircle2, Circle, Lock, AlertTriangle, Clock, X, UploadCloud, FileText, ExternalLink, Settings2, Trash2, Plus,
+  Search, CheckCircle2, Circle, Lock, AlertTriangle, Clock, X, UploadCloud, FileText, ExternalLink, Settings2, Trash2, Plus, Download,
 } from 'lucide-react'
 import { useAuth } from '@/auth/AuthContext'
 import { ROLES, BRANCHES } from '@/lib/roles'
@@ -13,6 +13,7 @@ import {
   useCompliance, complianceStore, useComplianceClasses, classesStore, classMap,
   cellState, prereqsMet, isCompliantCell, type Credential, type CellState, type ComplianceClass, type SafetyFile,
 } from '@/lib/safety/registers'
+import { exportCompliance, type ExportRow } from '@/lib/safety/complianceExcel'
 
 const inputCls = 'w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand'
 const today = () => new Date().toISOString().slice(0, 10)
@@ -46,6 +47,7 @@ export default function DriverCompliance() {
   const [panelId, setPanelId] = useState<string | null>(null)
   const [editCell, setEditCell] = useState<{ driverId: string; driverName: string; classKey: string } | null>(null)
   const [manageOpen, setManageOpen] = useState(false)
+  const [exportOpen, setExportOpen] = useState(false)
 
   // Cell editor form
   const [dateDone, setDateDone] = useState('')
@@ -124,6 +126,18 @@ export default function DriverCompliance() {
     }
   }
 
+  // Build the workbook rows for the export modal's chosen classes/statuses. Uses the
+  // currently-shown drivers (so Active/search filters carry through to the export).
+  function runExport(classKeys: Set<string>, states: Set<CellState>) {
+    const sel = classes.filter((c) => classKeys.has(c.key))
+    const rows: ExportRow[] = drivers.map((d) => ({
+      driver: { id: d.id, full_name: d.full_name, employee_no: d.employee_no, status: d.status },
+      cells: sel.map((cls) => ({ cls, state: stateFor(d.id, cls), cred: credFor(d.id, cls.key) })),
+    }))
+    exportCompliance({ branchLabel, rows, classes: sel, includeStates: states })
+    setExportOpen(false)
+  }
+
   const panelDriver = panelId ? allDrivers.find((d) => d.id === panelId) : null
 
   return (
@@ -153,7 +167,8 @@ export default function DriverCompliance() {
           <option value="all">All drivers</option>
         </select>
         <span className="text-sm text-status-neutral">{drivers.length} driver{drivers.length === 1 ? '' : 's'}</span>
-        {editable && <Button variant="secondary" className="ml-auto" onClick={() => setManageOpen(true)}><Settings2 size={15} /> Manage classes</Button>}
+        <Button variant="secondary" className="ml-auto" onClick={() => setExportOpen(true)}><Download size={15} /> Export</Button>
+        {editable && <Button variant="secondary" onClick={() => setManageOpen(true)}><Settings2 size={15} /> Manage classes</Button>}
       </div>
 
       {/* Matrix */}
@@ -328,7 +343,65 @@ export default function DriverCompliance() {
       )}
 
       {manageOpen && <ManageClassesModal classes={classes} onClose={() => setManageOpen(false)} />}
+      <ComplianceExportModal open={exportOpen} onClose={() => setExportOpen(false)} classes={classes} driverCount={drivers.length} onExport={runExport} />
     </div>
+  )
+}
+
+const ALL_STATES: CellState[] = ['current', 'expiring', 'expired', 'not_done', 'locked']
+const STATE_UI: Record<CellState, string> = { current: 'Current', expiring: 'Expiring soon', expired: 'Expired', not_done: 'Not done', locked: 'Locked' }
+
+function ComplianceExportModal({ open, onClose, classes, driverCount, onExport }: {
+  open: boolean; onClose: () => void; classes: ComplianceClass[]; driverCount: number
+  onExport: (classKeys: Set<string>, states: Set<CellState>) => void
+}) {
+  const [sel, setSel] = useState<Set<string>>(new Set())
+  const [states, setStates] = useState<Set<CellState>>(new Set(ALL_STATES))
+  const [wasOpen, setWasOpen] = useState(false)
+  if (open && !wasOpen) { setWasOpen(true); setSel(new Set(classes.map((c) => c.key))); setStates(new Set(ALL_STATES)) }
+  if (!open && wasOpen) setWasOpen(false)
+  if (!open) return null
+
+  const toggleClass = (k: string) => setSel((s) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n })
+  const toggleState = (k: CellState) => setStates((s) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n })
+  const canGo = sel.size > 0
+
+  return (
+    <Modal open onClose={onClose} title="Export driver compliance"
+      subtitle={`Downloads an Excel workbook — Matrix, Details and Summary sheets — for the ${driverCount} driver${driverCount === 1 ? '' : 's'} currently shown. Change the Active / search filters to include others.`}
+      footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button disabled={!canGo} onClick={() => onExport(sel, states)}><Download size={15} /> Download Excel</Button></>}>
+      <div className="space-y-4">
+        <div>
+          <div className="mb-1.5 flex items-center gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wide text-status-neutral">Classes to include</span>
+            <button onClick={() => setSel(new Set(classes.map((c) => c.key)))} className="text-[11px] text-brand hover:underline">All</button>
+            <button onClick={() => setSel(new Set())} className="text-[11px] text-status-neutral hover:underline">None</button>
+            <span className="ml-auto text-[11px] text-status-neutral">{sel.size}/{classes.length} selected</span>
+          </div>
+          <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+            {classes.map((c) => (
+              <label key={c.key} className="flex items-center gap-2 rounded-lg border border-black/10 px-3 py-1.5 text-sm">
+                <input type="checkbox" checked={sel.has(c.key)} onChange={() => toggleClass(c.key)} />
+                <span className="flex-1 text-navy">{c.label}</span>
+                {c.prerequisite && <span className="rounded bg-brand/10 px-1.5 py-0.5 text-[9px] font-bold uppercase text-brand">Prereq</span>}
+              </label>
+            ))}
+            {classes.length === 0 && <p className="text-sm text-status-neutral">No classes to export.</p>}
+          </div>
+        </div>
+        <div>
+          <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-status-neutral">Detail rows — statuses to include</div>
+          <div className="flex flex-wrap gap-2">
+            {ALL_STATES.map((s) => (
+              <label key={s} className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs ${states.has(s) ? 'border-brand bg-brand-tint/40 text-[#8a4513]' : 'border-black/15 text-status-neutral'}`}>
+                <input type="checkbox" checked={states.has(s)} onChange={() => toggleState(s)} /> {STATE_UI[s]}
+              </label>
+            ))}
+          </div>
+          <p className="mt-1.5 text-[11px] text-status-neutral">Untick “Current” to export only the gaps (expiring, expired, not done) — a ready “needs renewing” list. The Matrix &amp; Summary sheets always cover every status.</p>
+        </div>
+      </div>
+    </Modal>
   )
 }
 
