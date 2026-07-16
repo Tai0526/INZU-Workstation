@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { UserCog, Plus, Pencil, Trash2, Search, Users, ArrowRight, CalendarOff } from 'lucide-react'
+import { UserCog, Plus, Pencil, Trash2, Search, Users, ArrowRight, CalendarOff, FolderOpen } from 'lucide-react'
 import { useAuth } from '@/auth/AuthContext'
 import { ROLES, BRANCHES, type BranchCode } from '@/lib/roles'
 import { canEdit } from '@/lib/permissions'
@@ -12,6 +12,11 @@ import { JOB_ROLES, type JobRole, type Employee, type EmployeeInput } from '@/li
 import { useHrPeople, type HrPerson } from '@/lib/hr/directory'
 import { useDriverLeave, isOnLeave } from '@/lib/drivers/leave'
 import { useEmployeeLeave, empOnLeave } from '@/lib/hr/leave'
+import { useLeaveLedger } from '@/lib/hr/leaveLedger'
+import { useCases } from '@/lib/safety/cases'
+import { useDeductions } from '@/lib/payroll/deductions'
+import { assessRisk, RISK_META } from '@/lib/hr/analytics'
+import EmployeeFileDrawer from '@/components/hr/EmployeeFileDrawer'
 
 const inputCls = 'w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand'
 const SOURCE_META: Record<HrPerson['source'], { label: string; cls: string }> = {
@@ -29,12 +34,18 @@ export default function Employees() {
 
   const people = useHrPeople(branch)
   useDriverLeave(); useEmployeeLeave() // reactivity for the on-leave badge
+  const ledger = useLeaveLedger()
+  const cases = useCases()
+  const deductions = useDeductions()
+  const year = new Date().getFullYear()
   const today = new Date().toISOString().slice(0, 10)
   const onLeaveNow = (p: HrPerson) => (p.source === 'driver' ? isOnLeave(p.id, today) : empOnLeave(p.id, today))
+  const riskById = useMemo(() => new Map(people.map((p) => [p.id, assessRisk({ personId: p.id, personName: p.full_name, ledger, cases, deductions, year })])), [people, ledger, cases, deductions, year])
 
   const [q, setQ] = useState('')
   const [dept, setDept] = useState('all')
   const [form, setForm] = useState<{ open: boolean; editing: Employee | null }>({ open: false, editing: null })
+  const [fileFor, setFileFor] = useState<HrPerson | null>(null)
 
   const departments = useMemo(() => ['all', ...[...new Set(people.map((p) => p.department))].sort()], [people])
   const rows = useMemo(() => {
@@ -50,6 +61,7 @@ export default function Employees() {
     drivers: people.filter((p) => p.source === 'driver').length,
     employees: people.filter((p) => p.source !== 'driver').length,
     onLeave: people.filter(onLeaveNow).length,
+    atRisk: [...riskById.values()].filter((r) => r.tier !== 'low').length,
   }
 
   function openEdit(p: HrPerson) {
@@ -65,13 +77,12 @@ export default function Employees() {
         Other modules (Fuel attendants, Workshop mechanics) pull their people from here.
       </p>
 
-      <div className="grid grid-cols-2 gap-2 sm:max-w-xl sm:grid-cols-4">
-        {([['Headcount', counts.total], ['Drivers', counts.drivers], ['Staff', counts.employees], ['On leave', counts.onLeave]] as const).map(([l, v], i) => (
-          <div key={l} className={`rounded-xl border px-3 py-2 ${i === 3 && counts.onLeave ? 'border-status-warning/40 bg-status-warning/10' : 'border-black/10 bg-white'}`}>
-            <div className={`text-lg font-bold leading-none ${i === 3 && counts.onLeave ? 'text-[#8a6d10]' : 'text-navy'}`}>{v}</div>
-            <div className="mt-0.5 text-[11px] text-status-neutral">{l}</div>
-          </div>
-        ))}
+      <div className="grid grid-cols-2 gap-2 sm:max-w-2xl sm:grid-cols-5">
+        <StatCard label="Headcount" value={counts.total} />
+        <StatCard label="Drivers" value={counts.drivers} />
+        <StatCard label="Staff" value={counts.employees} />
+        <StatCard label="On leave" value={counts.onLeave} tone={counts.onLeave ? 'warning' : undefined} />
+        <StatCard label="At risk" value={counts.atRisk} tone={counts.atRisk ? 'critical' : undefined} />
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -102,6 +113,7 @@ export default function Employees() {
                   <td className="px-4 py-2 font-medium text-navy">
                     {p.full_name}
                     {onLeaveNow(p) && <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-status-warning/15 px-1.5 py-0.5 text-[10px] font-medium text-[#8a6d10]"><CalendarOff size={10} /> On leave</span>}
+                    {(() => { const r = riskById.get(p.id); return r && r.tier !== 'low' ? <span title={r.reasons.join(' · ')} className={`ml-2 inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${r.tier === 'high' ? 'bg-status-critical/10 text-status-critical' : 'bg-status-warning/15 text-[#8a6d10]'}`}>{RISK_META[r.tier].label}</span> : null })()}
                   </td>
                   <td className="px-4 py-2 text-status-neutral">{p.employee_no || '—'}</td>
                   <td className="px-4 py-2 text-navy">{p.role}</td>
@@ -109,7 +121,8 @@ export default function Employees() {
                   <td className="px-4 py-2"><span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${SOURCE_META[p.source].cls}`}>{SOURCE_META[p.source].label}</span></td>
                   <td className="px-4 py-2"><StatusBadge tone={p.status === 'active' ? 'good' : 'neutral'}>{p.status === 'active' ? 'Active' : 'Inactive'}</StatusBadge></td>
                   <td className="px-4 py-2">
-                    <div className="flex justify-end gap-1">
+                    <div className="flex items-center justify-end gap-1">
+                      <button onClick={() => setFileFor(p)} className="inline-flex items-center gap-1 rounded-md border border-black/15 px-2 py-1 text-xs font-medium text-navy hover:bg-canvas" title="Open employee file"><FolderOpen size={12} /> File</button>
                       {p.source === 'hr' && canManage && (
                         <>
                           <button onClick={() => openEdit(p)} className="rounded-md p-1.5 text-status-neutral hover:bg-canvas hover:text-navy" title="Edit"><Pencil size={14} /></button>
@@ -117,7 +130,7 @@ export default function Employees() {
                         </>
                       )}
                       {p.source !== 'hr' && p.link && (
-                        <Link to={p.link} className="inline-flex items-center gap-1 text-xs font-medium text-brand hover:underline">{p.source === 'driver' ? 'Driver profile' : 'Account'} <ArrowRight size={12} /></Link>
+                        <Link to={p.link} className="inline-flex items-center gap-1 text-xs font-medium text-brand hover:underline">{p.source === 'driver' ? 'Profile' : 'Account'} <ArrowRight size={12} /></Link>
                       )}
                     </div>
                   </td>
@@ -140,8 +153,15 @@ export default function Employees() {
       {!ROLES[role].canToggleBranch && <p className="text-xs text-status-neutral">Showing {branchLabel} only.</p>}
 
       <EmployeeModal state={form} onClose={() => setForm({ open: false, editing: null })} branch={branch} />
+      {fileFor && <EmployeeFileDrawer person={fileFor} canManage={canManage} onClose={() => setFileFor(null)} />}
     </div>
   )
+}
+
+function StatCard({ label, value, tone }: { label: string; value: number; tone?: 'warning' | 'critical' }) {
+  const border = tone === 'critical' ? 'border-status-critical/40 bg-status-critical/5' : tone === 'warning' ? 'border-status-warning/40 bg-status-warning/10' : 'border-black/10 bg-white'
+  const text = tone === 'critical' ? 'text-status-critical' : tone === 'warning' ? 'text-[#8a6d10]' : 'text-navy'
+  return <div className={`rounded-xl border px-3 py-2 ${border}`}><div className={`text-lg font-bold leading-none ${text}`}>{value}</div><div className="mt-0.5 text-[11px] text-status-neutral">{label}</div></div>
 }
 
 function EmployeeModal({ state, onClose, branch }: { state: { open: boolean; editing: Employee | null }; onClose: () => void; branch: BranchCode }) {
