@@ -14,6 +14,7 @@ import { DRAW_LABEL, latestOdometer } from '@/lib/fuel/types'
 import { useMileage } from '@/lib/operations/store'
 import { useJobCards, useChecklists, useSpares, usePm, useInspections } from '@/lib/workshop/store'
 import { checklistFaults, spareLow, pmService, DEFAULT_PM, inspectionStatus, type MonthlyInspection } from '@/lib/workshop/types'
+import { useEmployeeFiles, contractExpiry } from '@/lib/hr/employeeFile'
 import { useReqs as usePettyReqs, useLedger as usePettyLedger, useActingApprover } from '@/lib/pettycash/store'
 import { fmtK, balanceOf } from '@/lib/pettycash/types'
 import { registerCrossTabSync } from '@/lib/storage/sync'
@@ -29,6 +30,7 @@ import { registerCrossTabSync } from '@/lib/storage/sync'
 const SAFETY_ACTORS: RoleKey[] = ['safety_officer', 'operations_manager'] // investigate / prepare incidents
 const OPS_DECIDERS: RoleKey[] = ['operations_manager', 'asst_operations_manager'] // approve / reject / authorise
 const CASE_DECIDERS: RoleKey[] = ['operations_manager', 'asst_operations_manager', 'hr_manager'] // conclude disciplinary / speeding cases
+const HR_ACTORS: RoleKey[] = ['hr_manager', 'hr_officer'] // employee records, contracts, leave
 const SPEED_ACTORS: RoleKey[] = ['tracker', 'operations_manager', 'asst_operations_manager'] // log / confirm / escalate speed events
 const WORKSHOP_ACTORS: RoleKey[] = ['workshop_supervisor', 'operations_manager', 'asst_operations_manager'] // workshop does it, ops is aware
 const PLANNER_ACTORS: RoleKey[] = ['bus_controller', 'route_supervisor', 'operations_manager', 'asst_operations_manager'] // plan daily/weekly bus movements
@@ -110,6 +112,7 @@ export function useNotifications(branch: BranchCode, role?: RoleKey, userName?: 
   const spares = useSpares()
   const pm = usePm()
   const inspections = useInspections()
+  const empFiles = useEmployeeFiles()
   const pettyReqs = usePettyReqs()
   const pettyLedger = usePettyLedger()
   const pettyActing = useActingApprover()
@@ -357,6 +360,27 @@ export function useNotifications(branch: BranchCode, role?: RoleKey, userName?: 
     detail: 'Schedule a mechanic so every bus is inspected at least once this month.',
     date: today, link: '/workshop/inspections?state=attention',
   })
+
+  // ── HR: employee contracts expiring / expired (renewal reminders) ──
+  for (const file of Object.values(empFiles)) {
+    for (const c of file.contracts || []) {
+      if (c.branch !== branch || !c.expiry) continue
+      const st = contractExpiry(c.expiry, today)
+      if (st === 'expired') items.push({
+        id: `contract:${c.id}:expired`, severity: 'warning', audience: HR_ACTORS,
+        title: `Contract expired: ${c.person_name}`,
+        detail: `${c.name}${c.type ? ` (${c.type})` : ''} expired ${c.expiry}. Prepare the renewal.`, date: c.expiry, link: '/hr/employees',
+      })
+      else if (st === 'expiring') {
+        const days = Math.max(0, Math.round((new Date(`${c.expiry}T00:00:00`).getTime() - new Date(`${today}T00:00:00`).getTime()) / 86_400_000))
+        items.push({
+          id: `contract:${c.id}:expiring`, severity: 'info', audience: HR_ACTORS,
+          title: `Contract expiring: ${c.person_name}`,
+          detail: `${c.name} expires in ${days} day${days === 1 ? '' : 's'} (${c.expiry}) — prepare the next one.`, date: c.expiry, link: '/hr/employees',
+        })
+      }
+    }
+  }
 
   // ── Petty cash — every party alerted at each handoff; the requester is notified
   //    of the outcome via forName (approved / paid / rejected). ──

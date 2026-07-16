@@ -23,6 +23,31 @@ export const DOC_CATEGORIES = Object.keys(DOC_CATEGORY_LABEL) as DocCategory[]
 export interface EmpDoc { id: string; category: DocCategory; name: string; file_id: string; file_name: string; note: string; at: string; by: string }
 export interface ExitInfo { date: string; reason: string; note: string; file_id: string; file_name: string }
 
+// History log — dated records that stay on the file for auditability (trainings,
+// promotions, transfers, salary changes, commendations, warnings…), each with an
+// optional supporting upload.
+export type EventType = 'training' | 'promotion' | 'transfer' | 'salary' | 'commendation' | 'warning' | 'note' | 'other'
+export const EVENT_TYPE_LABEL: Record<EventType, string> = {
+  training: 'Training', promotion: 'Promotion', transfer: 'Transfer', salary: 'Salary change',
+  commendation: 'Commendation', warning: 'Warning', note: 'Note', other: 'Other',
+}
+export const EVENT_TYPES = Object.keys(EVENT_TYPE_LABEL) as EventType[]
+export interface FileEvent { id: string; type: EventType; date: string; title: string; detail: string; file_id: string; file_name: string; by: string; at: string }
+
+// Salary (optional) — grade/band + basic pay. When set, payroll reads the basic from
+// here; statutory deductions are configured in Payroll.
+export interface SalaryInfo { grade: string; band: string; basic: number; currency: string; effective: string }
+
+// Contract with an expiry so renewals can be prepared in time.
+export type ExpiryState = 'none' | 'valid' | 'expiring' | 'expired'
+export interface ContractDoc { id: string; branch: string; person_name: string; name: string; type: string; start: string; expiry: string; file_id: string; file_name: string; note: string; by: string; at: string }
+export function contractExpiry(expiry: string, todayISO: string, soonDays = 30): ExpiryState {
+  if (!expiry) return 'none'
+  if (expiry < todayISO) return 'expired'
+  const soon = new Date(`${todayISO}T00:00:00`).getTime() + soonDays * 86_400_000
+  return new Date(`${expiry}T00:00:00`).getTime() <= soon ? 'expiring' : 'valid'
+}
+
 export interface EmployeeFile {
   national_id: string
   dob: string
@@ -42,6 +67,9 @@ export interface EmployeeFile {
   next_of_kin: Contact
   emergency_contacts: Contact[]
   documents: EmpDoc[]
+  events: FileEvent[]      // trainings, promotions, salary changes, warnings…
+  salary: SalaryInfo | null
+  contracts: ContractDoc[]
   exit: ExitInfo | null
   notes: string
   updated_by: string
@@ -52,7 +80,7 @@ export function blankFile(): EmployeeFile {
   return {
     national_id: '', dob: '', gender: '', marital_status: '', address: '', email: '',
     start_date: '', leave_opening: 0, leave_opening_at: '', job_title: '', contract_type: '', tpin: '', napsa: '', bank_name: '', bank_account: '',
-    next_of_kin: { name: '', relationship: '', phone: '' }, emergency_contacts: [], documents: [], exit: null, notes: '',
+    next_of_kin: { name: '', relationship: '', phone: '' }, emergency_contacts: [], documents: [], events: [], salary: null, contracts: [], exit: null, notes: '',
     updated_by: '', updated_at: '',
   }
 }
@@ -80,6 +108,18 @@ export const employeeFileStore = {
     const cur = cfg.get()[id] ?? blankFile()
     employeeFileStore.set(id, { documents: cur.documents.filter((d) => d.id !== docId) })
   },
+  addEvent(id: string, ev: { type: EventType; date: string; title: string; detail?: string; file_id?: string; file_name?: string }) {
+    const cur = cfg.get()[id] ?? blankFile()
+    const rec: FileEvent = { id: newId(), type: ev.type, date: ev.date, title: ev.title.trim(), detail: (ev.detail ?? '').trim(), file_id: ev.file_id ?? '', file_name: ev.file_name ?? '', by: who(), at: stampNow() }
+    employeeFileStore.set(id, { events: [...cur.events, rec] })
+  },
+  removeEvent(id: string, evId: string) { const cur = cfg.get()[id] ?? blankFile(); employeeFileStore.set(id, { events: cur.events.filter((e) => e.id !== evId) }) },
+  addContract(id: string, c: { branch: string; person_name: string; name: string; type: string; start: string; expiry: string; file_id?: string; file_name?: string; note?: string }) {
+    const cur = cfg.get()[id] ?? blankFile()
+    const rec: ContractDoc = { id: newId(), branch: c.branch, person_name: c.person_name, name: c.name.trim() || 'Contract', type: c.type.trim(), start: c.start, expiry: c.expiry, file_id: c.file_id ?? '', file_name: c.file_name ?? '', note: (c.note ?? '').trim(), by: who(), at: stampNow() }
+    employeeFileStore.set(id, { contracts: [...cur.contracts, rec] })
+  },
+  removeContract(id: string, cId: string) { const cur = cfg.get()[id] ?? blankFile(); employeeFileStore.set(id, { contracts: cur.contracts.filter((c) => c.id !== cId) }) },
   clear(id: string) { const c = { ...cfg.get() }; delete c[id]; cfg.set(c) },
 }
 export const useEmployeeFiles = () => useSyncExternalStore(cfg.subscribe, cfg.get, cfg.get)

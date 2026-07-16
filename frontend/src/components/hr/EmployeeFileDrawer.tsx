@@ -1,14 +1,18 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { X, Save, FileText, Trash2, Plus, Paperclip, ShieldAlert, CalendarDays, Coins, User, Briefcase, Phone, DoorOpen, AlertTriangle } from 'lucide-react'
+import { X, Save, FileText, Trash2, Plus, Paperclip, ShieldAlert, CalendarDays, Coins, User, Briefcase, Phone, DoorOpen, AlertTriangle, Banknote, FileClock, Settings2 } from 'lucide-react'
 import Button from '@/components/ui/Button'
 import StatusBadge from '@/components/ui/StatusBadge'
+import Modal from '@/components/ui/Modal'
 import { type HrPerson } from '@/lib/hr/directory'
 import { putFile, viewFile, deleteFile } from '@/lib/storage/fileStore'
 import {
-  employeeFileStore, useEmployeeFiles, blankFile, fileCompleteness,
-  DOC_CATEGORIES, DOC_CATEGORY_LABEL, type EmployeeFile, type Contact, type DocCategory,
+  employeeFileStore, useEmployeeFiles, fileCompleteness, contractExpiry,
+  DOC_CATEGORIES, DOC_CATEGORY_LABEL, EVENT_TYPES, EVENT_TYPE_LABEL,
+  type EmployeeFile, type Contact, type DocCategory, type EventType, type SalaryInfo, type ExpiryState,
+  type ContractDoc, type FileEvent,
 } from '@/lib/hr/employeeFile'
+import { useSalaryBands, salaryBandsStore } from '@/lib/hr/salaryBands'
 import { useLeaveLedger, leaveBalance, LEAVE_TYPE_LABEL, type LeaveEntry } from '@/lib/hr/leaveLedger'
 import { assessRisk, RISK_META } from '@/lib/hr/analytics'
 import { useCases, DECISION_LABEL, INCIDENT_TYPE_META } from '@/lib/safety/cases'
@@ -16,11 +20,16 @@ import { useDeductions } from '@/lib/payroll/deductions'
 
 const inputCls = 'w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand'
 const fmt = (iso: string) => { try { return iso ? new Date(`${iso.slice(0, 10)}T00:00:00`).toLocaleDateString('en', { day: '2-digit', month: 'short', year: 'numeric' }) : '—' } catch { return iso } }
-type Tab = 'details' | 'contacts' | 'documents' | 'leave' | 'conduct' | 'exit'
+type Tab = 'details' | 'contacts' | 'documents' | 'contracts' | 'salary' | 'leave' | 'conduct' | 'history' | 'exit'
 const TABS: { k: Tab; label: string }[] = [
   { k: 'details', label: 'Details' }, { k: 'contacts', label: 'Contacts' }, { k: 'documents', label: 'Documents' },
-  { k: 'leave', label: 'Leave' }, { k: 'conduct', label: 'Conduct' }, { k: 'exit', label: 'Exit' },
+  { k: 'contracts', label: 'Contracts' }, { k: 'salary', label: 'Salary' }, { k: 'leave', label: 'Leave' },
+  { k: 'conduct', label: 'Conduct' }, { k: 'history', label: 'History' }, { k: 'exit', label: 'Exit' },
 ]
+// Scalar (form-edited) fields; documents/events/contracts mutate the store directly,
+// so Save must not write them back from the stale form and clobber live additions.
+const SCALAR_KEYS: (keyof EmployeeFile)[] = ['national_id', 'dob', 'gender', 'marital_status', 'address', 'email', 'start_date', 'leave_opening', 'leave_opening_at', 'job_title', 'contract_type', 'tpin', 'napsa', 'bank_name', 'bank_account', 'next_of_kin', 'emergency_contacts', 'salary', 'exit', 'notes']
+const scalars = (x: EmployeeFile): Partial<EmployeeFile> => { const o: Partial<EmployeeFile> = {}; for (const k of SCALAR_KEYS) (o as any)[k] = x[k]; return o }
 
 export default function EmployeeFileDrawer({ person, canManage, onClose }: { person: HrPerson; canManage: boolean; onClose: () => void }) {
   useEmployeeFiles() // reactivity
@@ -38,8 +47,8 @@ export default function EmployeeFileDrawer({ person, canManage, onClose }: { per
   const set = <K extends keyof EmployeeFile>(k: K, v: EmployeeFile[K]) => setF((p) => ({ ...p, [k]: v }))
   const setNok = (patch: Partial<Contact>) => setF((p) => ({ ...p, next_of_kin: { ...p.next_of_kin, ...patch } }))
 
-  function save() { employeeFileStore.set(person.id, f) ; onClose() }
-  const dirty = JSON.stringify(f) !== JSON.stringify(stored)
+  function save() { employeeFileStore.set(person.id, scalars(f)); onClose() }
+  const dirty = JSON.stringify(scalars(f)) !== JSON.stringify(scalars(stored))
 
   const bal = useMemo(() => leaveBalance(ledger, person.id, { openingBalance: f.leave_opening, openingAt: f.leave_opening_at, asOf: today }), [ledger, person.id, f.leave_opening, f.leave_opening_at, today])
   const myLeave = useMemo(() => ledger.filter((e) => e.person_id === person.id && e.kind === 'leave').sort((a, b) => b.start.localeCompare(a.start)), [ledger, person.id])
@@ -90,9 +99,9 @@ export default function EmployeeFileDrawer({ person, canManage, onClose }: { per
         )}
 
         {/* Tabs */}
-        <div className="flex gap-1 border-b border-black/10 bg-white px-3">
+        <div className="flex gap-1 overflow-x-auto border-b border-black/10 bg-white px-3">
           {TABS.map((t) => (
-            <button key={t.k} onClick={() => setTab(t.k)} className={`-mb-px border-b-2 px-3 py-2 text-xs font-medium ${tab === t.k ? 'border-brand text-navy' : 'border-transparent text-status-neutral hover:text-navy'}`}>{t.label}</button>
+            <button key={t.k} onClick={() => setTab(t.k)} className={`-mb-px shrink-0 whitespace-nowrap border-b-2 px-3 py-2 text-xs font-medium ${tab === t.k ? 'border-brand text-navy' : 'border-transparent text-status-neutral hover:text-navy'}`}>{t.label}</button>
           ))}
         </div>
 
@@ -148,8 +157,11 @@ export default function EmployeeFileDrawer({ person, canManage, onClose }: { per
           )}
 
           {tab === 'documents' && (
-            <DocumentsTab file={f} canManage={canManage} onUpload={uploadDoc} onRemove={(docId, fileId) => { employeeFileStore.removeDoc(person.id, docId); void deleteFile(fileId) }} />
+            <DocumentsTab file={stored} canManage={canManage} onUpload={uploadDoc} onRemove={(docId, fileId) => { employeeFileStore.removeDoc(person.id, docId); void deleteFile(fileId) }} />
           )}
+          {tab === 'contracts' && <ContractsTab person={person} contracts={stored.contracts} canManage={canManage} today={today} />}
+          {tab === 'salary' && <SalaryTab salary={f.salary} onChange={(s) => set('salary', s)} canManage={canManage} />}
+          {tab === 'history' && <HistoryTab person={person} events={stored.events} canManage={canManage} />}
 
           {tab === 'leave' && (
             <>
@@ -303,6 +315,166 @@ function DocumentsTab({ file, canManage, onUpload, onRemove }: { file: EmployeeF
         </div>
       ))}
       {file.documents.length === 0 && <p className="rounded-lg bg-canvas px-3 py-6 text-center text-xs text-status-neutral">No documents yet. Upload the interview transcript, qualifications, IDs and contract.</p>}
+    </div>
+  )
+}
+
+const EXPIRY_TONE: Record<ExpiryState, 'good' | 'warning' | 'critical' | 'neutral'> = { valid: 'good', expiring: 'warning', expired: 'critical', none: 'neutral' }
+
+function ContractsTab({ person, contracts, canManage, today }: { person: HrPerson; contracts: ContractDoc[]; canManage: boolean; today: string }) {
+  const [name, setName] = useState(''); const [type, setType] = useState('Employment'); const [start, setStart] = useState(''); const [expiry, setExpiry] = useState(''); const [note, setNote] = useState('')
+  const [file, setFile] = useState<{ file_id: string; file_name: string } | null>(null)
+  async function pick(fl: File) { const id = `ctr_${person.id}_${Date.now()}`.replace(/\s/g, ''); try { await putFile(id, fl); setFile({ file_id: id, file_name: fl.name }) } catch { /* */ } }
+  function add() {
+    employeeFileStore.addContract(person.id, { branch: person.branch, person_name: person.full_name, name, type, start, expiry, file_id: file?.file_id, file_name: file?.file_name, note })
+    setName(''); setType('Employment'); setStart(''); setExpiry(''); setNote(''); setFile(null)
+  }
+  const sorted = [...contracts].sort((a, b) => (b.expiry || '').localeCompare(a.expiry || ''))
+  return (
+    <div className="space-y-3">
+      {canManage && (
+        <div className="rounded-xl border border-black/10 bg-white p-3">
+          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-status-neutral">Add a contract</div>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="block col-span-2"><span className="mb-1 block text-[11px] font-medium text-navy">Name</span><input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. 2-year employment contract" /></label>
+            <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">Type</span><input className={inputCls} value={type} onChange={(e) => setType(e.target.value)} placeholder="Employment / Fixed-term…" /></label>
+            <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">Start</span><input type="date" className={inputCls} value={start} onChange={(e) => setStart(e.target.value)} /></label>
+            <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">Expiry</span><input type="date" className={inputCls} value={expiry} onChange={(e) => setExpiry(e.target.value)} /></label>
+            <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">Note</span><input className={inputCls} value={note} onChange={(e) => setNote(e.target.value)} /></label>
+          </div>
+          <div className="mt-2 flex items-center gap-2">
+            {file ? <span className="inline-flex items-center gap-1 rounded-full bg-navy/5 px-2 py-0.5 text-[11px] text-navy"><FileText size={11} className="text-brand" /><span className="max-w-[150px] truncate">{file.file_name}</span><button onClick={() => { void deleteFile(file.file_id); setFile(null) }}><X size={11} /></button></span>
+              : <label className="inline-flex cursor-pointer items-center gap-1 rounded-full border border-dashed border-brand/40 px-2.5 py-1 text-[11px] font-medium text-brand hover:border-brand"><Paperclip size={12} /> Attach<input type="file" accept=".pdf,image/*,.doc,.docx" className="hidden" onChange={(e) => e.target.files?.[0] && pick(e.target.files[0])} /></label>}
+            <Button className="ml-auto" onClick={add} disabled={!expiry && !name}><Plus size={14} /> Add contract</Button>
+          </div>
+        </div>
+      )}
+      {sorted.map((c) => { const st = contractExpiry(c.expiry, today); return (
+        <div key={c.id} className="rounded-lg border border-black/10 bg-white px-3 py-2">
+          <div className="flex items-center gap-2 text-sm">
+            <FileClock size={14} className="shrink-0 text-brand" />
+            <span className="min-w-0 flex-1 truncate font-medium text-navy">{c.name}{c.type ? <span className="font-normal text-status-neutral"> · {c.type}</span> : ''}</span>
+            <StatusBadge tone={EXPIRY_TONE[st]}>{st === 'none' ? 'No expiry' : st === 'valid' ? 'Valid' : st === 'expiring' ? 'Expiring' : 'Expired'}</StatusBadge>
+          </div>
+          <div className="mt-1 flex items-center gap-3 text-[11px] text-status-neutral">
+            <span>{c.start ? `${fmt(c.start)} → ` : ''}{c.expiry ? fmt(c.expiry) : 'no expiry'}</span>
+            {c.file_id && <button onClick={() => viewFile(c.file_id, c.file_name)} className="inline-flex items-center gap-1 text-brand hover:underline"><FileText size={11} /> {c.file_name}</button>}
+            {c.note && <span className="truncate">· {c.note}</span>}
+            {canManage && <button onClick={() => { employeeFileStore.removeContract(person.id, c.id); if (c.file_id) void deleteFile(c.file_id) }} className="ml-auto rounded p-1 text-status-neutral hover:bg-status-critical/10 hover:text-status-critical"><Trash2 size={12} /></button>}
+          </div>
+        </div>
+      ) })}
+      {sorted.length === 0 && <p className="rounded-lg bg-canvas px-3 py-6 text-center text-xs text-status-neutral">No contracts. Upload each with its expiry — HR is reminded before it lapses.</p>}
+    </div>
+  )
+}
+
+function SalaryTab({ salary, onChange, canManage }: { salary: SalaryInfo | null; onChange: (s: SalaryInfo) => void; canManage: boolean }) {
+  const bands = useSalaryBands()
+  const [bandsOpen, setBandsOpen] = useState(false)
+  const s = salary ?? { grade: '', band: '', basic: 0, currency: 'ZMW', effective: '' }
+  const set = (patch: Partial<SalaryInfo>) => onChange({ ...s, ...patch })
+  function pickGrade(gradeId: string) {
+    const b = bands.find((x) => x.id === gradeId)
+    if (b) set({ grade: b.grade, band: b.band, basic: b.basic || s.basic, currency: b.currency || s.currency }); else set({ grade: gradeId })
+  }
+  return (
+    <div className="space-y-3">
+      <Section icon={Banknote} title="Salary (optional)">
+        <div className="grid grid-cols-2 gap-2">
+          <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">Grade</span>
+            {bands.length ? (
+              <select disabled={!canManage} className={`${inputCls} disabled:bg-canvas`} value={bands.find((b) => b.grade === s.grade)?.id || ''} onChange={(e) => pickGrade(e.target.value)}>
+                <option value="">{s.grade || '— pick a grade —'}</option>
+                {bands.map((b) => <option key={b.id} value={b.id}>{b.grade}{b.band ? ` · ${b.band}` : ''}</option>)}
+              </select>
+            ) : <input disabled={!canManage} className={`${inputCls} disabled:bg-canvas`} value={s.grade} onChange={(e) => set({ grade: e.target.value })} placeholder="e.g. G5" />}
+          </label>
+          <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">Band</span><input disabled={!canManage} className={`${inputCls} disabled:bg-canvas`} value={s.band} onChange={(e) => set({ band: e.target.value })} /></label>
+          <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">Basic pay</span><input type="number" disabled={!canManage} className={`${inputCls} disabled:bg-canvas`} value={s.basic || ''} onChange={(e) => set({ basic: Number(e.target.value) })} /></label>
+          <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">Currency</span><input disabled={!canManage} className={`${inputCls} disabled:bg-canvas`} value={s.currency} onChange={(e) => set({ currency: e.target.value })} /></label>
+          <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">Effective from</span><input type="date" disabled={!canManage} className={`${inputCls} disabled:bg-canvas`} value={s.effective} onChange={(e) => set({ effective: e.target.value })} /></label>
+        </div>
+        {canManage && <button onClick={() => setBandsOpen(true)} className="mt-2 inline-flex items-center gap-1 text-[11px] font-medium text-brand hover:underline"><Settings2 size={12} /> Manage grades</button>}
+        <p className="mt-1 text-[11px] text-status-neutral">Optional. When set, payroll reads the basic from here; statutory deductions are configured in Payroll. Log raises under History.</p>
+      </Section>
+      {bandsOpen && <BandsModal onClose={() => setBandsOpen(false)} />}
+    </div>
+  )
+}
+
+function BandsModal({ onClose }: { onClose: () => void }) {
+  const bands = useSalaryBands()
+  const [grade, setGrade] = useState(''); const [band, setBand] = useState(''); const [basic, setBasic] = useState(0); const [currency, setCurrency] = useState('ZMW')
+  function add() { if (!grade.trim()) return; salaryBandsStore.add({ grade: grade.trim(), band: band.trim(), basic: Number(basic) || 0, currency: currency.trim() || 'ZMW', note: '' }); setGrade(''); setBand(''); setBasic(0) }
+  return (
+    <Modal open onClose={onClose} title="Salary grades / bands" subtitle="Define grades once; picking a grade on an employee pre-fills the basic." footer={<Button onClick={onClose}>Done</Button>}>
+      <div className="space-y-1.5">
+        {bands.map((b) => (
+          <div key={b.id} className="flex items-center gap-2 rounded-lg border border-black/10 px-3 py-1.5 text-sm">
+            <span className="font-medium text-navy">{b.grade}</span><span className="text-status-neutral">{b.band}</span>
+            <span className="ml-auto text-status-neutral">{b.currency} {b.basic.toLocaleString()}</span>
+            <button onClick={() => salaryBandsStore.remove(b.id)} className="rounded p-1 text-status-neutral hover:bg-status-critical/10 hover:text-status-critical"><Trash2 size={13} /></button>
+          </div>
+        ))}
+        {bands.length === 0 && <p className="text-xs text-status-neutral">No grades yet.</p>}
+      </div>
+      <div className="mt-3 grid grid-cols-4 gap-2">
+        <input className={inputCls} placeholder="Grade" value={grade} onChange={(e) => setGrade(e.target.value)} />
+        <input className={inputCls} placeholder="Band" value={band} onChange={(e) => setBand(e.target.value)} />
+        <input type="number" className={inputCls} placeholder="Basic" value={basic || ''} onChange={(e) => setBasic(Number(e.target.value))} />
+        <input className={inputCls} placeholder="Cur" value={currency} onChange={(e) => setCurrency(e.target.value)} />
+      </div>
+      <div className="mt-2 flex justify-end"><Button onClick={add}><Plus size={14} /> Add grade</Button></div>
+    </Modal>
+  )
+}
+
+function HistoryTab({ person, events, canManage }: { person: HrPerson; events: FileEvent[]; canManage: boolean }) {
+  const [type, setType] = useState<EventType>('training'); const [date, setDate] = useState(''); const [title, setTitle] = useState(''); const [detail, setDetail] = useState('')
+  const [file, setFile] = useState<{ file_id: string; file_name: string } | null>(null)
+  async function pick(fl: File) { const id = `ev_${person.id}_${Date.now()}`.replace(/\s/g, ''); try { await putFile(id, fl); setFile({ file_id: id, file_name: fl.name }) } catch { /* */ } }
+  function add() {
+    if (!title.trim()) return
+    employeeFileStore.addEvent(person.id, { type, date: date || new Date().toISOString().slice(0, 10), title, detail, file_id: file?.file_id, file_name: file?.file_name })
+    setTitle(''); setDetail(''); setDate(''); setFile(null); setType('training')
+  }
+  const sorted = [...events].sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+  return (
+    <div className="space-y-3">
+      {canManage && (
+        <div className="rounded-xl border border-black/10 bg-white p-3">
+          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-status-neutral">Add a record</div>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">Type</span><select className={inputCls} value={type} onChange={(e) => setType(e.target.value as EventType)}>{EVENT_TYPES.map((t) => <option key={t} value={t}>{EVENT_TYPE_LABEL[t]}</option>)}</select></label>
+            <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">Date</span><input type="date" className={inputCls} value={date} onChange={(e) => setDate(e.target.value)} /></label>
+            <label className="block col-span-2"><span className="mb-1 block text-[11px] font-medium text-navy">Title</span><input className={inputCls} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Promoted to Senior Mechanic / Defensive driving course" /></label>
+            <label className="block col-span-2"><span className="mb-1 block text-[11px] font-medium text-navy">Detail</span><textarea className={inputCls} rows={2} value={detail} onChange={(e) => setDetail(e.target.value)} /></label>
+          </div>
+          <div className="mt-2 flex items-center gap-2">
+            {file ? <span className="inline-flex items-center gap-1 rounded-full bg-navy/5 px-2 py-0.5 text-[11px] text-navy"><FileText size={11} className="text-brand" /><span className="max-w-[150px] truncate">{file.file_name}</span><button onClick={() => { void deleteFile(file.file_id); setFile(null) }}><X size={11} /></button></span>
+              : <label className="inline-flex cursor-pointer items-center gap-1 rounded-full border border-dashed border-brand/40 px-2.5 py-1 text-[11px] font-medium text-brand hover:border-brand"><Paperclip size={12} /> Attach (optional)<input type="file" accept=".pdf,image/*,.doc,.docx" className="hidden" onChange={(e) => e.target.files?.[0] && pick(e.target.files[0])} /></label>}
+            <Button className="ml-auto" onClick={add} disabled={!title.trim()}><Plus size={14} /> Add record</Button>
+          </div>
+        </div>
+      )}
+      <ol className="relative space-y-2 border-l border-black/10 pl-4">
+        {sorted.map((e) => (
+          <li key={e.id} className="relative">
+            <span className="absolute -left-[21px] top-1 h-2 w-2 rounded-full bg-brand ring-2 ring-white" />
+            <div className="flex items-center gap-2">
+              <StatusBadge tone="neutral">{EVENT_TYPE_LABEL[e.type]}</StatusBadge>
+              <span className="text-[11px] text-status-neutral">{fmt(e.date)}</span>
+              {e.file_id && <button onClick={() => viewFile(e.file_id, e.file_name)} className="inline-flex items-center gap-1 text-[11px] text-brand hover:underline"><FileText size={11} /> file</button>}
+              {canManage && <button onClick={() => employeeFileStore.removeEvent(person.id, e.id)} className="ml-auto rounded p-1 text-status-neutral hover:bg-status-critical/10 hover:text-status-critical"><Trash2 size={12} /></button>}
+            </div>
+            <div className="text-sm font-medium text-navy">{e.title}</div>
+            {e.detail && <div className="text-[11px] text-status-neutral">{e.detail}</div>}
+            <div className="text-[10px] text-status-neutral">{e.by}{e.at ? ` · ${fmt(e.at)}` : ''}</div>
+          </li>
+        ))}
+        {sorted.length === 0 && <li className="text-xs text-status-neutral">No records yet. Log trainings, promotions, transfers and salary changes here.</li>}
+      </ol>
     </div>
   )
 }
