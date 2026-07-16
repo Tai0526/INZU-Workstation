@@ -51,7 +51,8 @@ export const DEFAULT_OVERRIDES: Record<RoleKey, PermMap> = {
   operations_manager: { fleet: 'edit', drivers: 'edit', speed: 'edit', operations: 'edit', safety: 'edit', workshop: 'view', payroll: 'edit', hr: 'view', documents: 'edit' },
   asst_operations_manager: { fleet: 'edit', drivers: 'edit', speed: 'edit', operations: 'edit', safety: 'view', workshop: 'view', payroll: 'view', hr: 'view', documents: 'edit' },
 
-  hr_manager: { hr: 'edit', drivers: 'edit', documents: 'edit' },
+  // HR Manager can view Safety to conclude disciplinary / speeding cases alongside Ops.
+  hr_manager: { hr: 'edit', drivers: 'edit', safety: 'view', documents: 'edit' },
   hr_officer: { hr: 'edit', drivers: 'edit' },
 
   payroll_officer: { payroll: 'edit' },

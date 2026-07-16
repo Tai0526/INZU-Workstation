@@ -286,7 +286,7 @@ export default function Dashboard() {
 
     // Incidents (real)
     if (r.incOps > 0)
-      push({ id: 'inc-ops', severity: 'critical', icon: ShieldAlert, title: `${r.incOps} ${plural(r.incOps, 'verdict')} awaiting your decision`, detail: 'Safety proposed a verdict — approve or reject it.', link: '/safety/incidents?stage=ops_review', actors: OPS })
+      push({ id: 'inc-ops', severity: 'critical', icon: ShieldAlert, title: `${r.incOps} ${plural(r.incOps, 'verdict')} awaiting your decision`, detail: 'Safety proposed a verdict — approve or reject it.', link: '/safety/incidents?stage=ops_review', actors: [...OPS, 'hr_manager'] })
     if (r.incSafety > 0)
       push({ id: 'inc-safety', severity: 'warning', icon: ShieldAlert, title: `${r.incSafety} ${plural(r.incSafety, 'incident')} to investigate`, detail: 'Attach evidence and propose a verdict to Ops.', link: '/safety/incidents?stage=safety_review', actors: SAFETY })
 

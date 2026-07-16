@@ -28,6 +28,7 @@ import { registerCrossTabSync } from '@/lib/storage/sync'
 // ── Who acts at each handoff ────────────────────────────────────────────
 const SAFETY_ACTORS: RoleKey[] = ['safety_officer', 'operations_manager'] // investigate / prepare incidents
 const OPS_DECIDERS: RoleKey[] = ['operations_manager', 'asst_operations_manager'] // approve / reject / authorise
+const CASE_DECIDERS: RoleKey[] = ['operations_manager', 'asst_operations_manager', 'hr_manager'] // conclude disciplinary / speeding cases
 const SPEED_ACTORS: RoleKey[] = ['tracker', 'operations_manager', 'asst_operations_manager'] // log / confirm / escalate speed events
 const WORKSHOP_ACTORS: RoleKey[] = ['workshop_supervisor', 'operations_manager', 'asst_operations_manager'] // workshop does it, ops is aware
 const PLANNER_ACTORS: RoleKey[] = ['bus_controller', 'route_supervisor', 'operations_manager', 'asst_operations_manager'] // plan daily/weekly bus movements
@@ -130,7 +131,7 @@ export function useNotifications(branch: BranchCode, role?: RoleKey, userName?: 
       })
     } else if (c.stage === 'ops_review') {
       items.push({
-        id: `case:${c.id}:ops_review`, severity: 'critical', audience: OPS_DECIDERS, viewer: true,
+        id: `case:${c.id}:ops_review`, severity: 'critical', audience: CASE_DECIDERS, viewer: true,
         title: `Verdict awaiting your decision: ${what}`,
         detail: `Safety proposed ${c.proposal?.decisions.length ? 'a verdict' : 'an outcome'} — approve or reject it.`,
         date: c.updated_at, link: `/safety/incidents?case=${c.id}`,

@@ -19,7 +19,9 @@ import { useSpeedEvents } from '@/lib/speed/store'
 import { downloadTablePdf } from '@/lib/reports/pdfDoc'
 import { useSpeedGeo } from '@/lib/speed/geo'
 
-const VERDICT_ROLES: RoleKey[] = ['operations_manager', 'asst_operations_manager']
+// Ops decides disciplinary/speeding verdicts; the HR Manager can also conclude a
+// case once Safety has attached its items (shared close authority).
+const VERDICT_ROLES: RoleKey[] = ['operations_manager', 'asst_operations_manager', 'hr_manager']
 
 function detailOf(c: DisciplinaryCase): string {
   if (c.source === 'speed') return `+${c.over_by} km/h · ${c.rec_action ?? ''}`.trim()
