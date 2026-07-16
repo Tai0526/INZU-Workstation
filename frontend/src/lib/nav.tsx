@@ -115,11 +115,11 @@ export const NAV: NavNode[] = [
   {
     module: 'hr', label: 'HR', icon: UserCog,
     pages: [
-      { label: 'Overview', path: '/hr', blurb: 'Headcount and pending leave requests by branch, current leave balance snapshot.' },
-      { label: 'Employees', path: '/hr/employees', blurb: 'Non-system staff and system employee records, each with branch, role and HOD assignment.' },
-      { label: 'Staff Schedule', path: '/hr/staff-schedule', blurb: 'Work-rest cycles for system users (21-on/7-off, or 7-on/7-off for route supervisors & bus controllers) — a Working/Off roster from each cycle’s first working day.' },
-      { label: 'Leave', path: '/hr/leave', blurb: 'HOD-based approval: Safety→General Workers, Workshop→Mechanics, Route→Drivers; HR sees a consolidated view.' },
-      { label: 'Reports', path: '/hr/reports', blurb: 'Structured weekly & monthly HR reports (attendance, recruitment, relations, training, movements) — numbers auto-filled from live data, exportable to PDF/Word/Excel — plus a live headcount & leave snapshot.' },
+      { label: 'Overview', path: '/hr', blurb: 'Headcount by department, who’s on leave now, and pending leave at a glance.' },
+      { label: 'Employees', path: '/hr/employees', blurb: 'The staff directory grouped by real department — each person with a full file: details, next-of-kin & emergency contacts, documents, contracts (with expiry), salary grade, history log (trainings/promotions), leave balance, conduct & fines, and an at-risk flag.' },
+      { label: 'Leave', path: '/hr/leave', blurb: 'Annual-leave balances (24/yr, +2/month, opening balances for existing staff), typed leave set by heads with an over-balance guard, pay-outs & adjustments, and a sick-note-aware history.' },
+      { label: 'Staff Schedule', path: '/hr/staff-schedule', blurb: 'Work-rest rotation roster (Working/Off) for system users — 21-on/7-off, or 7-on/7-off for route supervisors & bus controllers.' },
+      { label: 'Reports', path: '/hr/reports', blurb: 'Weekly & monthly HR reports — attendance, recruitment, relations, training, movements — auto-filled from live data, exportable to PDF/Word/Excel.' },
     ],
   },
   {
