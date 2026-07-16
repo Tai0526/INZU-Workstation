@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Pencil, Gauge, ShieldCheck, GraduationCap, ShieldAlert, Camera, ChevronRight, Plane } from 'lucide-react'
+import { Pencil, Gauge, ShieldCheck, GraduationCap, ShieldAlert, Camera, ChevronRight, Plane, FolderOpen } from 'lucide-react'
 import Modal from '@/components/ui/Modal'
 import Button from '@/components/ui/Button'
 import StatusBadge from '@/components/ui/StatusBadge'
@@ -43,13 +43,14 @@ const addDaysISO = (iso: string, n: number) => { const d = new Date(`${iso}T00:0
 const daysInclusive = (a: string, b: string) => Math.max(1, Math.round((new Date(`${b}T00:00:00`).getTime() - new Date(`${a}T00:00:00`).getTime()) / DAY_MS) + 1)
 
 export default function DriverDetail({
-  driver, open, onClose, canEdit, onEdit,
+  driver, open, onClose, canEdit, onEdit, onOpenFile,
 }: {
   driver: Driver | null
   open: boolean
   onClose: () => void
   canEdit: boolean
   onEdit: (d: Driver) => void
+  onOpenFile?: (d: Driver) => void
 }) {
   const { user } = useAuth()
   const all = useDrivers()
@@ -93,6 +94,7 @@ export default function DriverDetail({
         <div className="flex w-full items-center justify-between gap-2">
           {canManageLeave ? <Button variant="secondary" onClick={() => setLeaveOpen(true)}><Plane size={14} /> {leave ? 'Manage leave' : 'Set on leave'}</Button> : <span />}
           <div className="flex gap-2">
+            {onOpenFile && <Button variant="secondary" onClick={() => onOpenFile(d)}><FolderOpen size={14} /> HR file</Button>}
             <Button variant="secondary" onClick={onClose}>Close</Button>
             {canEdit && <Button onClick={() => onEdit(d)}><Pencil size={14} /> Edit</Button>}
           </div>

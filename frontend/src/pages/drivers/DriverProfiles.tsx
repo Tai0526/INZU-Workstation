@@ -12,6 +12,8 @@ import DriverFormModal from '@/components/drivers/DriverFormModal'
 import DriverImportModal from '@/components/drivers/DriverImportModal'
 import { useDrivers } from '@/lib/drivers/store'
 import { exportDrivers } from '@/lib/drivers/excel'
+import { type HrPerson } from '@/lib/hr/directory'
+import EmployeeFileDrawer from '@/components/hr/EmployeeFileDrawer'
 import {
   type Driver, type Crew, SHIFT_STATE_META,
   driverShiftState, worstExpiry, EXPIRY_TONE,
@@ -36,6 +38,10 @@ export default function DriverProfiles() {
   const [editing, setEditing] = useState<Driver | null>(null)
   const [formOpen, setFormOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
+  const [fileFor, setFileFor] = useState<Driver | null>(null)
+  const canHr = canEdit(role, 'hr')
+  // A driver reads as a directory person, so it opens the same unified HR file.
+  const toPerson = (d: Driver): HrPerson => ({ key: d.id, id: d.id, source: 'driver', full_name: d.full_name, employee_no: d.employee_no || '', role: 'Driver', department: 'Drivers', branch: d.branch, status: d.status === 'active' ? 'active' : 'inactive', phone: d.phone || '', hod: '' })
 
   const drivers = useMemo(() => {
     const term = q.trim().toLowerCase()
@@ -119,9 +125,10 @@ export default function DriverProfiles() {
 
       {!canToggle && <p className="text-xs text-status-neutral">Showing {branchLabel} only — your role is locked to this branch.</p>}
 
-      <DriverDetail driver={detail} open={!!detail} onClose={() => setDetail(null)} canEdit={editable} onEdit={openEdit} />
+      <DriverDetail driver={detail} open={!!detail} onClose={() => setDetail(null)} canEdit={editable} onEdit={openEdit} onOpenFile={(d) => { setDetail(null); setFileFor(d) }} />
       <DriverFormModal open={formOpen} onClose={() => setFormOpen(false)} editing={editing} lockedBranch={canToggle ? null : branch} activeBranch={branch} />
       <DriverImportModal open={importOpen} onClose={() => setImportOpen(false)} defaultBranch={branch} />
+      {fileFor && <EmployeeFileDrawer person={toPerson(fileFor)} canManage={canHr} onClose={() => setFileFor(null)} />}
     </div>
   )
 }
