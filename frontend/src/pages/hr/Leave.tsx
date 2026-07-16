@@ -16,6 +16,7 @@ import {
   useLeaveLedger, leaveLedgerStore, leaveBalance, accruedByMonth,
   LEAVE_TYPES, LEAVE_TYPE_LABEL, DRAWS_BALANCE, ANNUAL_ENTITLEMENT, type LeaveType, type LeaveEntry,
 } from '@/lib/hr/leaveLedger'
+import { employeeFileStore, useEmployeeFiles } from '@/lib/hr/employeeFile'
 
 const inputCls = 'w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand'
 const todayISO = () => new Date().toISOString().slice(0, 10)
@@ -32,6 +33,7 @@ export default function HrLeave() {
 
   const people = useHrPeople(branch)
   const ledger = useLeaveLedger().filter((e) => e.branch === branch)
+  useEmployeeFiles() // reactivity for opening balances
   const today = todayISO()
   const year = new Date().getFullYear()
 
@@ -41,7 +43,7 @@ export default function HrLeave() {
   const [typeFilter, setTypeFilter] = useState<'all' | LeaveType>('all')
   const [q, setQ] = useState('')
 
-  const balanceOf = (id: string) => leaveBalance(ledger, id, year, today)
+  const balanceOf = (id: string) => { const fl = employeeFileStore.for(id); return leaveBalance(ledger, id, { openingBalance: fl.leave_opening, openingAt: fl.leave_opening_at, asOf: today }) }
 
   // Leave spells this year (kind='leave'), newest first, with the person joined.
   const spells = useMemo(() => ledger
@@ -178,15 +180,15 @@ export default function HrLeave() {
 
       {!ROLES[role].canToggleBranch && <p className="text-xs text-status-neutral">Showing {branchLabel} only.</p>}
 
-      <GrantLeaveModal open={grant} onClose={() => setGrant(false)} people={people} branch={branch} ledger={ledger} year={year} today={today} />
+      <GrantLeaveModal open={grant} onClose={() => setGrant(false)} people={people} branch={branch} ledger={ledger} today={today} />
       <BalanceModal state={balMode} onClose={() => setBalMode(null)} branch={branch} />
     </div>
   )
 }
 
 // ── Grant leave (typed, with balance guard + optional sick note) ────────
-function GrantLeaveModal({ open, onClose, people, branch, ledger, year, today }: {
-  open: boolean; onClose: () => void; people: HrPerson[]; branch: any; ledger: LeaveEntry[]; year: number; today: string
+function GrantLeaveModal({ open, onClose, people, branch, ledger, today }: {
+  open: boolean; onClose: () => void; people: HrPerson[]; branch: any; ledger: LeaveEntry[]; today: string
 }) {
   const [pid, setPid] = useState('')
   const [type, setType] = useState<LeaveType>('annual')
@@ -201,7 +203,8 @@ function GrantLeaveModal({ open, onClose, people, branch, ledger, year, today }:
 
   const person = people.find((p) => p.id === pid)
   const n = Math.max(1, Number(days) || 1)
-  const bal = pid ? leaveBalance(ledger, pid, year, today) : null
+  const fl = pid ? employeeFileStore.for(pid) : null
+  const bal = pid && fl ? leaveBalance(ledger, pid, { openingBalance: fl.leave_opening, openingAt: fl.leave_opening_at, asOf: today }) : null
   const drawsBalance = DRAWS_BALANCE.includes(type)
   const overBalance = !!bal && drawsBalance && n > bal.balance
   const ready = !!pid && !!start && !overBalance

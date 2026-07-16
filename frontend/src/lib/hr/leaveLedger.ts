@@ -75,16 +75,31 @@ export function accruedByMonth(asOfISO: string): number {
   return Math.min(ANNUAL_ENTITLEMENT, months * ACCRUAL_PER_MONTH)
 }
 const yearOf = (e: LeaveEntry) => Number((e.kind === 'leave' ? e.start : e.at || e.start || '').slice(0, 4))
+const entryDate = (e: LeaveEntry) => (e.kind === 'leave' ? e.start : e.at || e.start || '').slice(0, 10)
 
-export interface LeaveBalance { entitlement: number; accrued: number; annualTaken: number; paidOut: number; adjust: number; balance: number }
-/** Annual-leave balance for a person in a leave year (accrued − annual taken − paid out + adjustments). */
-export function leaveBalance(entries: LeaveEntry[], personId: string, year: number, asOfISO: string): LeaveBalance {
-  const mine = entries.filter((e) => e.person_id === personId && yearOf(e) === year)
-  const annualTaken = mine.filter((e) => e.kind === 'leave' && DRAWS_BALANCE.includes(e.type)).reduce((s, e) => s + (e.days || 0), 0)
-  const paidOut = mine.filter((e) => e.kind === 'payout').reduce((s, e) => s + (e.days || 0), 0)
-  const adjust = mine.filter((e) => e.kind === 'adjustment').reduce((s, e) => s + (e.days || 0), 0)
-  const accrued = accruedByMonth(asOfISO)
-  return { entitlement: ANNUAL_ENTITLEMENT, accrued, annualTaken, paidOut, adjust, balance: accrued - annualTaken - paidOut + adjust }
+/** Whole months elapsed between two ISO dates (never negative). */
+export function monthsElapsed(fromISO: string, toISO: string): number {
+  const a = new Date(`${(fromISO || '').slice(0, 10)}T00:00:00`), b = new Date(`${(toISO || '').slice(0, 10)}T00:00:00`)
+  if (isNaN(a.getTime()) || isNaN(b.getTime())) return 0
+  return Math.max(0, (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth()))
+}
+
+export interface LeaveBalance { entitlement: number; accrued: number; annualTaken: number; paidOut: number; adjust: number; balance: number; since: string; openingBalance: number }
+/**
+ * Annual-leave balance from a person's opening date: the carried-in opening balance
+ * (set when the system went live) + 2 days/month accrued since − annual taken − paid
+ * out + adjustments. Defaults to Jan 1 of the asOf year with a zero opening when no
+ * opening is set, so existing records keep their calendar-year behaviour.
+ */
+export function leaveBalance(entries: LeaveEntry[], personId: string, opts: { openingBalance?: number; openingAt?: string; asOf: string }): LeaveBalance {
+  const since = (opts.openingAt || '').slice(0, 10) || `${opts.asOf.slice(0, 4)}-01-01`
+  const opening = opts.openingBalance || 0
+  const accrued = opening + ACCRUAL_PER_MONTH * monthsElapsed(since, opts.asOf)
+  const rel = entries.filter((e) => e.person_id === personId && entryDate(e) >= since && entryDate(e) <= opts.asOf.slice(0, 10))
+  const annualTaken = rel.filter((e) => e.kind === 'leave' && DRAWS_BALANCE.includes(e.type)).reduce((s, e) => s + (e.days || 0), 0)
+  const paidOut = rel.filter((e) => e.kind === 'payout').reduce((s, e) => s + (e.days || 0), 0)
+  const adjust = rel.filter((e) => e.kind === 'adjustment').reduce((s, e) => s + (e.days || 0), 0)
+  return { entitlement: ANNUAL_ENTITLEMENT, accrued, annualTaken, paidOut, adjust, balance: accrued - annualTaken - paidOut + adjust, since, openingBalance: opening }
 }
 
 // ── Per-person analytics (feeds the employee "at-risk" flag) ────────────

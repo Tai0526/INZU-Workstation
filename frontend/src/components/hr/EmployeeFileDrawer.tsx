@@ -41,7 +41,7 @@ export default function EmployeeFileDrawer({ person, canManage, onClose }: { per
   function save() { employeeFileStore.set(person.id, f) ; onClose() }
   const dirty = JSON.stringify(f) !== JSON.stringify(stored)
 
-  const bal = useMemo(() => leaveBalance(ledger, person.id, year, today), [ledger, person.id, year, today])
+  const bal = useMemo(() => leaveBalance(ledger, person.id, { openingBalance: f.leave_opening, openingAt: f.leave_opening_at, asOf: today }), [ledger, person.id, f.leave_opening, f.leave_opening_at, today])
   const myLeave = useMemo(() => ledger.filter((e) => e.person_id === person.id && e.kind === 'leave').sort((a, b) => b.start.localeCompare(a.start)), [ledger, person.id])
   const risk = useMemo(() => assessRisk({ personId: person.id, personName: person.full_name, ledger, cases, deductions, year }), [ledger, cases, deductions, person, year])
   const myCases = useMemo(() => cases.filter((c) => (c.driver_id ? c.driver_id === person.id : c.driver_name === person.full_name)).sort((a, b) => b.event_datetime.localeCompare(a.event_datetime)), [cases, person])
@@ -153,12 +153,21 @@ export default function EmployeeFileDrawer({ person, canManage, onClose }: { per
 
           {tab === 'leave' && (
             <>
+              {canManage && (
+                <Section icon={CalendarDays} title="Opening balance (system go-live)">
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">Days carried in</span><input type="number" className={inputCls} value={f.leave_opening || ''} onChange={(e) => set('leave_opening', Number(e.target.value))} /></label>
+                    <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">As of date</span><input type="date" className={inputCls} value={f.leave_opening_at} onChange={(e) => set('leave_opening_at', e.target.value)} /></label>
+                  </div>
+                  <p className="mt-1 text-[11px] text-status-neutral">Set once at onboarding — the balance accrues +2/month from this date on top of the days carried in. (Set the start date under Details.)</p>
+                </Section>
+              )}
               <div className="grid grid-cols-3 gap-2">
                 <Stat label="Accrued" value={bal.accrued} />
                 <Stat label="Taken" value={bal.annualTaken} />
                 <Stat label="Balance" value={bal.balance} tone={bal.balance <= 0 ? 'critical' : bal.balance <= 3 ? 'warning' : 'good'} />
               </div>
-              <div className="text-[11px] text-status-neutral">{bal.paidOut ? `${bal.paidOut} day(s) paid out. ` : ''}Manage leave in <Link to="/hr/leave" className="font-medium text-brand hover:underline">HR → Leave</Link>.</div>
+              <div className="text-[11px] text-status-neutral">{bal.paidOut ? `${bal.paidOut} day(s) paid out. ` : ''}Accruing from {fmt(bal.since)}. Grant/adjust leave in <Link to="/hr/leave" className="font-medium text-brand hover:underline">HR → Leave</Link>.</div>
               <Section icon={CalendarDays} title={`Leave this year (${year})`}>
                 {myLeave.filter((e) => e.start.slice(0, 4) === String(year)).length ? (
                   <div className="divide-y divide-black/5">

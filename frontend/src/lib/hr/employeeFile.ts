@@ -31,6 +31,8 @@ export interface EmployeeFile {
   address: string
   email: string
   start_date: string      // hire date (the base employee record has none)
+  leave_opening: number   // annual-leave days carried in when the system went live
+  leave_opening_at: string // date that opening balance was captured (accrual starts here)
   job_title: string
   contract_type: string   // Permanent / Fixed-term / Casual …
   tpin: string            // tax number
@@ -49,7 +51,7 @@ export interface EmployeeFile {
 export function blankFile(): EmployeeFile {
   return {
     national_id: '', dob: '', gender: '', marital_status: '', address: '', email: '',
-    start_date: '', job_title: '', contract_type: '', tpin: '', napsa: '', bank_name: '', bank_account: '',
+    start_date: '', leave_opening: 0, leave_opening_at: '', job_title: '', contract_type: '', tpin: '', napsa: '', bank_name: '', bank_account: '',
     next_of_kin: { name: '', relationship: '', phone: '' }, emergency_contacts: [], documents: [], exit: null, notes: '',
     updated_by: '', updated_at: '',
   }
