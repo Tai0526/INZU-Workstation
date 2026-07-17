@@ -84,22 +84,37 @@ export function monthsElapsed(fromISO: string, toISO: string): number {
   return Math.max(0, (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth()))
 }
 
+const daysInclusive = (a: string, b: string) => Math.max(1, Math.round((new Date(`${b}T00:00:00`).getTime() - new Date(`${a}T00:00:00`).getTime()) / 86_400_000) + 1)
+
 export interface LeaveBalance { entitlement: number; accrued: number; annualTaken: number; paidOut: number; adjust: number; balance: number; since: string; openingBalance: number }
 /**
  * Annual-leave balance from a person's opening date: the carried-in opening balance
  * (set when the system went live) + 2 days/month accrued since − annual taken − paid
- * out + adjustments. Defaults to Jan 1 of the asOf year with a zero opening when no
- * opening is set, so existing records keep their calendar-year behaviour.
+ * out + adjustments. Annual leave reduces the balance as soon as it's approved (past
+ * OR future dated). `currentLeave` is the person's single-period roster leave — if it
+ * predates the ledger it's counted too (as annual) so the balance still drops.
  */
-export function leaveBalance(entries: LeaveEntry[], personId: string, opts: { openingBalance?: number; openingAt?: string; asOf: string }): LeaveBalance {
+export function leaveBalance(entries: LeaveEntry[], personId: string, opts: { openingBalance?: number; openingAt?: string; asOf: string; currentLeave?: { start: string; end: string } | null }): LeaveBalance {
   const since = (opts.openingAt || '').slice(0, 10) || `${opts.asOf.slice(0, 4)}-01-01`
   const opening = opts.openingBalance || 0
   const accrued = opening + ACCRUAL_PER_MONTH * monthsElapsed(since, opts.asOf)
-  const rel = entries.filter((e) => e.person_id === personId && entryDate(e) >= since && entryDate(e) <= opts.asOf.slice(0, 10))
-  const annualTaken = rel.filter((e) => e.kind === 'leave' && DRAWS_BALANCE.includes(e.type)).reduce((s, e) => s + (e.days || 0), 0)
-  const paidOut = rel.filter((e) => e.kind === 'payout').reduce((s, e) => s + (e.days || 0), 0)
-  const adjust = rel.filter((e) => e.kind === 'adjustment').reduce((s, e) => s + (e.days || 0), 0)
+  const mine = entries.filter((e) => e.person_id === personId)
+  const leaveStarts = new Set(mine.filter((e) => e.kind === 'leave').map((e) => e.start))
+  let annualTaken = mine.filter((e) => e.kind === 'leave' && DRAWS_BALANCE.includes(e.type) && e.start >= since).reduce((s, e) => s + (e.days || 0), 0)
+  // Roster leave set before the ledger existed (single period, no type) — count as annual so taken subtracts.
+  const cl = opts.currentLeave
+  if (cl && cl.start && cl.start >= since && !leaveStarts.has(cl.start)) annualTaken += daysInclusive(cl.start, cl.end)
+  const paidOut = mine.filter((e) => e.kind === 'payout' && entryDate(e) >= since && entryDate(e) <= opts.asOf.slice(0, 10)).reduce((s, e) => s + (e.days || 0), 0)
+  const adjust = mine.filter((e) => e.kind === 'adjustment' && entryDate(e) >= since && entryDate(e) <= opts.asOf.slice(0, 10)).reduce((s, e) => s + (e.days || 0), 0)
   return { entitlement: ANNUAL_ENTITLEMENT, accrued, annualTaken, paidOut, adjust, balance: accrued - annualTaken - paidOut + adjust, since, openingBalance: opening }
+}
+
+/** Phase of a leave period relative to today: 'current' | 'upcoming' | 'ended' | 'none'. */
+export function leavePhase(period: { start: string; end: string } | null | undefined, todayISO: string): 'current' | 'upcoming' | 'ended' | 'none' {
+  if (!period || !period.start) return 'none'
+  if (period.start > todayISO) return 'upcoming'
+  if (period.end < todayISO) return 'ended'
+  return 'current'
 }
 
 // ── Per-person analytics (feeds the employee "at-risk" flag) ────────────

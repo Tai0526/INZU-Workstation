@@ -13,7 +13,7 @@ import {
   type ContractDoc, type FileEvent,
 } from '@/lib/hr/employeeFile'
 import { useSalaryBands, salaryBandsStore } from '@/lib/hr/salaryBands'
-import { useLeaveLedger, leaveBalance, LEAVE_TYPE_LABEL, type LeaveEntry } from '@/lib/hr/leaveLedger'
+import { useLeaveLedger, leaveBalance, leavePhase, LEAVE_TYPE_LABEL, type LeaveEntry } from '@/lib/hr/leaveLedger'
 import { assessRisk, RISK_META } from '@/lib/hr/analytics'
 import { useCases, DECISION_LABEL, INCIDENT_TYPE_META } from '@/lib/safety/cases'
 import { useDeductions } from '@/lib/payroll/deductions'
@@ -58,7 +58,7 @@ export default function EmployeeFileDrawer({ person, canManage, onClose }: { per
   function save() { employeeFileStore.set(person.id, scalars(f)); onClose() }
   const dirty = JSON.stringify(scalars(f)) !== JSON.stringify(scalars(stored))
 
-  const bal = useMemo(() => leaveBalance(ledger, person.id, { openingBalance: f.leave_opening, openingAt: f.leave_opening_at, asOf: today }), [ledger, person.id, f.leave_opening, f.leave_opening_at, today])
+  const bal = useMemo(() => leaveBalance(ledger, person.id, { openingBalance: f.leave_opening, openingAt: f.leave_opening_at, asOf: today, currentLeave: curLeave }), [ledger, person.id, f.leave_opening, f.leave_opening_at, today, curLeave])
   const myLeave = useMemo(() => ledger.filter((e) => e.person_id === person.id && e.kind === 'leave').sort((a, b) => b.start.localeCompare(a.start)), [ledger, person.id])
   const speedCount = useMemo(() => speed.filter((e) => (e.driver_id ? e.driver_id === person.id : e.driver_name === person.full_name) && countsAgainstDriver(e)).length, [speed, person])
   const risk = useMemo(() => assessRisk({ personId: person.id, personName: person.full_name, ledger, cases, deductions, year, speedEvents: speedCount }), [ledger, cases, deductions, person, year, speedCount])
@@ -192,7 +192,7 @@ export default function EmployeeFileDrawer({ person, canManage, onClose }: { per
                 <Stat label="Taken" value={bal.annualTaken} />
                 <Stat label="Balance" value={bal.balance} tone={bal.balance <= 0 ? 'critical' : bal.balance <= 3 ? 'warning' : 'good'} />
               </div>
-              {curLeave && <div className="rounded-lg bg-status-warning/10 px-3 py-2 text-[11px] text-[#8a6d10]">Currently on leave: <b>{fmt(curLeave.start)} → {fmt(curLeave.end)}</b>{person.source === 'driver' ? ' (set from the driver profile).' : '.'}</div>}
+              {curLeave && (() => { const ph = leavePhase(curLeave, today); const label = ph === 'current' ? 'On leave now' : ph === 'upcoming' ? 'Upcoming leave' : 'Last leave'; return <div className={`rounded-lg px-3 py-2 text-[11px] ${ph === 'current' ? 'bg-status-warning/10 text-[#8a6d10]' : 'bg-canvas text-status-neutral'}`}>{label}: <b>{fmt(curLeave.start)} → {fmt(curLeave.end)}</b>{ph === 'ended' ? ' (ended)' : ''}{person.source === 'driver' ? ' · from the driver profile' : ''}.</div> })()}
               <div className="text-[11px] text-status-neutral">{bal.paidOut ? `${bal.paidOut} day(s) paid out. ` : ''}Accruing from {fmt(bal.since)}. Grant/adjust leave in <Link to="/hr/leave" className="font-medium text-brand hover:underline">HR → Leave</Link>.</div>
               <Section icon={CalendarDays} title={`Leave this year (${year})`}>
                 {myLeave.filter((e) => e.start.slice(0, 4) === String(year)).length ? (

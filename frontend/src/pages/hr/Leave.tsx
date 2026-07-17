@@ -43,7 +43,7 @@ export default function HrLeave() {
   const [typeFilter, setTypeFilter] = useState<'all' | LeaveType>('all')
   const [q, setQ] = useState('')
 
-  const balanceOf = (id: string) => { const fl = employeeFileStore.for(id); return leaveBalance(ledger, id, { openingBalance: fl.leave_opening, openingAt: fl.leave_opening_at, asOf: today }) }
+  const balanceOf = (id: string) => { const fl = employeeFileStore.for(id); const cl = leaveStore.for(id) || empLeaveStore.for(id); return leaveBalance(ledger, id, { openingBalance: fl.leave_opening, openingAt: fl.leave_opening_at, asOf: today, currentLeave: cl }) }
 
   // Leave spells this year (kind='leave'), newest first, with the person joined.
   const spells = useMemo(() => ledger
@@ -204,7 +204,8 @@ function GrantLeaveModal({ open, onClose, people, branch, ledger, today }: {
   const person = people.find((p) => p.id === pid)
   const n = Math.max(1, Number(days) || 1)
   const fl = pid ? employeeFileStore.for(pid) : null
-  const bal = pid && fl ? leaveBalance(ledger, pid, { openingBalance: fl.leave_opening, openingAt: fl.leave_opening_at, asOf: today }) : null
+  const cl = pid ? (leaveStore.for(pid) || empLeaveStore.for(pid)) : null
+  const bal = pid && fl ? leaveBalance(ledger, pid, { openingBalance: fl.leave_opening, openingAt: fl.leave_opening_at, asOf: today, currentLeave: cl }) : null
   const drawsBalance = DRAWS_BALANCE.includes(type)
   const overBalance = !!bal && drawsBalance && n > bal.balance
   const ready = !!pid && !!start && !overBalance

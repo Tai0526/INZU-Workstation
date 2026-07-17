@@ -36,7 +36,7 @@ export default function MechanicsSchedule() {
   useEmployeeFiles()
   // Workshop Supervisor sets crews & leave; Asst Ops / Ops can also set mechanic leave.
   const canLeave = canManage || role === 'asst_operations_manager' || role === 'operations_manager'
-  const balOf = (id: string) => { const fl = employeeFileStore.for(id); return leaveBalance(ledger, id, { openingBalance: fl.leave_opening, openingAt: fl.leave_opening_at, asOf: todayStr() }) }
+  const balOf = (id: string) => { const fl = employeeFileStore.for(id); return leaveBalance(ledger, id, { openingBalance: fl.leave_opening, openingAt: fl.leave_opening_at, asOf: todayStr(), currentLeave: empLeaveStore.for(id) }) }
   const crews = roster.crews
 
   const [q, setQ] = useState('')
@@ -231,7 +231,7 @@ function MechanicModal({ mech, onClose, canManage, canLeave, branch, ledger }: {
   if (!mech) return null
   const existing = empLeaveStore.for(mech.id)
   const fl = employeeFileStore.for(mech.id)
-  const bal = leaveBalance(ledger, mech.id, { openingBalance: fl.leave_opening, openingAt: fl.leave_opening_at, asOf: today })
+  const bal = leaveBalance(ledger, mech.id, { openingBalance: fl.leave_opening, openingAt: fl.leave_opening_at, asOf: today, currentLeave: existing })
   const n = Math.max(1, Number(ldays) || 1)
   const end = addDaysISO(lstart, n - 1)
   const over = DRAWS_BALANCE.includes(ltype) && n > bal.balance
