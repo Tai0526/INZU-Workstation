@@ -7,7 +7,10 @@ import { createSyncConfig } from '@/lib/supabase/syncTable'
  * reads the employee's basic from their file — statutory deductions stay in Payroll.
  * Migration-free app_config list.
  */
-export interface SalaryBand { id: string; grade: string; band: string; basic: number; currency: string; note: string }
+export interface SalaryBand { id: string; grade: string; band: string; basic: number; currency: string; leave_day_rate: number; note: string }
+/** Cost of one leave day for a band: its set rate, else basic ÷ 22 working days. */
+export const leaveDayRate = (b: Pick<SalaryBand, 'leave_day_rate' | 'basic'> | null | undefined): number =>
+  (b?.leave_day_rate && b.leave_day_rate > 0 ? b.leave_day_rate : b?.basic ? Math.round(b.basic / 22) : 0)
 
 const newId = () => (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `band_${Date.now()}_${Math.round(Math.random() * 1e6)}`)
 const cfg = createSyncConfig<SalaryBand[]>({ key: 'salary_bands', lsKey: 'inzu_salary_bands', default: [] })

@@ -4,15 +4,17 @@ import { X, Save, FileText, Trash2, Plus, Paperclip, ShieldAlert, CalendarDays, 
 import Button from '@/components/ui/Button'
 import StatusBadge from '@/components/ui/StatusBadge'
 import Modal from '@/components/ui/Modal'
+import { BRANCHES } from '@/lib/roles'
 import { type HrPerson } from '@/lib/hr/directory'
 import { putFile, viewFile, deleteFile } from '@/lib/storage/fileStore'
+import { useCompliance, useTraining, useComplianceClasses, classMap, credStatus, CRED_STATUS_META, TRAINING_META } from '@/lib/safety/registers'
 import {
   employeeFileStore, useEmployeeFiles, fileCompleteness, contractExpiry,
   DOC_CATEGORIES, DOC_CATEGORY_LABEL, EVENT_TYPES, EVENT_TYPE_LABEL,
   type EmployeeFile, type Contact, type DocCategory, type EventType, type SalaryInfo, type ExpiryState,
   type ContractDoc, type FileEvent,
 } from '@/lib/hr/employeeFile'
-import { useSalaryBands, salaryBandsStore } from '@/lib/hr/salaryBands'
+import { useSalaryBands, salaryBandsStore, leaveDayRate } from '@/lib/hr/salaryBands'
 import { useLeaveLedger, leaveBalance, leavePhase, LEAVE_TYPE_LABEL, type LeaveEntry } from '@/lib/hr/leaveLedger'
 import { assessRisk, RISK_META } from '@/lib/hr/analytics'
 import { useCases, DECISION_LABEL, INCIDENT_TYPE_META } from '@/lib/safety/cases'
@@ -24,11 +26,11 @@ import { useEmployeeLeave } from '@/lib/hr/leave'
 
 const inputCls = 'w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand'
 const fmt = (iso: string) => { try { return iso ? new Date(`${iso.slice(0, 10)}T00:00:00`).toLocaleDateString('en', { day: '2-digit', month: 'short', year: 'numeric' }) : '—' } catch { return iso } }
-type Tab = 'details' | 'contacts' | 'documents' | 'contracts' | 'salary' | 'leave' | 'conduct' | 'history' | 'exit'
+type Tab = 'details' | 'contacts' | 'documents' | 'compliance' | 'contracts' | 'salary' | 'leave' | 'conduct' | 'history' | 'exit'
 const TABS: { k: Tab; label: string }[] = [
   { k: 'details', label: 'Details' }, { k: 'contacts', label: 'Contacts' }, { k: 'documents', label: 'Documents' },
-  { k: 'contracts', label: 'Contracts' }, { k: 'salary', label: 'Salary' }, { k: 'leave', label: 'Leave' },
-  { k: 'conduct', label: 'Conduct' }, { k: 'history', label: 'History' }, { k: 'exit', label: 'Exit' },
+  { k: 'compliance', label: 'Compliance' }, { k: 'contracts', label: 'Contracts' }, { k: 'salary', label: 'Salary' },
+  { k: 'leave', label: 'Leave' }, { k: 'conduct', label: 'Conduct' }, { k: 'history', label: 'History' }, { k: 'exit', label: 'Exit' },
 ]
 // Scalar (form-edited) fields; documents/events/contracts mutate the store directly,
 // so Save must not write them back from the stale form and clobber live additions.
@@ -133,9 +135,12 @@ export default function EmployeeFileDrawer({ person, canManage, onClose }: { per
                   {field('start_date', 'Start date (hired)', 'date')}
                   <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">Role / job title</span>
                     <input disabled={!canManage} className={`${inputCls} disabled:bg-canvas disabled:text-status-neutral`} value={f.job_title || person.role} onChange={(e) => set('job_title', e.target.value)} /></label>
-                  {field('contract_type', 'Contract type')}{field('tpin', 'TPIN (tax)')}
-                  {field('napsa', 'NAPSA / social security')}{field('bank_name', 'Bank')}
-                  {field('bank_branch', 'Bank branch')}{field('bank_account', 'Bank account')}
+                  <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">Branch</span>
+                    <div className="flex h-[38px] items-center rounded-lg border border-black/10 bg-canvas px-3 text-sm text-status-neutral">{BRANCHES.find((b) => b.code === person.branch)?.short || person.branch}</div></label>
+                  {field('tpin', 'TPIN (tax)')}
+                  {field('napsa', 'NAPSA / social security')}
+                  {field('bank_name', 'Bank')}{field('bank_branch', 'Bank branch')}
+                  {field('bank_account', 'Bank account')}
                 </div>
               </Section>
               <Section icon={FileText} title="Notes">
@@ -172,8 +177,9 @@ export default function EmployeeFileDrawer({ person, canManage, onClose }: { per
           {tab === 'documents' && (
             <DocumentsTab file={stored} canManage={canManage} onUpload={uploadDoc} onRemove={(docId, fileId) => { employeeFileStore.removeDoc(person.id, docId); void deleteFile(fileId) }} />
           )}
+          {tab === 'compliance' && <ComplianceTab person={person} />}
           {tab === 'contracts' && <ContractsTab person={person} contracts={stored.contracts} canManage={canManage} today={today} />}
-          {tab === 'salary' && <SalaryTab salary={f.salary} onChange={(s) => set('salary', s)} canManage={canManage} />}
+          {tab === 'salary' && <SalaryTab salary={f.salary} onChange={(s) => set('salary', s)} canManage={canManage} takenDays={bal.annualTaken} />}
           {tab === 'history' && <HistoryTab person={person} events={stored.events} canManage={canManage} />}
 
           {tab === 'leave' && (
@@ -390,15 +396,21 @@ function ContractsTab({ person, contracts, canManage, today }: { person: HrPerso
   )
 }
 
-function SalaryTab({ salary, onChange, canManage }: { salary: SalaryInfo | null; onChange: (s: SalaryInfo) => void; canManage: boolean }) {
+function SalaryTab({ salary, onChange, canManage, takenDays }: { salary: SalaryInfo | null; onChange: (s: SalaryInfo) => void; canManage: boolean; takenDays: number }) {
   const bands = useSalaryBands()
   const [bandsOpen, setBandsOpen] = useState(false)
-  const s = salary ?? { grade: '', band: '', basic: 0, currency: 'ZMW', effective: '' }
-  const set = (patch: Partial<SalaryInfo>) => onChange({ ...s, ...patch })
+  const s: SalaryInfo = { grade: '', band: '', basic: 0, currency: 'ZMW', effective: '', allowances: [], ...(salary ?? {}) }
+  const alw = s.allowances ?? []
+  const set = (patch: Partial<SalaryInfo>) => onChange({ ...s, allowances: alw, ...patch })
   function pickGrade(gradeId: string) {
     const b = bands.find((x) => x.id === gradeId)
     if (b) set({ grade: b.grade, band: b.band, basic: b.basic || s.basic, currency: b.currency || s.currency }); else set({ grade: gradeId })
   }
+  const band = bands.find((b) => b.grade === s.grade)
+  const gross = (s.basic || 0) + alw.reduce((t, a) => t + (a.amount || 0), 0)
+  const rate = leaveDayRate(band ?? { basic: s.basic, leave_day_rate: 0 })
+  const leaveCost = Math.round(rate * (takenDays || 0))
+  const money = (n: number) => `${s.currency} ${n.toLocaleString()}`
   return (
     <div className="space-y-3">
       <Section icon={Banknote} title="Salary (optional)">
@@ -417,7 +429,29 @@ function SalaryTab({ salary, onChange, canManage }: { salary: SalaryInfo | null;
           <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">Effective from</span><input type="date" disabled={!canManage} className={`${inputCls} disabled:bg-canvas`} value={s.effective} onChange={(e) => set({ effective: e.target.value })} /></label>
         </div>
         {canManage && <button onClick={() => setBandsOpen(true)} className="mt-2 inline-flex items-center gap-1 text-[11px] font-medium text-brand hover:underline"><Settings2 size={12} /> Manage grades</button>}
-        <p className="mt-1 text-[11px] text-status-neutral">Optional. When set, payroll reads the basic from here; statutory deductions are configured in Payroll. Log raises under History.</p>
+      </Section>
+
+      <Section icon={Coins} title="Allowances">
+        <div className="space-y-1.5">
+          {alw.map((a, i) => (
+            <div key={i} className="grid grid-cols-[1fr_120px_auto] gap-1.5">
+              <input disabled={!canManage} className={`${inputCls} disabled:bg-canvas`} placeholder="e.g. Housing, Transport" value={a.name} onChange={(e) => set({ allowances: alw.map((x, idx) => idx === i ? { ...x, name: e.target.value } : x) })} />
+              <input type="number" disabled={!canManage} className={`${inputCls} disabled:bg-canvas`} placeholder="Amount" value={a.amount || ''} onChange={(e) => set({ allowances: alw.map((x, idx) => idx === i ? { ...x, amount: Number(e.target.value) } : x) })} />
+              {canManage && <button onClick={() => set({ allowances: alw.filter((_, idx) => idx !== i) })} className="rounded p-1.5 text-status-neutral hover:bg-status-critical/10 hover:text-status-critical"><X size={14} /></button>}
+            </div>
+          ))}
+          {canManage && <button onClick={() => set({ allowances: [...alw, { name: '', amount: 0 }] })} className="inline-flex items-center gap-1 rounded-lg border border-dashed border-navy/25 px-3 py-1.5 text-xs font-medium text-brand hover:border-brand"><Plus size={13} /> Add allowance</button>}
+          {alw.length === 0 && !canManage && <p className="text-xs text-status-neutral">No allowances.</p>}
+        </div>
+        {(s.basic > 0 || alw.length > 0) && <div className="mt-2 flex items-center justify-between rounded-lg bg-canvas px-3 py-2 text-xs"><span className="text-status-neutral">Gross (basic + allowances)</span><b className="text-navy">{money(gross)}</b></div>}
+      </Section>
+
+      <Section icon={CalendarDays} title="Leave cost">
+        <div className="flex items-center justify-between text-xs">
+          <span className="text-status-neutral">Leave taken this year · {takenDays || 0} day{takenDays === 1 ? '' : 's'} @ {money(rate)}/day</span>
+          <b className="text-navy">≈ {money(leaveCost)}</b>
+        </div>
+        <p className="mt-1 text-[11px] text-status-neutral">Uses the grade's leave-day rate (set in Manage grades), or basic ÷ 22 if unset. When set, payroll reads the basic from here; statutory deductions stay in Payroll.</p>
       </Section>
       {bandsOpen && <BandsModal onClose={() => setBandsOpen(false)} />}
     </div>
@@ -426,26 +460,28 @@ function SalaryTab({ salary, onChange, canManage }: { salary: SalaryInfo | null;
 
 function BandsModal({ onClose }: { onClose: () => void }) {
   const bands = useSalaryBands()
-  const [grade, setGrade] = useState(''); const [band, setBand] = useState(''); const [basic, setBasic] = useState(0); const [currency, setCurrency] = useState('ZMW')
-  function add() { if (!grade.trim()) return; salaryBandsStore.add({ grade: grade.trim(), band: band.trim(), basic: Number(basic) || 0, currency: currency.trim() || 'ZMW', note: '' }); setGrade(''); setBand(''); setBasic(0) }
+  const [grade, setGrade] = useState(''); const [band, setBand] = useState(''); const [basic, setBasic] = useState(0); const [currency, setCurrency] = useState('ZMW'); const [rate, setRate] = useState(0)
+  function add() { if (!grade.trim()) return; salaryBandsStore.add({ grade: grade.trim(), band: band.trim(), basic: Number(basic) || 0, currency: currency.trim() || 'ZMW', leave_day_rate: Number(rate) || 0, note: '' }); setGrade(''); setBand(''); setBasic(0); setRate(0) }
   return (
-    <Modal open onClose={onClose} title="Salary grades / bands" subtitle="Define grades once; picking a grade on an employee pre-fills the basic." footer={<Button onClick={onClose}>Done</Button>}>
+    <Modal open onClose={onClose} title="Salary grades / bands" subtitle="Define grades once; picking a grade pre-fills the basic. The leave-day rate lets you cost leave taken." footer={<Button onClick={onClose}>Done</Button>}>
       <div className="space-y-1.5">
         {bands.map((b) => (
           <div key={b.id} className="flex items-center gap-2 rounded-lg border border-black/10 px-3 py-1.5 text-sm">
             <span className="font-medium text-navy">{b.grade}</span><span className="text-status-neutral">{b.band}</span>
-            <span className="ml-auto text-status-neutral">{b.currency} {b.basic.toLocaleString()}</span>
+            <span className="ml-auto text-status-neutral">{b.currency} {b.basic.toLocaleString()} · {leaveDayRate(b).toLocaleString()}/leave-day</span>
             <button onClick={() => salaryBandsStore.remove(b.id)} className="rounded p-1 text-status-neutral hover:bg-status-critical/10 hover:text-status-critical"><Trash2 size={13} /></button>
           </div>
         ))}
         {bands.length === 0 && <p className="text-xs text-status-neutral">No grades yet.</p>}
       </div>
-      <div className="mt-3 grid grid-cols-4 gap-2">
+      <div className="mt-3 grid grid-cols-5 gap-2">
         <input className={inputCls} placeholder="Grade" value={grade} onChange={(e) => setGrade(e.target.value)} />
         <input className={inputCls} placeholder="Band" value={band} onChange={(e) => setBand(e.target.value)} />
         <input type="number" className={inputCls} placeholder="Basic" value={basic || ''} onChange={(e) => setBasic(Number(e.target.value))} />
         <input className={inputCls} placeholder="Cur" value={currency} onChange={(e) => setCurrency(e.target.value)} />
+        <input type="number" className={inputCls} placeholder="Leave/day" value={rate || ''} onChange={(e) => setRate(Number(e.target.value))} />
       </div>
+      <p className="mt-1 text-[11px] text-status-neutral">Leave/day is the cost of one leave day for the grade (leave blank to use basic ÷ 22).</p>
       <div className="mt-2 flex justify-end"><Button onClick={add}><Plus size={14} /> Add grade</Button></div>
     </Modal>
   )
@@ -496,6 +532,38 @@ function HistoryTab({ person, events, canManage }: { person: HrPerson; events: F
         ))}
         {sorted.length === 0 && <li className="text-xs text-status-neutral">No records yet. Log trainings, promotions, transfers and salary changes here.</li>}
       </ol>
+    </div>
+  )
+}
+
+function ComplianceTab({ person }: { person: HrPerson }) {
+  const creds = useCompliance().filter((c) => (c.driver_id ? c.driver_id === person.id : c.driver_name === person.full_name))
+  const classes = useComplianceClasses()
+  const byKey = classMap(classes)
+  const training = useTraining().filter((t) => (t.driver_id ? t.driver_id === person.id : t.driver_name === person.full_name))
+  const row = (id: string, label: string, issued: string, expiry: string, hasExpiry: boolean, file: { file_id: string; file_name: string } | null) => {
+    const st = hasExpiry ? credStatus(expiry) : (issued ? 'valid' : 'missing')
+    const meta = CRED_STATUS_META[st]
+    return (
+      <div key={id} className="flex items-center gap-2 py-1.5 text-xs">
+        <span className="min-w-0 flex-1 truncate font-medium text-navy">{label}</span>
+        <span className="shrink-0 text-status-neutral">{issued ? fmt(issued) : '—'}{hasExpiry && expiry ? ` → ${fmt(expiry)}` : ''}</span>
+        {file && <button onClick={() => viewFile(file.file_id, file.file_name)} className="shrink-0 text-brand hover:underline" title={file.file_name}><FileText size={12} /></button>}
+        <StatusBadge tone={meta.tone}>{meta.label}</StatusBadge>
+      </div>
+    )
+  }
+  return (
+    <div className="space-y-3">
+      <Section icon={ShieldAlert} title="Medicals & site classes">
+        {creds.length ? <div className="divide-y divide-black/5">{creds.map((c) => row(c.id, byKey[c.category]?.label || c.category, c.issued, c.expiry, !!byKey[c.category]?.has_expiry, c.cert_file))}</div>
+          : <p className="text-xs text-status-neutral">No compliance records for this person.</p>}
+      </Section>
+      <Section icon={FileText} title="Training">
+        {training.length ? <div className="divide-y divide-black/5">{training.map((t) => row(t.id, TRAINING_META[t.category as keyof typeof TRAINING_META] || t.category, t.issued, t.expiry, !!t.expiry, t.cert_file))}</div>
+          : <p className="text-xs text-status-neutral">No training records for this person.</p>}
+      </Section>
+      <p className="text-[11px] text-status-neutral">Medicals, silicosis &amp; site classes are managed in <Link to="/safety/compliance" className="font-medium text-brand hover:underline">Driver Compliance</Link> and <Link to="/safety/training" className="font-medium text-brand hover:underline">Training</Link>; they show here as the master employee record.</p>
     </div>
   )
 }

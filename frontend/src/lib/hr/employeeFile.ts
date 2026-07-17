@@ -43,7 +43,8 @@ export interface FileEvent { id: string; type: EventType; date: string; title: s
 
 // Salary (optional) — grade/band + basic pay. When set, payroll reads the basic from
 // here; statutory deductions are configured in Payroll.
-export interface SalaryInfo { grade: string; band: string; basic: number; currency: string; effective: string }
+export interface Allowance { name: string; amount: number }
+export interface SalaryInfo { grade: string; band: string; basic: number; currency: string; effective: string; allowances: Allowance[] }
 
 // Contract with an expiry so renewals can be prepared in time.
 export type ExpiryState = 'none' | 'valid' | 'expiring' | 'expired'
