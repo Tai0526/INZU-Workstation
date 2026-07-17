@@ -64,6 +64,7 @@ export const DEFAULT_OVERRIDES: Record<RoleKey, PermMap> = {
   bus_controller: { operations: 'edit' },
   tracker: { speed: 'edit', operations: 'edit' },
   fuel_controller: { operations: 'edit' },
+  fuel_supervisor: { operations: 'edit' },
 
   viewer: { fleet: 'view', drivers: 'view', operations: 'view', safety: 'view', workshop: 'view' },
 }

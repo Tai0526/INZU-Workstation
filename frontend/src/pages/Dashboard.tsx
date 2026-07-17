@@ -59,7 +59,7 @@ const SEV = {
 const OPS = ['operations_manager', 'asst_operations_manager'] as RoleKey[]
 // The whole operations chain: the two managers plus the people under them. Used
 // to give execs (MD / Directors) oversight of what Ops & their team haven't done.
-const OPS_CHAIN = ['operations_manager', 'asst_operations_manager', 'route_supervisor', 'bus_controller', 'tracker', 'fuel_controller'] as RoleKey[]
+const OPS_CHAIN = ['operations_manager', 'asst_operations_manager', 'route_supervisor', 'bus_controller', 'tracker', 'fuel_controller', 'fuel_supervisor'] as RoleKey[]
 const SAFETY = ['safety_officer', 'operations_manager'] as RoleKey[]
 const WORKSHOP = ['workshop_supervisor', 'operations_manager'] as RoleKey[]
 const SPEED = ['tracker', 'operations_manager', 'asst_operations_manager'] as RoleKey[]
@@ -86,7 +86,7 @@ function roleTier(role: RoleKey): 'exec' | 'mgmt' | 'dept' | 'entry' | 'other' {
   if (['board_chairman', 'board_member', 'finance_director', 'managing_director'].includes(role)) return 'exec'
   if (OPS.includes(role)) return 'mgmt'
   if (['safety_officer', 'workshop_supervisor', 'route_supervisor', 'hr_manager', 'hr_officer', 'payroll_officer'].includes(role)) return 'dept'
-  if (['tracker', 'fuel_controller', 'bus_controller'].includes(role)) return 'entry'
+  if (['tracker', 'fuel_controller', 'fuel_supervisor', 'bus_controller'].includes(role)) return 'entry'
   return 'other'
 }
 
@@ -326,14 +326,14 @@ export default function Dashboard() {
     if (r.mileagePending > 0)
       push({ id: 'mil', severity: 'action', icon: RouteIcon, title: `${r.mileagePending} mileage ${plural(r.mileagePending, 'entry', 'entries')} to approve`, detail: 'Daily mileage submitted by the Tracker.', link: '/operations/mileage', actors: OPS })
     if (r.drawsPending > 0)
-      push({ id: 'fuel-auth', severity: 'action', icon: Fuel, title: `${r.drawsPending} fuel ${plural(r.drawsPending, 'authorisation')} pending`, detail: 'Authorised-vehicle draws awaiting your sign-off.', link: '/operations/fuel?draw=pending', actors: OPS })
+      push({ id: 'fuel-auth', severity: 'action', icon: Fuel, title: `${r.drawsPending} fuel ${plural(r.drawsPending, 'authorisation')} pending`, detail: 'Authorised-vehicle draws awaiting your sign-off.', link: '/operations/fuel?draw=pending', actors: [...OPS, 'fuel_supervisor'] })
 
     // Data-entry recurring tasks — shown only while still outstanding for today,
     // so they clear once the entry is made (and the exec oversight stays honest).
     if (!mileageToday)
       push({ id: 'mil-entry', severity: 'action', icon: RouteIcon, title: "Log today's mileage", detail: 'Capture actual distance covered per bus.', link: '/operations/mileage', actors: ['tracker'] })
     if (!fuelToday)
-      push({ id: 'fuel-entry', severity: 'action', icon: Fuel, title: "Record today's fuel", detail: 'Fuel issued, driver, vehicle, locations visited.', link: '/operations/fuel', actors: ['fuel_controller'] })
+      push({ id: 'fuel-entry', severity: 'action', icon: Fuel, title: "Record today's fuel", detail: 'Fuel issued, driver, vehicle, locations visited.', link: '/operations/fuel', actors: ['fuel_controller', 'fuel_supervisor'] })
     if (!allocToday)
       push({ id: 'alloc-entry', severity: 'action', icon: RouteIcon, title: "Set today's bus allocation", detail: 'Assign bus, route and driver for the day.', link: '/operations/allocation', actors: ['bus_controller'] })
 

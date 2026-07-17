@@ -60,6 +60,7 @@ export type RoleKey =
   | 'bus_controller'
   | 'tracker'
   | 'fuel_controller'
+  | 'fuel_supervisor'
   | 'viewer'
 
 export interface RoleMeta {
@@ -136,8 +137,12 @@ export const ROLES: Record<RoleKey, RoleMeta> = {
     blurb: 'Per-branch. Enters daily mileage; flags speed events from Geotab data.',
   },
   fuel_controller: {
-    key: 'fuel_controller', label: 'Fuel Controller', crossBranch: false, canToggleBranch: false, isAdmin: false,
-    blurb: 'Per-branch. Enters fuel issued, driver, vehicle, and locations visited per fill-up.',
+    key: 'fuel_controller', label: 'Fuel Attendant', crossBranch: false, canToggleBranch: false, isAdmin: false,
+    blurb: 'Per-branch. Dispenses and records fuel — fuel issued, driver, vehicle and locations per fill-up.',
+  },
+  fuel_supervisor: {
+    key: 'fuel_supervisor', label: 'Fuel Supervisor', crossBranch: false, canToggleBranch: false, isAdmin: false,
+    blurb: 'Per-branch. Oversees fuelling and authorises non-fleet (visitor) vehicle fuel draws; records fuel like an attendant.',
   },
   viewer: {
     key: 'viewer', label: 'Viewer', crossBranch: false, canToggleBranch: false, isAdmin: false,

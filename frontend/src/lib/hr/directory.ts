@@ -35,7 +35,7 @@ export interface HrPerson {
 // map by job role; system accounts map by their system role (below).
 const DEPT_BY_JOB: Partial<Record<JobRole, string>> = {
   Mechanic: 'Workshop', 'Workshop Supervisor': 'Workshop',
-  'Fuel Attendant': 'Operations', 'Fuel Controller': 'Operations',
+  'Fuel Attendant': 'Fuel', 'Fuel Controller': 'Fuel',
   'Safety Officer': 'Safety',
   'General Worker': 'General Workers', Cleaner: 'General Workers', 'Security Guard': 'General Workers',
   'HR Officer': 'HR', 'Payroll Officer': 'HR',
@@ -46,7 +46,8 @@ const deptForJob = (j: JobRole): string => DEPT_BY_JOB[j] ?? 'Other'
 const DEPT_BY_ROLE: Partial<Record<RoleKey, string>> = {
   operations_manager: 'Management', asst_operations_manager: 'Management',
   managing_director: 'Management', finance_director: 'Management', board_chairman: 'Management', board_member: 'Management',
-  route_supervisor: 'Operations', bus_controller: 'Operations', fuel_controller: 'Operations',
+  route_supervisor: 'Operations', bus_controller: 'Operations',
+  fuel_controller: 'Fuel', fuel_supervisor: 'Fuel',
   safety_officer: 'Safety',
   workshop_supervisor: 'Workshop',
   hr_manager: 'HR', hr_officer: 'HR', payroll_officer: 'HR',
@@ -74,7 +75,7 @@ export function useHrPeople(branch: BranchCode): HrPerson[] {
     for (const d of drvs) {
       people.push({
         key: `driver:${d.id}`, id: d.id, source: 'driver', full_name: d.full_name, employee_no: d.employee_no,
-        role: 'Driver', department: 'Drivers', branch: d.branch,
+        role: 'Driver', department: 'Operations', branch: d.branch,
         status: d.status === 'suspended' ? 'inactive' : 'active', phone: d.phone, hod: d.section, link: '/drivers/profiles',
       })
     }

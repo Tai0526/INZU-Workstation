@@ -17,7 +17,6 @@ import { FUEL_HANDLER_ROLES } from '@/lib/hr/types'
 import {
   useIssuances, useReceipts, useGenFuel, useFuelConfig, setFuelConfig, useFuelRate, setFuelRate, fetchLiveUsdZmw, recordRefuel, editIssuance, authorizeDraw, issuancesStore, receiptsStore, genFuelStore, useFuelLevels, fuelLevelsStore, useFuelRoutes, fuelRoutesStore,
 } from '@/lib/fuel/store'
-import { useFuelSupervisors } from '@/lib/fuel/supervisors'
 import { putFile, viewFile } from '@/lib/storage/fileStore'
 import {
   type FuelIssuance, type IssuanceInput, type FuelConfig, type FuelRate, type FuelReceipt, type GenFuel, type DrawKind, type Currency, DRAW_LABEL, isApprovedDraw, isOpen, kmMoved, kmPerLitre,
@@ -79,11 +78,9 @@ export default function Fuel() {
   const branch = user!.branch
   const branchLabel = BRANCHES.find((b) => b.code === branch)!.short
   const canManage = canEdit(role, 'operations')
-  // Fuel draws can be authorised by Ops / Asst Ops Managers, the MD and the Admin,
-  // plus any user flagged a "Fuel supervisor" in Admin (e.g. a trusted fuel
-  // controller). The authoriser's name is stamped on the record ("Authorised by").
-  const fuelSupers = useFuelSupervisors()
-  const canAuthorize = role === 'operations_manager' || role === 'asst_operations_manager' || role === 'managing_director' || role === 'administrator' || fuelSupers.includes(user!.id)
+  // Fuel draws can be authorised by the Fuel Supervisor, the Ops / Asst Ops
+  // Managers, the MD and the Admin. The authoriser's name is stamped ("Authorised by").
+  const canAuthorize = role === 'fuel_supervisor' || role === 'operations_manager' || role === 'asst_operations_manager' || role === 'managing_director' || role === 'administrator'
 
   const issuances = useIssuances().filter((i) => i.branch === branch)
   const receipts = useReceipts().filter((r) => r.branch === branch)

@@ -23,7 +23,6 @@ import { clearAllData, restoreDemoData } from '@/lib/demo/reset'
 import { useVehicles } from '@/lib/fleet/store'
 import { useDrivers } from '@/lib/drivers/store'
 import { drivingUsersStore } from '@/lib/drivers/drivingUsers'
-import { fuelSupervisorsStore } from '@/lib/fuel/supervisors'
 import { useEmployees } from '@/lib/hr/store'
 import Modal from '@/components/ui/Modal'
 import Button from '@/components/ui/Button'
@@ -39,7 +38,7 @@ const ALL_PAGES = NAV.flatMap((n) => n.pages.filter((p) => p.path !== '/').map((
 function roleToJob(role: RoleKey): JobRole {
   const map: Partial<Record<RoleKey, JobRole>> = {
     safety_officer: 'Safety Officer', workshop_supervisor: 'Workshop Supervisor', route_supervisor: 'Route Supervisor',
-    bus_controller: 'Bus Controller', tracker: 'Tracker', fuel_controller: 'Fuel Controller',
+    bus_controller: 'Bus Controller', tracker: 'Tracker', fuel_controller: 'Fuel Attendant', fuel_supervisor: 'Fuel Attendant',
     hr_officer: 'HR Officer', payroll_officer: 'Payroll Officer',
   }
   return map[role] ?? 'Other'
@@ -164,7 +163,6 @@ function UserModal({ user, currentId, onClose }: { user: AppUser | null; current
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
   const [canDrive, setCanDrive] = useState(() => (user ? drivingUsersStore.has(user.id) : false)) // may be selected as a driver in Speed
-  const [fuelSuper, setFuelSuper] = useState(() => (user ? fuelSupervisorsStore.has(user.id) : false)) // may authorise fuel draws
   const set = <K extends keyof AppUser>(k: K, v: AppUser[K]) => setForm((f) => ({ ...f, [k]: v }))
 
   function toggleBranch(b: BranchCode) {
@@ -215,7 +213,6 @@ function UserModal({ user, currentId, onClose }: { user: AppUser | null; current
           })
           if (user && user.active !== form.active) await supaUsersStore.setActive(form.id, form.active)
           drivingUsersStore.set(form.id, canDrive)
-          fuelSupervisorsStore.set(form.id, fuelSuper)
           onClose()
         }
         return
@@ -232,7 +229,7 @@ function UserModal({ user, currentId, onClose }: { user: AppUser | null; current
       }
       const payload = { ...form, username: form.username.trim(), full_name: form.full_name.trim(), is_employee: isEmp, employee_id, extra_branches: form.extra_branches.filter((b) => b !== form.branch) }
       if (isNew) usersStore.add(payload as NewUser)
-      else { usersStore.update(form.id, payload); drivingUsersStore.set(form.id, canDrive); fuelSupervisorsStore.set(form.id, fuelSuper) }
+      else { usersStore.update(form.id, payload); drivingUsersStore.set(form.id, canDrive) }
       onClose()
     } catch (e) {
       setErr((e as Error).message)
@@ -325,7 +322,6 @@ function UserModal({ user, currentId, onClose }: { user: AppUser | null; current
           <label className={`inline-flex items-center gap-2 text-sm ${form.role === 'viewer' ? 'text-status-neutral/60' : 'text-navy'}`} title={form.role === 'viewer' ? 'Viewers are not part of the organisation, so they are never in HR.' : 'Staff appear in HR (Employees, Staff Schedule, Leave).'}><input type="checkbox" checked={form.role !== 'viewer' && form.is_employee} disabled={form.role === 'viewer'} onChange={(e) => set('is_employee', e.target.checked)} /> Is an employee (in HR)</label>
           {form.employee_id && <span className="text-xs text-status-good">Linked to HR profile.</span>}
           {!isNew && <label className="inline-flex items-center gap-2 text-sm text-navy" title="Their name will appear in the driver list when confirming a speeding event."><input type="checkbox" checked={canDrive} onChange={(e) => setCanDrive(e.target.checked)} /> Allowed to drive</label>}
-          {!isNew && <label className="inline-flex items-center gap-2 text-sm text-navy" title="They can authorise fuel draws (visitor / authorised-vehicle) like Ops."><input type="checkbox" checked={fuelSuper} onChange={(e) => setFuelSuper(e.target.checked)} /> Fuel supervisor</label>}
         </div>
       </div>
 

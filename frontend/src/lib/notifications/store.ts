@@ -180,7 +180,7 @@ export function useNotifications(branch: BranchCode, role?: RoleKey, userName?: 
   for (const g of draws) {
     if (g.branch !== branch || g.status !== 'pending') continue
     items.push({
-      id: `fueldraw:${g.id}:pending`, severity: 'warning', audience: OPS_DECIDERS,
+      id: `fueldraw:${g.id}:pending`, severity: 'warning', audience: [...OPS_DECIDERS, 'fuel_supervisor'],
       title: `Fuel authorisation needed: ${g.recipient}`,
       detail: `${DRAW_LABEL[g.kind]}${g.vehicle_reg ? ` (${g.vehicle_reg})` : ''} — ${g.litres} L awaiting your approval.`,
       date: g.date, link: '/operations/fuel?draw=pending',
