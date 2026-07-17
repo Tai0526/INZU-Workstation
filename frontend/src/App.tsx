@@ -43,6 +43,7 @@ import HrLeave from '@/pages/hr/Leave'
 import HrReports from '@/pages/hr/HrReports'
 import PayRuns from '@/pages/payroll/PayRuns'
 import PayrollTaxes from '@/pages/payroll/Taxes'
+import Payslips from '@/pages/payroll/Payslips'
 import DocumentsLibrary from '@/pages/documents/DocumentsLibrary'
 import Messages from '@/pages/messages/Messages'
 import Admin from '@/pages/admin/Admin'
@@ -95,6 +96,7 @@ const REAL_PAGES: Record<string, React.ComponentType> = {
   '/payroll': PayRuns,
   '/payroll/runs': PayRuns,
   '/payroll/taxes': PayrollTaxes,
+  '/payroll/payslips': Payslips,
   '/documents': DocumentsLibrary,
   '/petty-cash': PettyCash,
   '/admin': Admin,

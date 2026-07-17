@@ -1,0 +1,183 @@
+import { useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { ReceiptText, Search, FileText, FileDown, Eye, AlertTriangle, Printer, Wallet } from 'lucide-react'
+import { useAuth } from '@/auth/AuthContext'
+import { BRANCHES } from '@/lib/roles'
+import Button from '@/components/ui/Button'
+import Modal from '@/components/ui/Modal'
+import { exportReportPDF, exportReportWord } from '@/lib/reports/exporter'
+import { usePayRun, type PayRow } from '@/lib/payroll/run'
+import {
+  buildPayslip, payslipHtml, usePayslipTemplate, payslipTemplateStore,
+  PAYSLIP_TEMPLATES, PAYSLIP_CSS, PAYSLIP_PREVIEW_CSS, type Payslip, type PayslipTemplate,
+} from '@/lib/payroll/payslip'
+
+const monthLabel = (ym: string) => { const [y, m] = ym.split('-').map(Number); return new Date(y, m - 1, 1).toLocaleDateString('en', { month: 'long', year: 'numeric' }) }
+const safe = (s: string) => s.replace(/[^a-z0-9]+/gi, '_')
+
+export default function Payslips() {
+  const { user } = useAuth()
+  const branch = user!.branch
+  const branchLabel = BRANCHES.find((b) => b.code === branch)!.short
+
+  const [month, setMonth] = useState(new Date().toISOString().slice(0, 7))
+  const [q, setQ] = useState('')
+  const [preview, setPreview] = useState<Payslip | null>(null)
+  const template = usePayslipTemplate()
+
+  const { rows: all, tax, unpriced } = usePayRun(branch, month)
+  const cur = tax.currency || 'ZMW'
+  const money = (n: number) => `${cur} ${Math.round(n).toLocaleString()}`
+
+  const rows = useMemo(() => {
+    const term = q.trim().toLowerCase()
+    return term ? all.filter((r) => r.p.full_name.toLowerCase().includes(term) || r.p.department.toLowerCase().includes(term)) : all
+  }, [all, q])
+
+  const slipFor = (r: PayRow): Payslip => buildPayslip({
+    month, branchLabel, person: r.p, file: r.file, line: r.line, recurring: r.recurring, tax,
+    leave: r.leave, fines: r.fines, finesRecoveredYtd: r.finesRecoveredYtd,
+  })
+
+  const paidOut = rows.filter((r) => r.line.leavePay > 0).length
+  const totals = useMemo(() => rows.reduce((t, r) => ({ gross: t.gross + r.line.gross, ded: t.ded + r.line.totalDeductions, net: t.net + r.line.net }), { gross: 0, ded: 0, net: 0 }), [rows])
+
+  // One employee — PDF (print window) or an editable .doc.
+  function exportOne(r: PayRow, kind: 'pdf' | 'word') {
+    const s = slipFor(r)
+    const input = {
+      title: `Payslip — ${s.name}`, subtitle: `${s.monthLabel} · ${branchLabel} · ${s.currency}`,
+      body: payslipHtml(s, template), css: PAYSLIP_CSS, filenameBase: `INZU_Payslip_${safe(s.name)}_${month}`,
+    }
+    kind === 'pdf' ? exportReportPDF(input) : exportReportWord(input)
+  }
+
+  // Every payslip in one document, one per page — for the monthly print run.
+  function exportAll(kind: 'pdf' | 'word') {
+    const body = rows.map((r) => `<div class="slip">${payslipHtml(slipFor(r), template, { heading: true })}</div>`).join('')
+    const input = {
+      title: `Payslips — ${monthLabel(month)}`, subtitle: `${branchLabel} · ${rows.length} employees`,
+      body, css: PAYSLIP_CSS, noHeader: true, filenameBase: `INZU_Payslips_${safe(branchLabel)}_${month}`,
+    }
+    kind === 'pdf' ? exportReportPDF(input) : exportReportWord(input)
+  }
+
+  const stat = (label: string, value: string, tone: 'neutral' | 'good' | 'warning' = 'neutral') => (
+    <div className={`rounded-xl border px-3 py-2 ${tone === 'good' ? 'border-status-good/30 bg-status-good/5' : tone === 'warning' ? 'border-status-warning/40 bg-status-warning/10' : 'border-black/10 bg-white'}`}>
+      <div className={`text-base font-bold leading-none ${tone === 'good' ? 'text-status-good' : tone === 'warning' ? 'text-[#8a6d10]' : 'text-navy'}`}>{value}</div>
+      <div className="mt-0.5 text-[11px] text-status-neutral">{label}</div>
+    </div>
+  )
+
+  return (
+    <div className="page space-y-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <p className="max-w-2xl text-sm text-status-neutral">
+          Payslips for <span className="font-medium text-navy">{branchLabel}</span>, built from the <Link to="/payroll/runs" className="font-medium text-brand hover:underline">pay run</Link> — identity, bank and salary from each employee's file, leave rate/days from the leave ledger, and PAYE/NAPSA/NHIS from <Link to="/payroll/taxes" className="font-medium text-brand hover:underline">Taxes</Link>. Pick a template, then export one slip or the whole month.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="secondary" onClick={() => exportAll('word')} disabled={!rows.length}><FileDown size={15} /> All (Word)</Button>
+          <Button onClick={() => exportAll('pdf')} disabled={!rows.length}><Printer size={15} /> All payslips (PDF)</Button>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand" />
+        <div className="relative">
+          <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-status-neutral" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search employee / dept…" className="w-56 rounded-lg border border-black/15 bg-white py-2 pl-8 pr-3 text-sm text-navy outline-none focus:border-brand" />
+        </div>
+        <span className="text-[11px] text-status-neutral">{monthLabel(month)} · {rows.length} payslip{rows.length === 1 ? '' : 's'}</span>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 sm:max-w-2xl sm:grid-cols-4">
+        {stat('Payslips', String(rows.length))}
+        {stat('Gross', money(totals.gross))}
+        {stat('Deductions', money(totals.ded), 'warning')}
+        {stat('Net pay', money(totals.net), 'good')}
+      </div>
+
+      <TemplatePicker value={template} onChange={(t) => payslipTemplateStore.set(t)} />
+
+      {paidOut > 0 && <p className="inline-flex items-center gap-1.5 text-xs text-status-good"><Wallet size={13} /> {paidOut} {paidOut === 1 ? 'employee has' : 'employees have'} leave days paid out this month — it shows as a payment line and is taxed with the rest of gross.</p>}
+      {unpriced > 0 && <p className="inline-flex items-center gap-1.5 text-xs text-[#8a6d10]"><AlertTriangle size={13} /> {unpriced} active {unpriced === 1 ? 'person has' : 'people have'} no salary set and so get no payslip — add it in their employee file.</p>}
+
+      <div className="card overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-navy text-white">
+              <tr>
+                <th className="px-3 py-2.5 font-medium">Employee</th>
+                <th className="px-3 py-2.5 font-medium">Dept no</th>
+                <th className="px-3 py-2.5 text-right font-medium">Gross</th>
+                <th className="px-3 py-2.5 text-right font-medium">Deductions</th>
+                <th className="px-3 py-2.5 text-right font-medium">Net pay</th>
+                <th className="px-3 py-2.5 text-right font-medium">Leave due</th>
+                <th className="px-3 py-2.5 text-right font-medium">Payslip</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => {
+                const s = slipFor(r)
+                return (
+                  <tr key={r.p.key} className={i % 2 ? 'bg-canvas/40' : ''}>
+                    <td className="px-3 py-2 font-medium text-navy">{r.p.full_name}<div className="text-[11px] font-normal text-status-neutral">{r.p.employee_no} · {r.p.department}{r.line.leavePay > 0 && <span className="text-status-good"> · {r.leave.paidDays}d leave paid</span>}</div></td>
+                    <td className="px-3 py-2 text-status-neutral">{s.dept_no || '—'}</td>
+                    <td className="px-3 py-2 text-right text-status-neutral">{r.line.gross.toLocaleString()}</td>
+                    <td className="px-3 py-2 text-right text-status-neutral">{r.line.totalDeductions.toLocaleString()}</td>
+                    <td className="px-3 py-2 text-right font-bold text-navy">{r.line.net.toLocaleString()}</td>
+                    <td className="px-3 py-2 text-right text-status-neutral">{r.leave.due}d</td>
+                    <td className="px-3 py-2">
+                      <div className="flex justify-end gap-1">
+                        <button onClick={() => setPreview(s)} title="Preview" className="rounded-lg border border-black/15 p-1.5 text-status-neutral hover:bg-canvas hover:text-navy"><Eye size={14} /></button>
+                        <button onClick={() => exportOne(r, 'pdf')} title="Export PDF" className="rounded-lg border border-black/15 p-1.5 text-status-neutral hover:bg-canvas hover:text-navy"><Printer size={14} /></button>
+                        <button onClick={() => exportOne(r, 'word')} title="Export Word" className="rounded-lg border border-black/15 p-1.5 text-status-neutral hover:bg-canvas hover:text-navy"><FileText size={14} /></button>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+              {rows.length === 0 && <tr><td colSpan={7} className="px-4 py-12 text-center text-sm text-status-neutral"><ReceiptText size={22} className="mx-auto mb-2 text-status-neutral/60" />No payslips for {monthLabel(month)}. Set salaries in the employee files to build the run.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <p className="text-[11px] text-status-neutral">
+        Year-to-date figures are projected from the standing salary — prior months of the tax year (or from the hire date, if later) are counted at the current rate, so a mid-year raise back-dates at the new figure. Once locked pay runs are stored, YTD will read from what was actually paid.
+      </p>
+
+      {preview && <PreviewModal slip={preview} template={template} onClose={() => setPreview(null)} />}
+    </div>
+  )
+}
+
+function TemplatePicker({ value, onChange }: { value: PayslipTemplate; onChange: (t: PayslipTemplate) => void }) {
+  return (
+    <div className="grid gap-2 sm:grid-cols-3">
+      {PAYSLIP_TEMPLATES.map((t) => (
+        <button key={t.key} onClick={() => onChange(t.key)}
+          className={`rounded-xl border px-3 py-2.5 text-left transition ${value === t.key ? 'border-brand bg-brand/5 ring-1 ring-brand/30' : 'border-black/10 bg-white hover:border-black/25'}`}>
+          <div className="flex items-center gap-1.5">
+            <span className={`grid h-3.5 w-3.5 place-items-center rounded-full border ${value === t.key ? 'border-brand' : 'border-black/25'}`}>
+              {value === t.key && <span className="h-1.5 w-1.5 rounded-full bg-brand" />}
+            </span>
+            <span className="text-sm font-semibold text-navy">{t.label}</span>
+          </div>
+          <p className="mt-1 text-[11px] leading-snug text-status-neutral">{t.blurb}</p>
+        </button>
+      ))}
+    </div>
+  )
+}
+
+// The slip is our own generated HTML — every value goes through esc() in payslipHtml.
+function PreviewModal({ slip, template, onClose }: { slip: Payslip; template: PayslipTemplate; onClose: () => void }) {
+  return (
+    <Modal open onClose={onClose} size="xl" title={`Payslip — ${slip.name}`} subtitle={`${slip.monthLabel} · ${slip.branchLabel} · ${PAYSLIP_TEMPLATES.find((t) => t.key === template)!.label} template`}
+      footer={<Button onClick={onClose}>Close</Button>}>
+      <style>{PAYSLIP_PREVIEW_CSS}</style>
+      <div className="pv overflow-x-auto rounded-lg border border-black/10 p-4" dangerouslySetInnerHTML={{ __html: payslipHtml(slip, template) }} />
+    </Modal>
+  )
+}

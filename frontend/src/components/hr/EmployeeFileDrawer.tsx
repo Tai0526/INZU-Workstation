@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { X, Save, FileText, Trash2, Plus, Paperclip, ShieldAlert, CalendarDays, Coins, User, Briefcase, Phone, DoorOpen, AlertTriangle, Banknote, FileClock, Settings2, Search } from 'lucide-react'
+import { X, Save, FileText, Trash2, Plus, Paperclip, ShieldAlert, CalendarDays, Coins, User, Briefcase, Phone, DoorOpen, AlertTriangle, Banknote, FileClock, Settings2, Search, Wallet } from 'lucide-react'
 import Button from '@/components/ui/Button'
 import StatusBadge from '@/components/ui/StatusBadge'
 import Modal from '@/components/ui/Modal'
@@ -18,6 +18,7 @@ import { useLeaveLedger, leaveBalance, leavePhase, LEAVE_TYPE_LABEL, type LeaveE
 import { assessRisk, RISK_META } from '@/lib/hr/analytics'
 import { useCases, DECISION_LABEL, INCIDENT_TYPE_META } from '@/lib/safety/cases'
 import { useDeductions } from '@/lib/payroll/deductions'
+import { deptNo, STANDARD_ALLOWANCES } from '@/lib/payroll/payslip'
 import { useSpeedEvents } from '@/lib/speed/store'
 import { countsAgainstDriver } from '@/lib/speed/types'
 import { useDriverLeave } from '@/lib/drivers/leave'
@@ -33,7 +34,7 @@ const TABS: { k: Tab; label: string }[] = [
 ]
 // Scalar (form-edited) fields; documents/events/contracts mutate the store directly,
 // so Save must not write them back from the stale form and clobber live additions.
-const SCALAR_KEYS: (keyof EmployeeFile)[] = ['national_id', 'dob', 'gender', 'marital_status', 'address', 'email', 'start_date', 'leave_opening', 'leave_opening_at', 'job_title', 'contract_type', 'tpin', 'napsa', 'bank_name', 'bank_branch', 'bank_account', 'next_of_kin', 'emergency_contacts', 'salary', 'exit', 'notes']
+const SCALAR_KEYS: (keyof EmployeeFile)[] = ['national_id', 'dob', 'gender', 'marital_status', 'address', 'email', 'start_date', 'leave_opening', 'leave_opening_at', 'job_title', 'contract_type', 'dept_no', 'tpin', 'napsa', 'pay_method', 'payment_type', 'bank_name', 'bank_branch', 'bank_account', 'next_of_kin', 'emergency_contacts', 'salary', 'exit', 'notes']
 const scalars = (x: EmployeeFile): Partial<EmployeeFile> => { const o: Partial<EmployeeFile> = {}; for (const k of SCALAR_KEYS) (o as any)[k] = x[k]; return o }
 
 export default function EmployeeFileDrawer({ person, canManage, onClose }: { person: HrPerson; canManage: boolean; onClose: () => void }) {
@@ -80,6 +81,13 @@ export default function EmployeeFileDrawer({ person, canManage, onClose }: { per
   const field = (k: keyof EmployeeFile, label: string, type = 'text') => (
     <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">{label}</span>
       <input type={type} disabled={!canManage} className={`${inputCls} disabled:bg-canvas disabled:text-status-neutral`} value={(f[k] as string) || ''} onChange={(e) => set(k, e.target.value as any)} /></label>
+  )
+  const pick = (k: keyof EmployeeFile, label: string, options: string[], fallback = '') => (
+    <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">{label}</span>
+      <select disabled={!canManage} className={`${inputCls} disabled:bg-canvas disabled:text-status-neutral`} value={(f[k] as string) || fallback} onChange={(e) => set(k, e.target.value as any)}>
+        {!fallback && <option value="">—</option>}
+        {options.map((o) => <option key={o} value={o}>{o}</option>)}
+      </select></label>
   )
 
   return (
@@ -134,8 +142,17 @@ export default function EmployeeFileDrawer({ person, canManage, onClose }: { per
                   {field('start_date', 'Start date (hired)', 'date')}
                   <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">Role / job title</span>
                     <input disabled={!canManage} className={`${inputCls} disabled:bg-canvas disabled:text-status-neutral`} value={f.job_title || person.role} onChange={(e) => set('job_title', e.target.value)} /></label>
+                  <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">Dept no</span>
+                    <input disabled={!canManage} className={`${inputCls} disabled:bg-canvas disabled:text-status-neutral`} value={f.dept_no} placeholder={deptNo(person.department, '') || '—'} onChange={(e) => set('dept_no', e.target.value)} /></label>
                   {field('tpin', 'TPIN (tax)')}
-                  {field('napsa', 'NAPSA / social security')}
+                  {field('napsa', 'NAPSA / social security no')}
+                </div>
+              </Section>
+              {/* Pay method, bank & account — printed on the payslip and exported as a group for the bank file. */}
+              <Section icon={Wallet} title="Payment details">
+                <div className="grid grid-cols-2 gap-2">
+                  {pick('pay_method', 'Pay method', ['Bank transfer', 'Cash', 'Mobile money', 'Cheque'])}
+                  {pick('payment_type', 'Payment type', ['Monthly salary', 'Weekly wage', 'Fortnightly', 'Contract', 'Casual'])}
                   {field('bank_name', 'Bank')}
                   {field('bank_branch', 'Bank branch code')}
                   {field('bank_account', 'Bank account')}
@@ -440,6 +457,18 @@ function SalaryTab({ salary, onChange, canManage, takenDays }: { salary: SalaryI
           ))}
           {canManage && <button onClick={() => set({ allowances: [...alw, { name: '', amount: 0 }] })} className="inline-flex items-center gap-1 rounded-lg border border-dashed border-navy/25 px-3 py-1.5 text-xs font-medium text-brand hover:border-brand"><Plus size={13} /> Add allowance</button>}
           {alw.length === 0 && !canManage && <p className="text-xs text-status-neutral">No allowances.</p>}
+          {/* The standard ones have a reserved payslip code, so they always print in the same place. */}
+          {canManage && (() => {
+            const missing = STANDARD_ALLOWANCES.filter((n) => !alw.some((a) => a.name.trim().toLowerCase() === n.toLowerCase()))
+            return missing.length ? (
+              <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                <span className="text-[11px] text-status-neutral">Quick add:</span>
+                {missing.map((n) => (
+                  <button key={n} onClick={() => set({ allowances: [...alw, { name: n, amount: 0 }] })} className="inline-flex items-center gap-0.5 rounded-full border border-black/15 px-2 py-0.5 text-[11px] font-medium text-navy hover:border-brand hover:text-brand"><Plus size={10} /> {n}</button>
+                ))}
+              </div>
+            ) : null
+          })()}
         </div>
         {(s.basic > 0 || alw.length > 0) && <div className="mt-2 flex items-center justify-between rounded-lg bg-canvas px-3 py-2 text-xs"><span className="text-status-neutral">Gross (basic + allowances)</span><b className="text-navy">{money(gross)}</b></div>}
       </Section>

@@ -56,9 +56,20 @@ export function computePaye(gross: number, bands: PayeBand[]): number {
   return Math.round(tax)
 }
 
+/**
+ * "Free pay" — the slice of gross that falls in the 0%-rated band (the tax-free
+ * threshold). Printed on payslips as Freepay; the rest of gross is what PAYE bites.
+ */
+export function freepay(gross: number, bands: PayeBand[]): number {
+  const first = bands[0]
+  if (!first || (first.rate || 0) !== 0) return 0
+  return Math.min(gross, first.upTo ?? Infinity)
+}
+
 export interface PayLine {
   basic: number
   allowances: number
+  leavePay: number    // leave days paid out this month × the grade's leave-day rate
   gross: number
   paye: number
   napsa: number
@@ -69,13 +80,16 @@ export interface PayLine {
   net: number
 }
 
-/** Compute a person's pay from their file salary + statutory config + pending fines. */
-export function computePay(basic: number, allowances: number, fines: number, t: TaxConfig): PayLine {
-  const gross = Math.max(0, (basic || 0) + (allowances || 0))
+/**
+ * Compute a person's pay from their file salary + statutory config + pending fines.
+ * `leavePay` is any leave days paid out in the month — it is part of gross and taxed.
+ */
+export function computePay(basic: number, allowances: number, fines: number, t: TaxConfig, leavePay = 0): PayLine {
+  const gross = Math.max(0, (basic || 0) + (allowances || 0) + (leavePay || 0))
   const paye = computePaye(gross, t.paye_bands)
   const napsa = Math.round(Math.min(gross * (t.napsa_rate || 0) / 100, t.napsa_ceiling || Infinity))
   const nhima = Math.round((basic || 0) * (t.nhima_rate || 0) / 100)
   const statutory = paye + napsa + nhima
   const totalDeductions = statutory + (fines || 0)
-  return { basic: basic || 0, allowances: allowances || 0, gross, paye, napsa, nhima, fines: fines || 0, statutory, totalDeductions, net: gross - totalDeductions }
+  return { basic: basic || 0, allowances: allowances || 0, leavePay: leavePay || 0, gross, paye, napsa, nhima, fines: fines || 0, statutory, totalDeductions, net: gross - totalDeductions }
 }

@@ -10,23 +10,30 @@ export const PAYRUN_COLUMNS: { key: string; label: string }[] = [
   { key: 'employee', label: 'Employee' },
   { key: 'employee_no', label: 'Employee No' },
   { key: 'department', label: 'Department' },
+  { key: 'dept_no', label: 'Dept no' },
+  { key: 'job_title', label: 'Job title' },
   { key: 'grade', label: 'Grade' },
   { key: 'nrc', label: 'National ID' },
+  { key: 'napsa_no', label: 'Social security no' },
+  { key: 'tpin', label: 'TPIN' },
+  { key: 'pay_method', label: 'Pay method' },
+  { key: 'payment_type', label: 'Payment type' },
   { key: 'bank', label: 'Bank' },
   { key: 'bank_branch', label: 'Bank branch code' },
   { key: 'bank_account', label: 'Bank account' },
   { key: 'basic', label: 'Basic' },
   { key: 'allowances', label: 'Allowances' },
+  { key: 'leavePay', label: 'Leave paid out' },
   { key: 'gross', label: 'Gross' },
   { key: 'paye', label: 'PAYE' },
   { key: 'napsa', label: 'NAPSA' },
-  { key: 'nhima', label: 'NHIMA' },
+  { key: 'nhima', label: 'NHIS' },
   { key: 'fines', label: 'Fines' },
   { key: 'net', label: 'Net' },
 ]
 export const PAYRUN_COLUMN_LABEL: Record<string, string> = Object.fromEntries(PAYRUN_COLUMNS.map((c) => [c.key, c.label]))
-export const PAYRUN_NUMERIC = new Set(['basic', 'allowances', 'gross', 'paye', 'napsa', 'nhima', 'fines', 'net'])
-export const DEFAULT_PAYRUN_COLS = ['employee', 'employee_no', 'department', 'grade', 'bank', 'bank_branch', 'bank_account', 'basic', 'allowances', 'gross', 'paye', 'napsa', 'nhima', 'fines', 'net']
+export const PAYRUN_NUMERIC = new Set(['basic', 'allowances', 'leavePay', 'gross', 'paye', 'napsa', 'nhima', 'fines', 'net'])
+export const DEFAULT_PAYRUN_COLS = ['employee', 'employee_no', 'department', 'grade', 'bank', 'bank_branch', 'bank_account', 'basic', 'allowances', 'leavePay', 'gross', 'paye', 'napsa', 'nhima', 'fines', 'net']
 
 const cfg = createSyncConfig<string[]>({
   key: 'payroll_export_cols', lsKey: 'inzu_payroll_export_cols', default: DEFAULT_PAYRUN_COLS,

@@ -109,6 +109,18 @@ export function leaveBalance(entries: LeaveEntry[], personId: string, opts: { op
   return { entitlement: ANNUAL_ENTITLEMENT, accrued, annualTaken, paidOut, adjust, balance: accrued - annualTaken - paidOut + adjust, since, openingBalance: opening }
 }
 
+/**
+ * Leave days paid out to a person — in a given month (`yyyy-mm`) or, with no month,
+ * across a whole year. Payroll turns these into a taxable "leave paid out" payment
+ * line on the payslip.
+ */
+export function leavePayoutDays(entries: LeaveEntry[], personId: string, opts: { month?: string; year?: number }): number {
+  return entries
+    .filter((e) => e.person_id === personId && e.kind === 'payout')
+    .filter((e) => (opts.month ? entryDate(e).slice(0, 7) === opts.month : Number(entryDate(e).slice(0, 4)) === opts.year))
+    .reduce((s, e) => s + (e.days || 0), 0)
+}
+
 /** Phase of a leave period relative to today: 'current' | 'upcoming' | 'ended' | 'none'. */
 export function leavePhase(period: { start: string; end: string } | null | undefined, todayISO: string): 'current' | 'upcoming' | 'ended' | 'none' {
   if (!period || !period.start) return 'none'

@@ -1,16 +1,14 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import * as XLSX from 'xlsx'
-import { Wallet, FileSpreadsheet, Search, Settings2, AlertTriangle, Columns3, ArrowUp, ArrowDown, X, Plus, RotateCcw } from 'lucide-react'
+import { Wallet, FileSpreadsheet, Search, Settings2, AlertTriangle, Columns3, ArrowUp, ArrowDown, X, Plus, RotateCcw, ReceiptText } from 'lucide-react'
 import { useAuth } from '@/auth/AuthContext'
 import { ROLES, BRANCHES } from '@/lib/roles'
 import { canEdit } from '@/lib/permissions'
 import Button from '@/components/ui/Button'
 import Modal from '@/components/ui/Modal'
-import { useHrPeople } from '@/lib/hr/directory'
-import { useEmployeeFiles, employeeFileStore, type EmployeeFile } from '@/lib/hr/employeeFile'
-import { useDeductions } from '@/lib/payroll/deductions'
-import { useTaxConfig, computePay } from '@/lib/payroll/tax'
+import { usePayRun, type PayRow } from '@/lib/payroll/run'
+import { deptNo } from '@/lib/payroll/payslip'
 import { usePayrunCols, payrunColsStore, PAYRUN_COLUMNS, PAYRUN_COLUMN_LABEL, PAYRUN_NUMERIC } from '@/lib/payroll/columns'
 
 const monthLabel = (ym: string) => { const [y, m] = ym.split('-').map(Number); return new Date(y, m - 1, 1).toLocaleDateString('en', { month: 'long', year: 'numeric' }) }
@@ -21,52 +19,40 @@ export default function PayRuns() {
   const branch = user!.branch
   const branchLabel = BRANCHES.find((b) => b.code === branch)!.short
 
-  const people = useHrPeople(branch).filter((p) => p.status === 'active')
-  useEmployeeFiles() // reactivity for salaries
-  const deductions = useDeductions().filter((d) => d.branch === branch && d.status === 'pending')
-  const tax = useTaxConfig()
-  const cur = tax.currency || 'ZMW'
-  const money = (n: number) => `${cur} ${Math.round(n).toLocaleString()}`
-
-  const cols = usePayrunCols()
   const canManage = canEdit(role, 'payroll')
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7))
   const [q, setQ] = useState('')
   const [colsOpen, setColsOpen] = useState(false)
 
-  const finesFor = (id: string, name: string) => deductions.filter((d) => (d.driver_id ? d.driver_id === id : d.driver_name === name)).reduce((s, d) => s + d.amount, 0)
+  const { rows: all, tax, unpriced } = usePayRun(branch, month)
+  const cur = tax.currency || 'ZMW'
+  const money = (n: number) => `${cur} ${Math.round(n).toLocaleString()}`
+  const cols = usePayrunCols()
 
-  type Row = { p: (typeof people)[number]; file: EmployeeFile; grade: string; line: ReturnType<typeof computePay> }
   const rows = useMemo(() => {
     const term = q.trim().toLowerCase()
-    return people
-      .map((p) => {
-        const file = employeeFileStore.for(p.id); const sal = file.salary
-        if (!sal || !(sal.basic > 0)) return null
-        const allowances = (sal.allowances ?? []).reduce((t, a) => t + (a.amount || 0), 0)
-        const line = computePay(sal.basic, allowances, finesFor(p.id, p.full_name), tax)
-        return { p, file, grade: sal.grade, line }
-      })
-      .filter(Boolean)
-      .filter((r) => !term || r!.p.full_name.toLowerCase().includes(term) || r!.p.department.toLowerCase().includes(term)) as Row[]
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [people, q, tax, deductions])
+    return term ? all.filter((r) => r.p.full_name.toLowerCase().includes(term) || r.p.department.toLowerCase().includes(term)) : all
+  }, [all, q])
 
   const totals = useMemo(() => rows.reduce((t, r) => ({
-    basic: t.basic + r.line.basic, allowances: t.allowances + r.line.allowances,
+    basic: t.basic + r.line.basic, allowances: t.allowances + r.line.allowances, leavePay: t.leavePay + r.line.leavePay,
     gross: t.gross + r.line.gross, paye: t.paye + r.line.paye, napsa: t.napsa + r.line.napsa,
     nhima: t.nhima + r.line.nhima, fines: t.fines + r.line.fines, net: t.net + r.line.net,
-  }), { basic: 0, allowances: 0, gross: 0, paye: 0, napsa: 0, nhima: 0, fines: 0, net: 0 } as Record<string, number>), [rows])
+  }), { basic: 0, allowances: 0, leavePay: 0, gross: 0, paye: 0, napsa: 0, nhima: 0, fines: 0, net: 0 } as Record<string, number>), [rows])
 
-  const unpriced = people.filter((p) => !(employeeFileStore.for(p.id).salary?.basic ?? 0)).length
-
-  const colValue = (key: string, r: Row): string | number => {
+  const colValue = (key: string, r: PayRow): string | number => {
     switch (key) {
       case 'employee': return r.p.full_name
       case 'employee_no': return r.p.employee_no
       case 'department': return r.p.department
+      case 'dept_no': return deptNo(r.p.department, r.file.dept_no)
+      case 'job_title': return r.file.job_title || r.p.role
       case 'grade': return r.grade || ''
       case 'nrc': return r.file.national_id || ''
+      case 'napsa_no': return r.file.napsa || ''
+      case 'tpin': return r.file.tpin || ''
+      case 'pay_method': return r.file.pay_method || (r.file.bank_account ? 'Bank transfer' : '')
+      case 'payment_type': return r.file.payment_type || 'Monthly salary'
       case 'bank': return r.file.bank_name || ''
       case 'bank_branch': return r.file.bank_branch || ''
       case 'bank_account': return r.file.bank_account || ''
@@ -95,9 +81,10 @@ export default function PayRuns() {
     <div className="page space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <p className="max-w-2xl text-sm text-status-neutral">
-          Pay run for <span className="font-medium text-navy">{branchLabel}</span> — <span className="font-medium text-navy">gross (basic + allowances) is read live from each employee's file</span>; PAYE, NAPSA &amp; NHIMA come from <Link to="/payroll/taxes" className="font-medium text-brand hover:underline">Payroll → Taxes</Link>, plus any pending incident fines. Set an employee's salary in HR → Employees → their file → Salary.
+          Pay run for <span className="font-medium text-navy">{branchLabel}</span> — <span className="font-medium text-navy">gross (basic + allowances) is read live from each employee's file</span>; PAYE, NAPSA &amp; NHIS come from <Link to="/payroll/taxes" className="font-medium text-brand hover:underline">Payroll → Taxes</Link>, plus any leave days paid out this month and any pending incident fines. Set an employee's salary in HR → Employees → their file → Salary.
         </p>
         <div className="flex flex-wrap gap-2">
+          <Link to="/payroll/payslips" className="inline-flex items-center gap-1.5 rounded-lg border border-black/15 px-3 py-2 text-sm font-medium text-navy hover:bg-canvas"><ReceiptText size={15} /> Payslips</Link>
           {canManage && <Button variant="secondary" onClick={() => setColsOpen(true)}><Columns3 size={15} /> Columns</Button>}
           <Button variant="secondary" onClick={exportXlsx} disabled={rows.length === 0}><FileSpreadsheet size={15} /> Export</Button>
         </div>
@@ -129,8 +116,9 @@ export default function PayRuns() {
               <tr>
                 <th className="px-3 py-2.5 font-medium">Employee</th><th className="px-3 py-2.5 font-medium">Grade</th>
                 <th className="px-3 py-2.5 text-right font-medium">Basic</th><th className="px-3 py-2.5 text-right font-medium">Allow.</th>
+                <th className="px-3 py-2.5 text-right font-medium">Leave pay</th>
                 <th className="px-3 py-2.5 text-right font-medium">Gross</th><th className="px-3 py-2.5 text-right font-medium">PAYE</th>
-                <th className="px-3 py-2.5 text-right font-medium">NAPSA</th><th className="px-3 py-2.5 text-right font-medium">NHIMA</th>
+                <th className="px-3 py-2.5 text-right font-medium">NAPSA</th><th className="px-3 py-2.5 text-right font-medium">NHIS</th>
                 <th className="px-3 py-2.5 text-right font-medium">Fines</th><th className="px-3 py-2.5 text-right font-medium">Net</th>
               </tr>
             </thead>
@@ -141,6 +129,7 @@ export default function PayRuns() {
                   <td className="px-3 py-2 text-status-neutral">{r.grade || '—'}</td>
                   <td className="px-3 py-2 text-right text-status-neutral">{r.line.basic.toLocaleString()}</td>
                   <td className="px-3 py-2 text-right text-status-neutral">{r.line.allowances ? r.line.allowances.toLocaleString() : '—'}</td>
+                  <td className="px-3 py-2 text-right text-status-neutral">{r.line.leavePay ? <span className="font-medium text-status-good" title={`${r.leave.paidDays} day(s) paid out`}>{r.line.leavePay.toLocaleString()}</span> : '—'}</td>
                   <td className="px-3 py-2 text-right font-medium text-navy">{r.line.gross.toLocaleString()}</td>
                   <td className="px-3 py-2 text-right text-status-neutral">{r.line.paye.toLocaleString()}</td>
                   <td className="px-3 py-2 text-right text-status-neutral">{r.line.napsa.toLocaleString()}</td>
@@ -149,12 +138,12 @@ export default function PayRuns() {
                   <td className="px-3 py-2 text-right font-bold text-navy">{r.line.net.toLocaleString()}</td>
                 </tr>
               ))}
-              {rows.length === 0 && <tr><td colSpan={10} className="px-4 py-12 text-center text-sm text-status-neutral"><Wallet size={22} className="mx-auto mb-2 text-status-neutral/60" />No priced employees. Set salaries in the employee files to build the run.</td></tr>}
+              {rows.length === 0 && <tr><td colSpan={11} className="px-4 py-12 text-center text-sm text-status-neutral"><Wallet size={22} className="mx-auto mb-2 text-status-neutral/60" />No priced employees. Set salaries in the employee files to build the run.</td></tr>}
             </tbody>
             {rows.length > 0 && (
               <tfoot>
                 <tr className="border-t-2 border-navy/20 bg-canvas font-bold text-navy">
-                  <td className="px-3 py-2" colSpan={4}>Total ({cur})</td>
+                  <td className="px-3 py-2" colSpan={5}>Total ({cur})</td>
                   <td className="px-3 py-2 text-right">{totals.gross.toLocaleString()}</td>
                   <td className="px-3 py-2 text-right">{totals.paye.toLocaleString()}</td>
                   <td className="px-3 py-2 text-right">{totals.napsa.toLocaleString()}</td>

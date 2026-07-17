@@ -12,6 +12,16 @@ export interface SalaryBand { id: string; grade: string; band: string; basic: nu
 export const leaveDayRate = (b: Pick<SalaryBand, 'leave_day_rate' | 'basic'> | null | undefined): number =>
   (b?.leave_day_rate && b.leave_day_rate > 0 ? b.leave_day_rate : b?.basic ? Math.round(b.basic / 22) : 0)
 
+/**
+ * The leave-day rate for an employee: their grade/band's configured rate, else
+ * their own basic ÷ 22. Used to cost leave and to pay leave days out on a payslip.
+ */
+export function leaveRateFor(sal: { grade: string; band: string; basic: number } | null | undefined, bands: SalaryBand[]): number {
+  if (!sal) return 0
+  const b = bands.find((x) => x.grade === sal.grade && x.band === sal.band) ?? bands.find((x) => x.grade === sal.grade)
+  return leaveDayRate(b) || (sal.basic ? Math.round(sal.basic / 22) : 0)
+}
+
 const newId = () => (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `band_${Date.now()}_${Math.round(Math.random() * 1e6)}`)
 const cfg = createSyncConfig<SalaryBand[]>({ key: 'salary_bands', lsKey: 'inzu_salary_bands', default: [] })
 
