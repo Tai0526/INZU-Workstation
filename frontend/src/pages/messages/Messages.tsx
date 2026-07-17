@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Search, Send, PenSquare, ArrowLeft, X, Paperclip, FileText, ExternalLink } from 'lucide-react'
+import { Search, Send, PenSquare, ArrowLeft, X, Paperclip, FileText, ExternalLink, Users, UserPlus, Check, LogOut, Pencil, Trash2 } from 'lucide-react'
 import clsx from 'clsx'
 import { useAuth } from '@/auth/AuthContext'
 import { useUsers } from '@/lib/auth/users'
@@ -8,8 +8,8 @@ import { ROLES, BRANCHES } from '@/lib/roles'
 import { putFile, viewFile, useFileUrl } from '@/lib/storage/fileStore'
 import {
   useMessaging, messagingStore, conversationsFor, otherParticipant,
-  initials, unreadCount, lastMessage,
-  type Attachment,
+  initials, unreadCount, lastMessage, isGroup, isGroupAdmin,
+  type Attachment, type Conversation,
 } from '@/lib/messaging/store'
 
 function timeShort(iso: string): string {
@@ -53,13 +53,27 @@ export default function Messages() {
   const [draft, setDraft] = useState('')
   const [pending, setPending] = useState<Attachment[]>([])
   const [composing, setComposing] = useState(false)
+  const [creatingGroup, setCreatingGroup] = useState(false)
+  const [groupInfo, setGroupInfo] = useState(false)
   const endRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
   const active = mine.find((c) => c.id === activeId) ?? null
-  const otherId = active ? otherParticipant(active, me) : null
-  const otherInfo = otherId ? info(otherId) : null
   const thread = active ? s.messages.filter((m) => m.conversationId === active.id).sort((a, b) => a.at.localeCompare(b.at)) : []
+
+  // How a conversation reads in the list and the header — a person for a direct
+  // thread, the group's name and who's in it for a group.
+  const nameOf = (id: string) => info(id).name
+  interface ConvView { title: string; sub: string; group: boolean; gone: boolean }
+  const view = (c: Conversation): ConvView => {
+    if (isGroup(c)) {
+      const others = c.participants.filter((p) => p !== me).map(nameOf)
+      const sub = others.length ? `${c.participants.length} members · ${others.slice(0, 3).join(', ')}${others.length > 3 ? ` +${others.length - 3}` : ''}` : 'Just you'
+      return { title: c.name || 'Group', sub, group: true, gone: false }
+    }
+    const p = info(otherParticipant(c, me))
+    return { title: p.name, sub: subline(p), group: false, gone: !p.exists }
+  }
 
   useEffect(() => {
     if (active) messagingStore.markRead(active.id, me)
@@ -68,9 +82,17 @@ export default function Messages() {
   }, [activeId, thread.length])
 
   const convos = mine
-    .map((c) => { const oid = otherParticipant(c, me); return { c, oid, p: info(oid), last: lastMessage(s, c.id), unread: unreadCount(s, c.id, me) } })
-    .filter(({ p }) => { const term = q.trim().toLowerCase(); return !term || `${p.name} ${p.role} ${p.branch}`.toLowerCase().includes(term) })
+    .map((c) => ({ c, v: view(c), last: lastMessage(s, c.id), unread: unreadCount(s, c.id, me) }))
+    .filter(({ v }) => { const term = q.trim().toLowerCase(); return !term || `${v.title} ${v.sub}`.toLowerCase().includes(term) })
     .sort((a, b) => (b.last?.at ?? '').localeCompare(a.last?.at ?? ''))
+
+  // "You: hi" for what someone typed; "Ann left the group" for a membership note.
+  const preview = (last: ReturnType<typeof lastMessage>): string => {
+    if (!last) return 'Start a conversation'
+    const body = last.text || ((last.attachments ?? []).length ? '📎 Attachment' : '')
+    if (last.system) return `${last.fromUserId === me ? 'You' : nameOf(last.fromUserId)} ${body}`
+    return `${last.fromUserId === me ? 'You: ' : ''}${body}`
+  }
 
   // Directory = every active user account on the system except me.
   const directory = useMemo(() => {
@@ -97,9 +119,14 @@ export default function Messages() {
     setPending((p) => [...p, ...added])
   }
   function send() {
-    if (!otherId || (!draft.trim() && pending.length === 0)) return
-    messagingStore.send(me, otherId, draft, pending)
+    if (!active || (!draft.trim() && pending.length === 0)) return
+    messagingStore.sendTo(active.id, me, draft, pending)
     setDraft(''); setPending([])
+  }
+
+  function createGroup(name: string, memberIds: string[]) {
+    setActiveId(messagingStore.createGroup(me, name, memberIds))
+    setCreatingGroup(false); setComposing(false); setPickQ('')
   }
 
   return (
@@ -123,50 +150,69 @@ export default function Messages() {
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto">
-            {convos.map(({ c, p, last, unread }) => (
+            {convos.map(({ c, v, last, unread }) => (
               <button key={c.id} onClick={() => setActiveId(c.id)}
                 className={clsx('flex w-full items-center gap-3 border-b border-black/5 px-3 py-3 text-left hover:bg-canvas', activeId === c.id && 'bg-canvas')}>
-                <Avatar name={p.name} />
+                <Avatar name={v.title} group={v.group} />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="truncate text-sm font-semibold text-navy">{p.name}</span>
+                    <span className="truncate text-sm font-semibold text-navy">{v.title}</span>
                     {last && <span className="shrink-0 text-[10px] text-status-neutral">{timeShort(last.at)}</span>}
                   </div>
-                  <div className="truncate text-[11px] text-status-neutral">{subline(p)}</div>
+                  <div className="truncate text-[11px] text-status-neutral">{v.sub}</div>
                   <div className="flex items-center gap-2">
-                    <span className={clsx('truncate text-xs', unread ? 'font-medium text-navy' : 'text-status-neutral')}>
-                      {last ? `${last.fromUserId === me ? 'You: ' : ''}${last.text || ((last.attachments ?? []).length ? '📎 Attachment' : '')}` : 'Start a conversation'}
-                    </span>
+                    <span className={clsx('truncate text-xs', unread ? 'font-medium text-navy' : 'text-status-neutral')}>{preview(last)}</span>
                     {unread > 0 && <span className="ml-auto h-2 w-2 shrink-0 rounded-full bg-brand" />}
                   </div>
                 </div>
               </button>
             ))}
-            {convos.length === 0 && <p className="px-4 py-8 text-center text-sm text-status-neutral">No conversations yet. Tap ✎ to message someone.</p>}
+            {convos.length === 0 && <p className="px-4 py-8 text-center text-sm text-status-neutral">No conversations yet. Tap ✎ to message someone or start a group.</p>}
           </div>
         </div>
 
         {/* ── Thread ── */}
         <div className={clsx('flex min-h-0 flex-col', !active && 'hidden md:flex')}>
-          {active && otherInfo ? (
+          {active ? (
             <>
               <div className="flex shrink-0 items-center gap-3 border-b border-black/10 px-4 py-3">
                 <button onClick={() => setActiveId(null)} className="rounded-md p-1 text-status-neutral hover:bg-canvas md:hidden"><ArrowLeft size={18} /></button>
-                <Avatar name={otherInfo.name} />
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold text-navy">{otherInfo.name}</div>
-                  <div className="truncate text-xs text-status-neutral">
-                    {otherInfo.exists ? subline(otherInfo) : 'This account no longer exists'}
+                {/* A group's header opens its members; a direct thread has nothing to manage. */}
+                <button
+                  onClick={() => isGroup(active) && setGroupInfo(true)}
+                  disabled={!isGroup(active)}
+                  className={clsx('flex min-w-0 items-center gap-3 rounded-lg px-1.5 py-1 text-left', isGroup(active) && 'hover:bg-canvas')}>
+                  <Avatar name={view(active).title} group={view(active).group} />
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold text-navy">{view(active).title}</div>
+                    <div className="truncate text-xs text-status-neutral">
+                      {view(active).gone ? 'This account no longer exists' : view(active).sub}
+                    </div>
                   </div>
-                </div>
-                <div className="ml-auto hidden text-right text-[11px] text-status-neutral sm:block">
-                  Messaging as<br /><span className="font-medium text-navy">{cleanName(user!.fullName)}</span>
-                </div>
+                </button>
+                {isGroup(active) && (
+                  <button onClick={() => setGroupInfo(true)} className="ml-auto rounded-lg border border-black/15 p-1.5 text-status-neutral hover:bg-canvas hover:text-navy" title="Group info"><Users size={15} /></button>
+                )}
+                {!isGroup(active) && (
+                  <div className="ml-auto hidden text-right text-[11px] text-status-neutral sm:block">
+                    Messaging as<br /><span className="font-medium text-navy">{cleanName(user!.fullName)}</span>
+                  </div>
+                )}
               </div>
 
               <div className="min-h-0 flex-1 space-y-2 overflow-y-auto bg-canvas/40 px-4 py-4">
                 {thread.map((m) => {
                   const isMine = m.fromUserId === me
+                  // "Ann added Ben" — a membership note, not something anyone typed.
+                  if (m.system) {
+                    return (
+                      <div key={m.id} className="flex justify-center">
+                        <span className="rounded-full bg-white/70 px-3 py-1 text-[11px] text-status-neutral">
+                          <b className="font-medium text-navy">{isMine ? 'You' : nameOf(m.fromUserId)}</b> {m.text} · {timeShort(m.at)}
+                        </span>
+                      </div>
+                    )
+                  }
                   return (
                     <div key={m.id} className={clsx('flex', isMine ? 'justify-end' : 'justify-start')}>
                       <div className={clsx('max-w-[78%] rounded-2xl px-3.5 py-2 text-sm', isMine ? 'rounded-br-sm bg-navy text-white' : 'rounded-bl-sm bg-white text-navy shadow-card')}>
@@ -226,6 +272,15 @@ export default function Messages() {
               </div>
             </div>
             <div className="max-h-80 overflow-y-auto p-2">
+              <button onClick={() => { setComposing(false); setPickQ(''); setCreatingGroup(true) }}
+                className="mb-1 flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left hover:bg-canvas">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-navy text-white"><Users size={16} /></span>
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-navy">New group</div>
+                  <div className="truncate text-[11px] text-status-neutral">Name it and pick who's in</div>
+                </div>
+              </button>
+              <div className="mx-3 mb-1 border-t border-black/5" />
               {directory.map((u) => {
                 const branch = ROLES[u.role]?.crossBranch ? 'All branches' : (BRANCHES.find((b) => b.code === u.branch)?.short ?? '')
                 return (
@@ -247,7 +302,194 @@ export default function Messages() {
           </div>
         </div>
       )}
+
+      {creatingGroup && (
+        <GroupCreateModal
+          people={users.filter((u) => u.active && u.id !== me).map((u) => ({ id: u.id, name: cleanName(u.full_name), sub: subline(info(u.id)) }))}
+          onCreate={createGroup}
+          onClose={() => setCreatingGroup(false)}
+        />
+      )}
+
+      {groupInfo && active && isGroup(active) && (
+        <GroupInfoModal
+          conv={active} me={me} nameOf={nameOf}
+          people={users.filter((u) => u.active).map((u) => ({ id: u.id, name: cleanName(u.full_name), sub: subline(info(u.id)) }))}
+          onLeave={() => { messagingStore.leaveGroup(active.id, me); setGroupInfo(false); setActiveId(null) }}
+          onClose={() => setGroupInfo(false)}
+        />
+      )}
     </div>
+  )
+}
+
+interface Pick { id: string; name: string; sub: string }
+
+/** Shell shared by both group modals so they look and behave the same. */
+function Sheet({ title, onClose, children, footer }: { title: string; onClose: () => void; children: React.ReactNode; footer?: React.ReactNode }) {
+  return (
+    <div className="fixed inset-0 z-[100] flex items-start justify-center bg-navy/40 p-4 pt-20" onClick={onClose}>
+      <div className="flex max-h-[80vh] w-full max-w-md flex-col rounded-2xl bg-surface shadow-cardhover" onClick={(e) => e.stopPropagation()}>
+        <div className="flex shrink-0 items-center border-b border-black/10 px-4 py-3">
+          <h3 className="font-display text-sm font-bold text-navy">{title}</h3>
+          <button onClick={onClose} className="ml-auto rounded-md p-1 text-status-neutral hover:bg-canvas"><X size={18} /></button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
+        {footer && <div className="shrink-0 border-t border-black/10 px-4 py-3">{footer}</div>}
+      </div>
+    </div>
+  )
+}
+
+function PersonRow({ p, right, onClick }: { p: Pick; right?: React.ReactNode; onClick?: () => void }) {
+  const Tag = onClick ? 'button' : 'div'
+  return (
+    <Tag onClick={onClick} className={clsx('flex w-full items-center gap-3 px-4 py-2 text-left', onClick && 'hover:bg-canvas')}>
+      <Avatar name={p.name} />
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-sm font-medium text-navy">{p.name}</div>
+        <div className="truncate text-[11px] text-status-neutral">{p.sub}</div>
+      </div>
+      {right}
+    </Tag>
+  )
+}
+
+/** Name the group, tick who's in it. Both are required before Create enables. */
+function GroupCreateModal({ people, onCreate, onClose }: { people: Pick[]; onCreate: (name: string, ids: string[]) => void; onClose: () => void }) {
+  const [name, setName] = useState('')
+  const [sel, setSel] = useState<Set<string>>(new Set())
+  const [q, setQ] = useState('')
+  const shown = people.filter((p) => { const t = q.trim().toLowerCase(); return !t || `${p.name} ${p.sub}`.toLowerCase().includes(t) })
+  const toggle = (id: string) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
+  const ready = !!name.trim() && sel.size > 0
+
+  return (
+    <Sheet title="New group" onClose={onClose}
+      footer={
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] text-status-neutral">{sel.size} selected</span>
+          <button onClick={() => ready && onCreate(name, [...sel])} disabled={!ready}
+            className="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-navy px-3 py-2 text-sm font-medium text-white hover:bg-navy-secondary disabled:opacity-40">
+            <Check size={15} /> Create group
+          </button>
+        </div>
+      }>
+      <div className="space-y-2 border-b border-black/10 px-4 py-3">
+        <label className="block">
+          <span className="mb-1 block text-[11px] font-medium text-navy">Group name</span>
+          <input autoFocus value={name} onChange={(e) => setName(e.target.value)} maxLength={60} placeholder="e.g. Trident Workshop"
+            className="w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm outline-none focus:border-brand" />
+        </label>
+        <div className="relative">
+          <Search size={14} className="pointer-events-none absolute left-2.5 top-2.5 text-status-neutral" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search people to add"
+            className="w-full rounded-lg border border-black/15 bg-white py-1.5 pl-8 pr-3 text-sm outline-none focus:border-brand" />
+        </div>
+      </div>
+      <div className="py-1">
+        {shown.map((p) => (
+          <PersonRow key={p.id} p={p} onClick={() => toggle(p.id)}
+            right={<span className={clsx('flex h-5 w-5 shrink-0 items-center justify-center rounded-md border', sel.has(p.id) ? 'border-navy bg-navy text-white' : 'border-black/25')}>
+              {sel.has(p.id) && <Check size={13} />}
+            </span>} />
+        ))}
+        {shown.length === 0 && <p className="px-4 py-8 text-center text-sm text-status-neutral">{q ? 'No users match.' : 'No other user accounts yet.'}</p>}
+      </div>
+    </Sheet>
+  )
+}
+
+/** Members, plus rename / add / remove for the admin and Leave for everyone. */
+function GroupInfoModal({ conv, me, people, nameOf, onLeave, onClose }: {
+  conv: Conversation; me: string; people: Pick[]; nameOf: (id: string) => string; onLeave: () => void; onClose: () => void
+}) {
+  const admin = isGroupAdmin(conv, me)
+  const [renaming, setRenaming] = useState(false)
+  const [name, setName] = useState(conv.name)
+  const [adding, setAdding] = useState(false)
+  const [q, setQ] = useState('')
+
+  const byId = useMemo(() => Object.fromEntries(people.map((p) => [p.id, p])), [people])
+  const members = conv.participants.map((id) => byId[id] ?? { id, name: nameOf(id), sub: 'Removed user' })
+  const candidates = people
+    .filter((p) => !conv.participants.includes(p.id))
+    .filter((p) => { const t = q.trim().toLowerCase(); return !t || `${p.name} ${p.sub}`.toLowerCase().includes(t) })
+
+  function saveName() {
+    messagingStore.renameGroup(conv.id, me, name)
+    setRenaming(false)
+  }
+
+  if (adding) {
+    return (
+      <Sheet title="Add members" onClose={() => { setAdding(false); setQ('') }}>
+        <div className="border-b border-black/10 px-4 py-3">
+          <div className="relative">
+            <Search size={14} className="pointer-events-none absolute left-2.5 top-2.5 text-status-neutral" />
+            <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search people"
+              className="w-full rounded-lg border border-black/15 bg-white py-1.5 pl-8 pr-3 text-sm outline-none focus:border-brand" />
+          </div>
+        </div>
+        <div className="py-1">
+          {candidates.map((p) => (
+            <PersonRow key={p.id} p={p} onClick={() => { messagingStore.addMembers(conv.id, me, [p.id], nameOf); setAdding(false); setQ('') }}
+              right={<UserPlus size={15} className="shrink-0 text-brand" />} />
+          ))}
+          {candidates.length === 0 && <p className="px-4 py-8 text-center text-sm text-status-neutral">{q ? 'No users match.' : 'Everyone is already in this group.'}</p>}
+        </div>
+      </Sheet>
+    )
+  }
+
+  return (
+    <Sheet title="Group info" onClose={onClose}
+      footer={
+        <button onClick={onLeave} className="inline-flex items-center gap-1.5 rounded-lg border border-status-critical/30 px-3 py-2 text-sm font-medium text-status-critical hover:bg-status-critical/5">
+          <LogOut size={15} /> Leave group
+        </button>
+      }>
+      <div className="border-b border-black/10 px-4 py-3">
+        {renaming ? (
+          <div className="flex items-center gap-2">
+            <input autoFocus value={name} onChange={(e) => setName(e.target.value)} maxLength={60}
+              onKeyDown={(e) => { if (e.key === 'Enter') saveName(); if (e.key === 'Escape') { setName(conv.name); setRenaming(false) } }}
+              className="flex-1 rounded-lg border border-black/15 bg-white px-3 py-2 text-sm outline-none focus:border-brand" />
+            <button onClick={saveName} disabled={!name.trim()} className="rounded-lg bg-navy p-2 text-white hover:bg-navy-secondary disabled:opacity-40"><Check size={15} /></button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-3">
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-navy text-white"><Users size={19} /></span>
+            <div className="min-w-0 flex-1">
+              <div className="truncate font-display text-base font-bold text-navy">{conv.name}</div>
+              <div className="text-[11px] text-status-neutral">{conv.participants.length} member{conv.participants.length === 1 ? '' : 's'}</div>
+            </div>
+            {admin && <button onClick={() => { setName(conv.name); setRenaming(true) }} className="rounded-lg border border-black/15 p-1.5 text-status-neutral hover:bg-canvas hover:text-navy" title="Rename group"><Pencil size={14} /></button>}
+          </div>
+        )}
+      </div>
+
+      <div className="flex items-center gap-2 px-4 pt-3 text-[11px] font-semibold uppercase tracking-wide text-status-neutral">
+        Members
+        {admin && <button onClick={() => setAdding(true)} className="ml-auto inline-flex items-center gap-1 rounded-full border border-dashed border-brand/40 px-2 py-0.5 text-[11px] font-medium normal-case tracking-normal text-brand hover:border-brand"><UserPlus size={12} /> Add</button>}
+      </div>
+      <div className="py-1">
+        {members.map((p) => (
+          <PersonRow key={p.id} p={p}
+            right={
+              <span className="flex shrink-0 items-center gap-2">
+                {p.id === conv.createdBy && <span className="rounded-full bg-brand/10 px-2 py-0.5 text-[10px] font-medium text-brand">Admin</span>}
+                {p.id === me && <span className="text-[10px] text-status-neutral">You</span>}
+                {admin && p.id !== me && (
+                  <button onClick={() => messagingStore.removeMember(conv.id, me, p.id, nameOf)} title={`Remove ${p.name}`}
+                    className="rounded p-1 text-status-neutral hover:bg-status-critical/10 hover:text-status-critical"><Trash2 size={13} /></button>
+                )}
+              </span>
+            } />
+        ))}
+      </div>
+      {!admin && <p className="px-4 pb-3 pt-1 text-[11px] text-status-neutral">Only {nameOf(conv.createdBy) || 'the group admin'} can rename this group or change who's in it.</p>}
+    </Sheet>
   )
 }
 
@@ -275,6 +517,7 @@ function AttachmentView({ a, mine }: { a: Attachment; mine: boolean }) {
   )
 }
 
-function Avatar({ name }: { name: string }) {
+function Avatar({ name, group }: { name: string; group?: boolean }) {
+  if (group) return <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-navy text-white"><Users size={16} /></div>
   return <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand/15 font-display text-xs font-bold text-brand">{initials(name)}</div>
 }
