@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ChevronLeft, ChevronRight, CalendarDays, Search, Users, Plus, Trash2, ArrowRight, UsersRound } from 'lucide-react'
+import { ChevronLeft, ChevronRight, CalendarDays, Search, Users, Plus, Trash2, ArrowRight, UsersRound, Plane } from 'lucide-react'
 import clsx from 'clsx'
 import { useAuth } from '@/auth/AuthContext'
-import { ROLES, BRANCHES } from '@/lib/roles'
+import { ROLES, BRANCHES, type BranchCode } from '@/lib/roles'
 import { canEdit } from '@/lib/permissions'
 import Modal from '@/components/ui/Modal'
 import Button from '@/components/ui/Button'
@@ -11,10 +11,13 @@ import { useEmployees } from '@/lib/hr/store'
 import type { Employee } from '@/lib/hr/types'
 import { useMechRoster, mechRosterStore } from '@/lib/workshop/store'
 import { type MechShiftKind, SHIFT_LABEL, crewOnDate } from '@/lib/workshop/types'
-import { useEmployeeLeave, empOnLeave } from '@/lib/hr/leave'
+import { useEmployeeLeave, empOnLeave, empLeaveStore } from '@/lib/hr/leave'
+import { useLeaveLedger, leaveBalance, leaveLedgerStore, LEAVE_TYPES, LEAVE_TYPE_LABEL, DRAWS_BALANCE, type LeaveType, type LeaveEntry } from '@/lib/hr/leaveLedger'
+import { employeeFileStore, useEmployeeFiles } from '@/lib/hr/employeeFile'
 
 const pad = (n: number) => String(n).padStart(2, '0')
 const todayStr = () => new Date().toISOString().slice(0, 10)
+const addDaysISO = (iso: string, n: number) => { const d = new Date(`${iso}T00:00:00`); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10) }
 const KIND_CELL: Record<MechShiftKind, string> = { day: 'bg-[#FCEAD3] text-[#8a4513]', night: 'bg-[#DDE4F3] text-[#283a66]' }
 const REST_CELL = 'bg-white text-status-neutral/40'
 const LEAVE_CELL = 'bg-[#E7E0F5] text-[#5b4a86]'
@@ -29,6 +32,11 @@ export default function MechanicsSchedule() {
   const allMechs = useEmployees().filter((e) => e.branch === branch && e.status === 'active' && e.job_role === 'Mechanic')
   const roster = useMechRoster()
   useEmployeeLeave()
+  const ledger = useLeaveLedger().filter((e) => e.branch === branch)
+  useEmployeeFiles()
+  // Workshop Supervisor sets crews & leave; Asst Ops / Ops can also set mechanic leave.
+  const canLeave = canManage || role === 'asst_operations_manager' || role === 'operations_manager'
+  const balOf = (id: string) => { const fl = employeeFileStore.for(id); return leaveBalance(ledger, id, { openingBalance: fl.leave_opening, openingAt: fl.leave_opening_at, asOf: todayStr() }) }
   const crews = roster.crews
 
   const [q, setQ] = useState('')
@@ -77,7 +85,7 @@ export default function MechanicsSchedule() {
     <div className="page space-y-5">
       <p className="max-w-3xl text-sm text-status-neutral">
         Mechanics' work/rest across the month for <span className="font-medium text-navy">{branchLabel}</span> — each crew runs a <span className="font-medium text-navy">14 on / 7 off</span> rotation.
-        Mechanics come from <Link to="/hr/employees" className="font-medium text-brand hover:underline">HR → Employees</Link>; leave shows from HR. {canManage && 'Set up crews, then click a mechanic to put them on one.'}
+        Mechanics come from <Link to="/hr/employees" className="font-medium text-brand hover:underline">HR → Employees</Link>. {(canManage || canLeave) && 'Click a mechanic to set their crew or leave — the leave balance shows next to each name.'}
       </p>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -126,9 +134,9 @@ export default function MechanicsSchedule() {
                 {mechanics.map(({ m, crew }) => (
                   <tr key={m.id} className="border-b border-black/5">
                     <td className="sticky left-0 z-10 bg-surface px-3 py-1.5">
-                      <button onClick={() => canManage && setAssigning(m)} className={clsx('block max-w-[170px] text-left', canManage && 'hover:text-brand')} disabled={!canManage}>
+                      <button onClick={() => (canManage || canLeave) && setAssigning(m)} className={clsx('block max-w-[190px] text-left', (canManage || canLeave) && 'hover:text-brand')} disabled={!canManage && !canLeave}>
                         <span className="block truncate text-[13px] font-medium text-navy">{m.full_name}</span>
-                        <span className="block truncate text-[10px] text-status-neutral">{crew ? `${crew.name} · ${SHIFT_LABEL[crew.shift]}` : 'Unassigned'}</span>
+                        <span className="block truncate text-[10px] text-status-neutral">{crew ? `${crew.name} · ${SHIFT_LABEL[crew.shift]}` : 'Unassigned'} · <span className={balOf(m.id).balance <= 0 ? 'text-status-critical' : 'text-status-good'}>{balOf(m.id).balance}d leave</span></span>
                       </button>
                     </td>
                     {days.map((d, i) => {
@@ -162,7 +170,7 @@ export default function MechanicsSchedule() {
       {!canManage && allMechs.length > 0 && <p className="text-xs text-status-neutral">View only — the Workshop Supervisor sets crews &amp; the roster.</p>}
 
       <SetupCrewsModal open={crewsOpen} onClose={() => setCrewsOpen(false)} />
-      <AssignCrewModal mech={assigning} onClose={() => setAssigning(null)} />
+      <MechanicModal mech={assigning} onClose={() => setAssigning(null)} canManage={canManage} canLeave={canLeave} branch={branch} ledger={ledger} />
     </div>
   )
 }
@@ -210,29 +218,75 @@ function SetupCrewsModal({ open, onClose }: { open: boolean; onClose: () => void
   )
 }
 
-function AssignCrewModal({ mech, onClose }: { mech: Employee | null; onClose: () => void }) {
+function MechanicModal({ mech, onClose, canManage, canLeave, branch, ledger }: { mech: Employee | null; onClose: () => void; canManage: boolean; canLeave: boolean; branch: BranchCode; ledger: LeaveEntry[] }) {
   const roster = useMechRoster()
+  useEmployeeLeave()
+  const today = todayStr()
   const [sel, setSel] = useState('')
+  const [ltype, setLtype] = useState<LeaveType>('annual')
+  const [lstart, setLstart] = useState(today)
+  const [ldays, setLdays] = useState(7)
   const [key, setKey] = useState('')
-  if (mech && key !== mech.id) { setKey(mech.id); setSel(mechRosterStore.crewOf(mech.id)?.id || '') }
+  if (mech && key !== mech.id) { setKey(mech.id); setSel(mechRosterStore.crewOf(mech.id)?.id || ''); setLtype('annual'); setLstart(today); setLdays(7) }
   if (!mech) return null
-  function save() { mechRosterStore.assign(mech!.id, sel); onClose() }
+  const existing = empLeaveStore.for(mech.id)
+  const fl = employeeFileStore.for(mech.id)
+  const bal = leaveBalance(ledger, mech.id, { openingBalance: fl.leave_opening, openingAt: fl.leave_opening_at, asOf: today })
+  const n = Math.max(1, Number(ldays) || 1)
+  const end = addDaysISO(lstart, n - 1)
+  const over = DRAWS_BALANCE.includes(ltype) && n > bal.balance
+  function saveCrew() { mechRosterStore.assign(mech!.id, sel); onClose() }
+  function setLeave() {
+    if (over) return
+    empLeaveStore.set(mech!.id, lstart, end, '')
+    if (!existing) leaveLedgerStore.add({ branch, person_id: mech!.id, person_name: mech!.full_name, source: 'emp', kind: 'leave', type: ltype, start: lstart, end, days: n, note: '', attachment: null })
+    onClose()
+  }
+  function endLeave() { empLeaveStore.clear(mech!.id); onClose() }
   return (
-    <Modal open={!!mech} onClose={onClose} title={`Crew — ${mech.full_name}`} subtitle="Put this mechanic on a crew; their month roster follows the crew's rotation."
-      footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={save}>Save</Button></>}>
-      <div className="space-y-2">
-        {roster.crews.map((c) => (
-          <label key={c.id} className={clsx('flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2.5 text-sm', sel === c.id ? 'border-brand bg-brand-tint/40' : 'border-black/10 hover:bg-canvas')}>
-            <input type="radio" name="crew" checked={sel === c.id} onChange={() => setSel(c.id)} className="accent-brand" />
-            <span className="flex-1"><span className="font-medium text-navy">{c.name}</span> <span className="text-status-neutral">· {SHIFT_LABEL[c.shift]} · {c.onDays} on / {c.offDays} off · from {c.start}</span></span>
-          </label>
-        ))}
-        <label className={clsx('flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2.5 text-sm', sel === '' ? 'border-brand bg-brand-tint/40' : 'border-black/10 hover:bg-canvas')}>
-          <input type="radio" name="crew" checked={sel === ''} onChange={() => setSel('')} className="accent-brand" />
-          <span className="flex-1 text-status-neutral">Unassigned (rest)</span>
-        </label>
-        {roster.crews.length === 0 && <p className="text-[11px] text-status-neutral">No crews yet — add some in “Set up crews”.</p>}
+    <Modal open={!!mech} onClose={onClose} title={mech.full_name} subtitle="Crew assignment and leave" footer={<Button variant="secondary" onClick={onClose}>Close</Button>}>
+      <div className="mb-3 grid grid-cols-3 gap-2 text-center">
+        <div className="rounded-xl border border-black/10 bg-white px-3 py-2"><div className="text-lg font-bold text-navy">{bal.accrued}</div><div className="text-[11px] text-status-neutral">Accrued</div></div>
+        <div className="rounded-xl border border-black/10 bg-white px-3 py-2"><div className="text-lg font-bold text-navy">{bal.annualTaken}</div><div className="text-[11px] text-status-neutral">Taken</div></div>
+        <div className="rounded-xl border border-black/10 bg-white px-3 py-2"><div className={`text-lg font-bold ${bal.balance <= 0 ? 'text-status-critical' : 'text-status-good'}`}>{bal.balance}</div><div className="text-[11px] text-status-neutral">Balance</div></div>
       </div>
+
+      {canManage && (
+        <div className="mb-3 rounded-lg border border-black/10 p-3">
+          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-status-neutral">Crew</div>
+          <div className="space-y-2">
+            {roster.crews.map((c) => (
+              <label key={c.id} className={clsx('flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2 text-sm', sel === c.id ? 'border-brand bg-brand-tint/40' : 'border-black/10 hover:bg-canvas')}>
+                <input type="radio" name="crew" checked={sel === c.id} onChange={() => setSel(c.id)} className="accent-brand" />
+                <span className="flex-1"><span className="font-medium text-navy">{c.name}</span> <span className="text-status-neutral">· {SHIFT_LABEL[c.shift]} · {c.onDays} on / {c.offDays} off</span></span>
+              </label>
+            ))}
+            <label className={clsx('flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2 text-sm', sel === '' ? 'border-brand bg-brand-tint/40' : 'border-black/10 hover:bg-canvas')}>
+              <input type="radio" name="crew" checked={sel === ''} onChange={() => setSel('')} className="accent-brand" />
+              <span className="flex-1 text-status-neutral">Unassigned (rest)</span>
+            </label>
+            {roster.crews.length === 0 && <p className="text-[11px] text-status-neutral">No crews yet — add some in “Set up crews”.</p>}
+          </div>
+          <div className="mt-2 flex justify-end"><Button variant="secondary" onClick={saveCrew}>Save crew</Button></div>
+        </div>
+      )}
+
+      {canLeave && (
+        <div className="rounded-lg border border-black/10 p-3">
+          <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-status-neutral"><Plane size={13} className="text-brand" /> Leave</div>
+          {existing && <div className="mb-2 flex items-center gap-2 rounded-lg bg-status-warning/10 px-3 py-2 text-[11px] text-[#8a6d10]">Currently on leave: <b>{existing.start} → {existing.end}</b><button onClick={endLeave} className="ml-auto font-medium text-status-critical hover:underline">End</button></div>}
+          <div className="grid grid-cols-3 gap-2">
+            <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">Type</span><select className={`${cellCls} w-full`} value={ltype} onChange={(e) => setLtype(e.target.value as LeaveType)}>{LEAVE_TYPES.map((t) => <option key={t} value={t}>{LEAVE_TYPE_LABEL[t]}</option>)}</select></label>
+            <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">Start</span><input type="date" className={`${cellCls} w-full`} value={lstart} onChange={(e) => setLstart(e.target.value)} /></label>
+            <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">Days</span><input type="number" min={1} className={`${cellCls} w-full`} value={ldays} onChange={(e) => setLdays(Number(e.target.value))} /></label>
+          </div>
+          <div className="mt-2 flex items-center gap-2">
+            <span className="text-[11px] text-status-neutral">{lstart} → {end} · {n}d{DRAWS_BALANCE.includes(ltype) ? ` · leaves ${bal.balance - n}` : ''}</span>
+            <Button className="ml-auto" onClick={setLeave} disabled={over}>{existing ? 'Update leave' : 'Set leave'}</Button>
+          </div>
+          {over && <p className="mt-1 text-[11px] font-semibold text-status-critical">Exceeds the {bal.balance}-day annual balance — reduce the days or use unpaid leave.</p>}
+        </div>
+      )}
     </Modal>
   )
 }
