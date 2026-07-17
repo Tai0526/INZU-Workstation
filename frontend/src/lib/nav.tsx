@@ -103,9 +103,9 @@ export const NAV: NavNode[] = [
   {
     module: 'payroll', label: 'Payroll', icon: Wallet,
     pages: [
-      { label: 'Overview', path: '/payroll', blurb: 'Upcoming pay run snapshot, current tax liability, and payroll cost trend.' },
-      { label: 'Pay Runs', path: '/payroll/runs', blurb: 'Three-step chain: Payroll Officer submits → Operations Manager reviews → Managing Director lock-approves.' },
-      { label: 'Taxes', path: '/payroll/taxes', blurb: 'NAPSA, NHIMA, SDL rates and the PAYE band table — changes apply on the next run, not retroactively.' },
+      { label: 'Overview', path: '/payroll', blurb: 'Monthly pay run computed live from each employee file — gross (basic + allowances), PAYE/NAPSA/NHIMA and incident fines, with net and branch totals.' },
+      { label: 'Pay Runs', path: '/payroll/runs', blurb: 'Per-employee pay from their file salary + statutory deductions + pending fines; net pay and totals, exportable to Excel.' },
+      { label: 'Taxes', path: '/payroll/taxes', blurb: 'NAPSA, NHIMA and the PAYE band table (Zambian defaults) — changes apply on the next computed run, not retroactively.' },
       { label: 'Approvals', path: '/payroll/approvals', blurb: 'Dedicated queue of runs awaiting Ops review or MD lock-approval.' },
       { label: 'Payslips', path: '/payroll/payslips', blurb: 'Generated payslips per employee per run, with customisable templates.' },
       { label: 'Reports', path: '/payroll/reports', blurb: 'Payroll summary, employee pay summary, salary statement, deductions and tax summaries.' },
