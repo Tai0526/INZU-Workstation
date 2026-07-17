@@ -220,43 +220,103 @@ export function createSyncConfig<T>(opts: { key: string; lsKey: string; default:
   return isSupabaseConfigured && supabase ? supabaseConfig(opts) : localConfig(opts)
 }
 
-function supabaseConfig<T>({ key, default: def, merge }: { key: string; lsKey: string; default: T; merge?: (saved: T) => T }): SyncConfig<T> {
+/**
+ * Config rows carry as much real work as the tables do — job cards, checklists,
+ * monthly inspections, employee files, the leave ledger, messaging — so they get
+ * the SAME durability as createSyncTable: the un-acknowledged value is mirrored to
+ * a localStorage outbox (so closing the tab mid-save can't lose it), a transient
+ * failure is retried instead of dropped, and only a permanent rejection reverts to
+ * server truth. Every failure is reported to the user (see components/SyncStatus).
+ *
+ * Previously ANY error — including a momentary network blip — quietly re-fetched
+ * the server value, throwing the local edit away with nothing but a console line.
+ */
+function supabaseConfig<T>({ key, lsKey, default: def, merge }: { key: string; lsKey: string; default: T; merge?: (saved: T) => T }): SyncConfig<T> {
   const db = supabase!
+  const OUTBOX = `${lsKey}:outbox`
   let cache: T = def
   let started = false
   let hydrating = false
   let lastHydrateAt = 0
-  let saving = 0 // in-flight set() saves; while > 0 a hydrate must not clobber the local value
+  // The latest value written locally but not yet acknowledged by the server.
+  let pending: { value: T } | null = null
+  let flushing = false
+  let flushAgain = false
+  let retryTimer: ReturnType<typeof setTimeout> | null = null
   const listeners = new Set<() => void>()
   const emit = () => listeners.forEach((l) => l())
   const apply = (saved: T | null | undefined) => { cache = saved == null ? def : (merge ? merge(saved) : saved); emit() }
+
+  function saveOutbox() {
+    try {
+      if (pending) localStorage.setItem(OUTBOX, JSON.stringify(pending.value))
+      else localStorage.removeItem(OUTBOX)
+    } catch { /* storage full / unavailable — best effort */ }
+  }
+  function loadOutbox() {
+    try { const raw = localStorage.getItem(OUTBOX); if (raw) pending = { value: JSON.parse(raw) as T } } catch { /* corrupt outbox */ }
+  }
 
   async function hydrate() {
     hydrating = true
     const { data, error } = await db.from(CONFIG_TABLE).select('value').eq('key', key).maybeSingle()
     hydrating = false
     lastHydrateAt = Date.now()
-    if (saving > 0) return // an unsaved local change is in flight — don't overwrite it with stale server state
-    if (!error) apply((data?.value as T) ?? null)
-    else console.error(`[config:${key}] load failed:`, error.message)
+    if (error) { console.error(`[config:${key}] load failed:`, error.message); return }
+    // A local change that hasn't been stored yet must survive a hydrate — otherwise
+    // stale server state overwrites work in flight.
+    if (pending) { void flush(); return }
+    apply((data?.value as T) ?? null)
   }
+
+  async function flush() {
+    if (flushing) { flushAgain = true; return }
+    if (!pending) return
+    flushing = true
+    const sending = pending.value
+    try {
+      const { error } = await db.from(CONFIG_TABLE).upsert({ key, value: sending })
+      if (error) throw error
+      if (pending?.value === sending) { pending = null; saveOutbox() } // keep any newer edit
+    } catch (e: any) {
+      if (isPermanentError(e)) {
+        console.error(`[config:${key}] save rejected, reverting:`, e?.message ?? e)
+        if (pending?.value === sending) { pending = null; saveOutbox() }
+        reportSyncError(key, e?.message ?? 'save rejected')
+        void hydrate() // fall back to server truth so bad data doesn't linger
+      } else {
+        console.warn(`[config:${key}] save deferred, will retry:`, e?.message ?? e)
+        reportSyncError(key, `Couldn't reach the server — your change is saved on this device and will sync automatically.`)
+        if (retryTimer) clearTimeout(retryTimer)
+        retryTimer = setTimeout(() => void flush(), 5000)
+      }
+    } finally {
+      flushing = false
+      if (flushAgain) { flushAgain = false; void flush() }
+    }
+  }
+
   function start() {
     if (started) return
     started = true
+    loadOutbox()
+    if (pending) { apply(pending.value); void flush() } // show un-synced work immediately, then retry
+    // Keep the outbox across sign-out so an unsynced change survives a re-login.
     db.auth.onAuthStateChange((_e, session) => { if (session) void hydrate(); else { cache = def; emit() } })
     db.channel(`rt-config-${key}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: CONFIG_TABLE, filter: `key=eq.${key}` }, (p: any) => apply(p.new?.value ?? null))
+      .on('postgres_changes', { event: '*', schema: 'public', table: CONFIG_TABLE, filter: `key=eq.${key}` }, (p: any) => {
+        if (pending) return // our own un-saved change wins until it lands
+        apply(p.new?.value ?? null)
+      })
       .subscribe()
   }
   return {
     get: () => { start(); return cache },
     set: (value) => {
       cache = value; emit()
-      saving++
-      void db.from(CONFIG_TABLE).upsert({ key, value }).then(({ error }: { error: unknown }) => {
-        saving = Math.max(0, saving - 1)
-        if (error) { console.error(`[config:${key}] save failed`); if (saving === 0) void hydrate() }
-      })
+      pending = { value }
+      saveOutbox()
+      void flush()
     },
     subscribe: (cb) => {
       start()

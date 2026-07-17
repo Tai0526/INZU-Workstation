@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import {
   Users as UsersIcon, ShieldCheck, Activity, GitBranch, Database, Trash2, RotateCcw, AlertTriangle,
   ShieldAlert, Plus, Search, Pencil, ArrowUp, ArrowDown, X, CheckCircle2, Clock, MapPin, CalendarClock,
+  DownloadCloud, UploadCloud, DatabaseZap, Loader2,
 } from 'lucide-react'
 import { useAuth } from '@/auth/AuthContext'
 import {
@@ -18,6 +19,7 @@ import { useScheduling, schedulingStore } from '@/lib/drivers/scheduling'
 import { cycleKeyFor, sectionAnchorFor } from '@/lib/drivers/schedule'
 import { SECTIONS } from '@/lib/org/sections'
 import { employeesStore } from '@/lib/hr/store'
+import { buildBackup, downloadBackup, parseBackup, restoreBackup, backupSummary, BACKUP_TABLES, type TableCount } from '@/lib/backup/backup'
 import type { JobRole } from '@/lib/hr/types'
 import { clearAllData, restoreDemoData } from '@/lib/demo/reset'
 import { useVehicles } from '@/lib/fleet/store'
@@ -634,6 +636,149 @@ function SchedulingTab() {
 }
 
 // ════════════════════════════════════════════════════════════ Data
+/**
+ * Backup & restore. The records already live in Postgres and Supabase backs that
+ * up itself — this is the copy INZU holds, independent of both Supabase and us.
+ */
+function BackupPanel() {
+  const { user } = useAuth()
+  const [busy, setBusy] = useState<'' | 'export' | 'restore'>('')
+  const [prog, setProg] = useState({ done: 0, total: 0, table: '' })
+  const [result, setResult] = useState<{ kind: 'export' | 'restore'; counts: TableCount[] } | null>(null)
+  const [err, setErr] = useState('')
+  const [pendingFile, setPendingFile] = useState<{ name: string; text: string } | null>(null)
+  const [confirmText, setConfirmText] = useState('')
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  async function doExport() {
+    setBusy('export'); setErr(''); setResult(null)
+    try {
+      const { file, counts } = await buildBackup(user!.fullName, (done, total, table) => setProg({ done, total, table }))
+      downloadBackup(file)
+      setResult({ kind: 'export', counts })
+    } catch (e) { setErr(e instanceof Error ? e.message : 'Backup failed') }
+    setBusy('')
+  }
+
+  async function onPick(f: File) {
+    setErr(''); setResult(null)
+    try {
+      const text = await f.text()
+      parseBackup(text) // validate before we let anyone near the Restore button
+      setPendingFile({ name: f.name, text })
+      setConfirmText('')
+    } catch (e) { setErr(e instanceof Error ? e.message : 'Could not read that file') }
+  }
+
+  async function doRestore() {
+    if (!pendingFile) return
+    setBusy('restore'); setErr('')
+    try {
+      const counts = await restoreBackup(parseBackup(pendingFile.text), (done, total, table) => setProg({ done, total, table }))
+      setResult({ kind: 'restore', counts })
+      setPendingFile(null)
+    } catch (e) { setErr(e instanceof Error ? e.message : 'Restore failed') }
+    setBusy('')
+  }
+
+  const preview = pendingFile ? backupSummary(parseBackup(pendingFile.text)) : []
+  const previewRows = preview.reduce((s, c) => s + c.rows, 0)
+  const failed = result?.counts.filter((c) => c.error) ?? []
+
+  return (
+    <div className="card overflow-hidden">
+      <div className="flex items-center gap-2 border-b border-black/5 px-5 py-3.5">
+        <DatabaseZap size={16} className="text-brand" />
+        <h3 className="font-display text-sm font-bold text-navy">Backup &amp; restore</h3>
+      </div>
+      <div className="space-y-3 p-5">
+        {!isSupabaseConfigured ? (
+          <p className="flex items-start gap-2 rounded-lg border border-status-critical/30 bg-status-critical/5 px-3 py-2.5 text-sm text-status-critical">
+            <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+            <span>This app isn't connected to the database, so there's nothing to back up — everything is in this browser only. Set the Supabase environment variables and redeploy.</span>
+          </p>
+        ) : (
+          <p className="text-sm text-status-neutral">
+            Downloads every record from all {BACKUP_TABLES.length} tables as one JSON file you keep — independent of Supabase and of this browser.
+            Your data already lives in the database and Supabase backs that up itself; this is your own off-site copy. Take one before anything risky, and keep a monthly one.
+          </p>
+        )}
+
+        {busy && (
+          <div className="space-y-1">
+            <div className="h-1.5 overflow-hidden rounded-full bg-canvas">
+              <div className="h-full rounded-full bg-brand transition-all" style={{ width: `${Math.round((prog.done / Math.max(1, prog.total)) * 100)}%` }} />
+            </div>
+            <p className="text-xs text-status-neutral">{busy === 'export' ? 'Reading' : 'Writing'} {prog.table}… ({prog.done}/{prog.total})</p>
+          </div>
+        )}
+
+        {err && <p className="flex items-start gap-2 rounded-lg border border-status-critical/30 bg-status-critical/5 px-3 py-2 text-sm text-status-critical"><AlertTriangle size={15} className="mt-0.5 shrink-0" />{err}</p>}
+
+        {result && (
+          <div className="rounded-lg border border-black/10 bg-white">
+            <div className={`flex items-center gap-1.5 border-b border-black/5 px-3 py-2 text-xs font-medium ${failed.length ? 'text-[#8a6d10]' : 'text-status-good'}`}>
+              {failed.length ? <AlertTriangle size={14} /> : <CheckCircle2 size={14} />}
+              {result.kind === 'export' ? 'Backup downloaded' : 'Restore finished'} — {result.counts.reduce((s, c) => s + c.rows, 0).toLocaleString()} rows across {result.counts.filter((c) => c.rows > 0).length} tables
+              {failed.length > 0 && ` · ${failed.length} table${failed.length === 1 ? '' : 's'} had a problem`}
+            </div>
+            <div className="max-h-44 overflow-y-auto p-1">
+              {result.counts.filter((c) => c.rows > 0 || c.error).map((c) => (
+                <div key={c.table} className="flex items-center gap-2 px-2 py-1 text-xs">
+                  <span className="font-medium text-navy">{c.table}</span>
+                  <span className="text-status-neutral">{c.rows.toLocaleString()} rows</span>
+                  {c.error && <span className="ml-auto max-w-[55%] truncate text-right text-status-critical" title={c.error}>{c.error}</span>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="flex flex-wrap gap-2">
+          <Button onClick={doExport} disabled={!!busy || !isSupabaseConfigured}>
+            {busy === 'export' ? <Loader2 size={15} className="animate-spin" /> : <DownloadCloud size={15} />} Download backup
+          </Button>
+          <Button variant="secondary" onClick={() => fileRef.current?.click()} disabled={!!busy || !isSupabaseConfigured}><UploadCloud size={15} /> Restore from file…</Button>
+          <input ref={fileRef} type="file" accept="application/json,.json" className="hidden"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) void onPick(f); e.target.value = '' }} />
+        </div>
+      </div>
+
+      {/* Restoring writes to the live database, so it needs deliberate confirmation. */}
+      <Modal open={!!pendingFile} onClose={() => !busy && setPendingFile(null)} title="Restore from backup?"
+        subtitle={pendingFile?.name}
+        footer={<>
+          <Button variant="secondary" onClick={() => setPendingFile(null)} disabled={!!busy}>Cancel</Button>
+          <Button variant="danger" onClick={doRestore} disabled={!!busy || confirmText.trim().toUpperCase() !== 'RESTORE'}>
+            {busy === 'restore' ? <><Loader2 size={15} className="animate-spin" /> Restoring…</> : <>Restore {previewRows.toLocaleString()} rows</>}
+          </Button>
+        </>}>
+        <div className="space-y-3">
+          <div className="flex items-start gap-3 rounded-lg bg-canvas px-4 py-3 text-sm text-navy">
+            <AlertTriangle size={18} className="mt-0.5 shrink-0 text-status-warning" />
+            <p>
+              This writes the file's rows into the live database, <b>overwriting any record with the same id</b>.
+              It never deletes: anything created since this backup was taken stays. User accounts and login history are skipped — those belong to Supabase Auth.
+            </p>
+          </div>
+          <div className="max-h-40 overflow-y-auto rounded-lg border border-black/10 bg-white p-1">
+            {preview.map((c) => (
+              <div key={c.table} className="flex items-center gap-2 px-2 py-1 text-xs">
+                <span className="font-medium text-navy">{c.table}</span><span className="ml-auto text-status-neutral">{c.rows.toLocaleString()} rows</span>
+              </div>
+            ))}
+          </div>
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-navy">Type RESTORE to confirm</span>
+            <input value={confirmText} onChange={(e) => setConfirmText(e.target.value)} placeholder="RESTORE"
+              className="w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand" />
+          </label>
+        </div>
+      </Modal>
+    </div>
+  )
+}
+
 function DataTab() {
   const counts = [
     ['Users', useUsers().length],
@@ -658,6 +803,9 @@ function DataTab() {
           ))}
         </div>
       </div>
+
+      <BackupPanel />
+
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="card flex flex-col gap-3 border border-status-critical/20 p-5">
           <div className="flex items-center gap-2"><Trash2 size={16} className="text-status-critical" /><h3 className="font-display text-sm font-bold text-navy">Clear all data</h3></div>
