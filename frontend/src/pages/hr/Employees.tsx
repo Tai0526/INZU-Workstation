@@ -52,17 +52,23 @@ export default function Employees() {
 
   const [q, setQ] = useState('')
   const [dept, setDept] = useState('all')
+  const [risk, setRisk] = useState<'all' | 'attention' | 'high' | 'watch' | 'low'>('all')
+  const [src, setSrc] = useState<'all' | HrPerson['source']>('all')
   const [form, setForm] = useState<{ open: boolean; editing: Employee | null }>({ open: false, editing: null })
   const [fileFor, setFileFor] = useState<HrPerson | null>(null)
 
   const departments = useMemo(() => ['all', ...[...new Set(people.map((p) => p.department))].sort()], [people])
+  const filtered = q.trim() !== '' || dept !== 'all' || risk !== 'all' || src !== 'all'
   const rows = useMemo(() => {
     const term = q.trim().toLowerCase()
-    return people.filter((p) =>
-      (dept === 'all' || p.department === dept) &&
-      (!term || p.full_name.toLowerCase().includes(term) || p.employee_no.toLowerCase().includes(term) || p.role.toLowerCase().includes(term)),
-    )
-  }, [people, q, dept])
+    return people.filter((p) => {
+      const tier = riskById.get(p.id)?.tier ?? 'low'
+      return (dept === 'all' || p.department === dept) &&
+        (src === 'all' || p.source === src) &&
+        (risk === 'all' || (risk === 'attention' ? tier !== 'low' : tier === risk)) &&
+        (!term || p.full_name.toLowerCase().includes(term) || p.employee_no.toLowerCase().includes(term) || p.role.toLowerCase().includes(term))
+    })
+  }, [people, q, dept, risk, src, riskById])
 
   const counts = {
     total: people.length,
@@ -86,11 +92,11 @@ export default function Employees() {
       </p>
 
       <div className="grid grid-cols-2 gap-2 sm:max-w-2xl sm:grid-cols-5">
-        <StatCard label="Headcount" value={counts.total} />
-        <StatCard label="Drivers" value={counts.drivers} />
-        <StatCard label="Staff" value={counts.employees} />
+        <StatCard label="Headcount" value={counts.total} onClick={() => { setSrc('all'); setRisk('all'); setDept('all') }} />
+        <StatCard label="Drivers" value={counts.drivers} onClick={() => setSrc(src === 'driver' ? 'all' : 'driver')} active={src === 'driver'} />
+        <StatCard label="Staff" value={counts.employees} onClick={() => setSrc(src === 'hr' ? 'all' : 'hr')} active={src === 'hr'} />
         <StatCard label="On leave" value={counts.onLeave} tone={counts.onLeave ? 'warning' : undefined} />
-        <StatCard label="At risk" value={counts.atRisk} tone={counts.atRisk ? 'critical' : undefined} />
+        <StatCard label="At risk" value={counts.atRisk} tone={counts.atRisk ? 'critical' : undefined} onClick={() => setRisk(risk === 'attention' ? 'all' : 'attention')} active={risk === 'attention'} />
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -101,6 +107,14 @@ export default function Employees() {
         <select value={dept} onChange={(e) => setDept(e.target.value)} className="rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand">
           {departments.map((d) => <option key={d} value={d}>{d === 'all' ? 'All departments' : d}</option>)}
         </select>
+        <select value={src} onChange={(e) => setSrc(e.target.value as any)} className="rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand">
+          <option value="all">All types</option><option value="hr">Employees</option><option value="driver">Drivers</option><option value="account">System accounts</option>
+        </select>
+        <select value={risk} onChange={(e) => setRisk(e.target.value as any)} className="rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand">
+          <option value="all">All standing</option><option value="attention">Needs attention</option><option value="high">At risk</option><option value="watch">Monitor</option><option value="low">Good standing</option>
+        </select>
+        {filtered && <button onClick={() => { setQ(''); setDept('all'); setRisk('all'); setSrc('all') }} className="rounded-lg border border-black/15 px-3 py-2 text-xs text-status-neutral hover:text-navy">Clear</button>}
+        <span className="text-[11px] text-status-neutral">{rows.length} shown</span>
         {canManage && <Button className="ml-auto" onClick={() => setForm({ open: true, editing: null })}><Plus size={15} /> Add employee</Button>}
       </div>
 
@@ -166,10 +180,12 @@ export default function Employees() {
   )
 }
 
-function StatCard({ label, value, tone }: { label: string; value: number; tone?: 'warning' | 'critical' }) {
-  const border = tone === 'critical' ? 'border-status-critical/40 bg-status-critical/5' : tone === 'warning' ? 'border-status-warning/40 bg-status-warning/10' : 'border-black/10 bg-white'
+function StatCard({ label, value, tone, onClick, active }: { label: string; value: number; tone?: 'warning' | 'critical'; onClick?: () => void; active?: boolean }) {
+  const border = active ? 'border-brand bg-brand-tint/40' : tone === 'critical' ? 'border-status-critical/40 bg-status-critical/5' : tone === 'warning' ? 'border-status-warning/40 bg-status-warning/10' : 'border-black/10 bg-white'
   const text = tone === 'critical' ? 'text-status-critical' : tone === 'warning' ? 'text-[#8a6d10]' : 'text-navy'
-  return <div className={`rounded-xl border px-3 py-2 ${border}`}><div className={`text-lg font-bold leading-none ${text}`}>{value}</div><div className="mt-0.5 text-[11px] text-status-neutral">{label}</div></div>
+  const cls = `rounded-xl border px-3 py-2 text-left ${border} ${onClick ? 'cursor-pointer hover:border-brand' : ''}`
+  const inner = <><div className={`text-lg font-bold leading-none ${text}`}>{value}</div><div className="mt-0.5 text-[11px] text-status-neutral">{label}</div></>
+  return onClick ? <button onClick={onClick} className={cls}>{inner}</button> : <div className={cls}>{inner}</div>
 }
 
 function EmployeeModal({ state, onClose, branch }: { state: { open: boolean; editing: Employee | null }; onClose: () => void; branch: BranchCode }) {
