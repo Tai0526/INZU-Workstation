@@ -56,6 +56,50 @@ supabase functions deploy admin-users
 `SUPABASE_URL`, `SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY` are injected
 into deployed functions automatically — you don't set them by hand.
 
+## 5b. Emailing payslips (optional)
+Only needed if you want **Payroll → Payslips → Email**. Until this is set up the
+Email buttons are there but every send fails with a clear message; everything else
+(preview, PDF, Word, Excel) works without it.
+
+Payslips are emailed **one message per employee, each with only their own
+attachment** — there is no batch or BCC path, so nobody can receive someone else's
+pay details. The mail credentials live only in the function, never in the browser.
+
+```bash
+supabase functions deploy send-payslips
+```
+
+Then set the mail secrets. **Pick either one** — the function uses whichever it
+finds, so you can switch later without a code change.
+
+**Option A — INZU's own mailbox (SMTP).** Payslips arrive from a real INZU address
+and there's no new vendor or bill. Use an **app password**, not the account
+password (Google/Microsoft both require this when 2FA is on).
+```bash
+supabase secrets set SMTP_HOST=smtp.gmail.com SMTP_PORT=465 \
+  SMTP_USER=payroll@inzumcs.com SMTP_PASS=your-app-password \
+  PAYSLIP_FROM="INZU Payroll <payroll@inzumcs.com>"
+```
+Note most mailboxes cap how many messages you may send per day (Gmail ≈ 500) — fine
+for one branch, worth checking before a big run.
+
+**Option B — Resend (email API).** Better deliverability for large runs; free up to
+3,000 emails/month. Create an account, verify your domain, then:
+```bash
+supabase secrets set RESEND_API_KEY=re_xxx \
+  PAYSLIP_FROM="INZU Payroll <payroll@yourdomain.com>"
+```
+`PAYSLIP_FROM` must be on the domain you verified, or Resend rejects the send.
+
+Optional, either way — a copy of every payslip to an archive mailbox:
+```bash
+supabase secrets set PAYSLIP_BCC=payroll-archive@inzumcs.com
+```
+
+Only active users with a payroll role (administrator, payroll officer, HR manager,
+Ops manager, MD) can send; the function re-checks this server-side, so it can't be
+bypassed from the browser.
+
 ## 6. Run the app
 ```bash
 cd frontend

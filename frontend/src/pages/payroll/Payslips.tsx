@@ -1,12 +1,14 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ReceiptText, Search, FileText, FileDown, Eye, AlertTriangle, Printer, Wallet } from 'lucide-react'
+import { ReceiptText, Search, FileText, FileDown, Eye, AlertTriangle, Printer, Wallet, Mail, Send, CheckCircle2, XCircle, ShieldCheck, Loader2 } from 'lucide-react'
 import { useAuth } from '@/auth/AuthContext'
 import { BRANCHES } from '@/lib/roles'
+import { canEdit } from '@/lib/permissions'
 import Button from '@/components/ui/Button'
 import Modal from '@/components/ui/Modal'
 import { exportReportPDF, exportReportWord, inzuLogo, type ReportInput } from '@/lib/reports/exporter'
 import { usePayRun, type PayRow } from '@/lib/payroll/run'
+import { sendOnePayslip, sendability, BLOCKER_LABEL, type SendResult } from '@/lib/payroll/sendPayslips'
 import {
   buildPayslip, payslipHtml, usePayslipTemplate, payslipTemplateStore, COMPANY_NAME,
   PAYSLIP_TEMPLATES, PAYSLIP_CSS, PAYSLIP_PREVIEW_CSS, type Payslip, type PayslipTemplate,
@@ -20,9 +22,14 @@ export default function Payslips() {
   const branch = user!.branch
   const branchLabel = BRANCHES.find((b) => b.code === branch)!.short
 
+  const canSend = canEdit(user!.role, 'payroll')
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7))
   const [q, setQ] = useState('')
   const [preview, setPreview] = useState<Payslip | null>(null)
+  const [sending, setSending] = useState<PayRow[] | null>(null)
+  // Defaults on, and deliberately not remembered — a payslip carries salary, NRC
+  // and bank details, so each send re-opts into protection rather than inheriting it.
+  const [protect, setProtect] = useState(true)
   const template = usePayslipTemplate()
 
   const { rows: all, tax, unpriced } = usePayRun(branch, month)
@@ -40,6 +47,7 @@ export default function Payslips() {
   })
 
   const paidOut = rows.filter((r) => r.line.leavePay > 0).length
+  const emailable = useMemo(() => rows.filter((r) => sendability(r, protect).ok).length, [rows, protect])
   const totals = useMemo(() => rows.reduce((t, r) => ({ gross: t.gross + r.line.gross, ded: t.ded + r.line.totalDeductions, net: t.net + r.line.net }), { gross: 0, ded: 0, net: 0 }), [rows])
 
   // Each slip prints its own company name, logo and heading, so the report header
@@ -79,7 +87,8 @@ export default function Payslips() {
         </p>
         <div className="flex flex-wrap gap-2">
           <Button variant="secondary" onClick={() => exportAll('word')} disabled={!rows.length}><FileDown size={15} /> All (Word)</Button>
-          <Button onClick={() => exportAll('pdf')} disabled={!rows.length}><Printer size={15} /> All payslips (PDF)</Button>
+          <Button variant="secondary" onClick={() => exportAll('pdf')} disabled={!rows.length}><Printer size={15} /> All (PDF)</Button>
+          {canSend && <Button onClick={() => setSending(rows)} disabled={!emailable}><Mail size={15} /> Email all ({emailable})</Button>}
         </div>
       </div>
 
@@ -101,6 +110,20 @@ export default function Payslips() {
 
       <TemplatePicker value={template} onChange={(t) => payslipTemplateStore.set(t)} />
 
+      {canSend && (
+        <label className="flex cursor-pointer items-start gap-2 rounded-xl border border-black/10 bg-white px-3 py-2.5">
+          <input type="checkbox" checked={protect} onChange={(e) => setProtect(e.target.checked)} className="mt-0.5 h-4 w-4 accent-[#0F1B33]" />
+          <span className="flex-1">
+            <span className="flex items-center gap-1.5 text-sm font-semibold text-navy"><ShieldCheck size={14} className={protect ? 'text-status-good' : 'text-status-neutral'} /> Lock emailed PDFs with the employee's NRC</span>
+            <span className="mt-0.5 block text-[11px] leading-snug text-status-neutral">
+              {protect
+                ? "The attachment won't open without their NRC, so a mistyped address can't expose someone's salary or bank account. The NRC is never written in the email itself. Anyone without an NRC on file is skipped."
+                : 'Off — the attachment opens for anyone who receives or forwards it, including on a wrong address.'}
+            </span>
+          </span>
+        </label>
+      )}
+
       {paidOut > 0 && <p className="inline-flex items-center gap-1.5 text-xs text-status-good"><Wallet size={13} /> {paidOut} {paidOut === 1 ? 'employee has' : 'employees have'} leave days paid out this month — it shows as a payment line and is taxed with the rest of gross.</p>}
       {unpriced > 0 && <p className="inline-flex items-center gap-1.5 text-xs text-[#8a6d10]"><AlertTriangle size={13} /> {unpriced} active {unpriced === 1 ? 'person has' : 'people have'} no salary set and so get no payslip — add it in their employee file.</p>}
 
@@ -121,6 +144,7 @@ export default function Payslips() {
             <tbody>
               {rows.map((r, i) => {
                 const s = slipFor(r)
+                const send = sendability(r, protect)
                 return (
                   <tr key={r.p.key} className={i % 2 ? 'bg-canvas/40' : ''}>
                     <td className="px-3 py-2 font-medium text-navy">{r.p.full_name}<div className="text-[11px] font-normal text-status-neutral">{r.p.employee_no} · {r.p.department}{r.line.leavePay > 0 && <span className="text-status-good"> · {r.leave.paidDays}d leave paid</span>}</div></td>
@@ -134,6 +158,11 @@ export default function Payslips() {
                         <button onClick={() => setPreview(s)} title="Preview" className="rounded-lg border border-black/15 p-1.5 text-status-neutral hover:bg-canvas hover:text-navy"><Eye size={14} /></button>
                         <button onClick={() => exportOne(r, 'pdf')} title="Export PDF" className="rounded-lg border border-black/15 p-1.5 text-status-neutral hover:bg-canvas hover:text-navy"><Printer size={14} /></button>
                         <button onClick={() => exportOne(r, 'word')} title="Export Word" className="rounded-lg border border-black/15 p-1.5 text-status-neutral hover:bg-canvas hover:text-navy"><FileText size={14} /></button>
+                        {canSend && (
+                          <button onClick={() => setSending([r])} disabled={!send.ok}
+                            title={send.ok ? `Email to ${send.email}` : BLOCKER_LABEL[send.blocker!]}
+                            className="rounded-lg border border-black/15 p-1.5 text-status-neutral hover:bg-canvas hover:text-navy disabled:cursor-not-allowed disabled:opacity-30"><Mail size={14} /></button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -145,12 +174,126 @@ export default function Payslips() {
         </div>
       </div>
 
+      {canSend && (
+        <p className="text-[11px] text-status-neutral">
+          <b className="text-navy">Emailing</b> sends one message per employee with only their own payslip attached — never a batch, never a copy to anyone else. It reads the address from their file (Details → Email); anyone without one is skipped and listed before you confirm. Sending runs on the server and needs the <code>send-payslips</code> function deployed with its mail secrets — see SUPABASE_SETUP.md §5b.
+        </p>
+      )}
+
       <p className="text-[11px] text-status-neutral">
         Year-to-date figures are projected from the standing salary — prior months of the tax year (or from the hire date, if later) are counted at the current rate, so a mid-year raise back-dates at the new figure. Once locked pay runs are stored, YTD will read from what was actually paid.
       </p>
 
       {preview && <PreviewModal slip={preview} template={template} onClose={() => setPreview(null)} />}
+      {sending && <SendModal rows={sending} slipFor={slipFor} template={template} protect={protect} onClose={() => setSending(null)} />}
     </div>
+  )
+}
+
+/**
+ * Confirms exactly who is about to receive their own payslip, then sends one at a
+ * time so a failure is attributable to a person rather than losing a whole batch.
+ */
+function SendModal({ rows, slipFor, template, protect, onClose }: {
+  rows: PayRow[]; slipFor: (r: PayRow) => Payslip; template: PayslipTemplate; protect: boolean; onClose: () => void
+}) {
+  const [phase, setPhase] = useState<'confirm' | 'sending' | 'done'>('confirm')
+  const [at, setAt] = useState(0)
+  const [results, setResults] = useState<SendResult[]>([])
+
+  const ready = useMemo(() => rows.filter((r) => sendability(r, protect).ok), [rows, protect])
+  const blocked = useMemo(() => rows.filter((r) => !sendability(r, protect).ok), [rows, protect])
+  const failed = results.filter((r) => !r.ok)
+
+  async function go() {
+    setPhase('sending')
+    const logo = await inzuLogo()
+    const out: SendResult[] = []
+    for (let i = 0; i < ready.length; i++) {
+      setAt(i + 1)
+      out.push(await sendOnePayslip(ready[i], slipFor(ready[i]), template, { logo, protect }))
+      setResults([...out])
+    }
+    setPhase('done')
+  }
+
+  const one = rows.length === 1
+  const footer = phase === 'confirm'
+    ? <><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={go} disabled={!ready.length}><Send size={15} /> Send {ready.length} payslip{ready.length === 1 ? '' : 's'}</Button></>
+    : phase === 'sending'
+      ? <Button variant="secondary" disabled><Loader2 size={15} className="animate-spin" /> Sending…</Button>
+      : <Button onClick={onClose}>Close</Button>
+
+  return (
+    <Modal open onClose={phase === 'sending' ? () => {} : onClose} size="lg"
+      title={one ? `Email payslip to ${rows[0].p.full_name}` : `Email ${ready.length} payslips`}
+      subtitle={phase === 'done' ? 'Finished' : 'Each person receives only their own payslip, as a separate email.'}
+      footer={footer}>
+
+      {phase === 'confirm' && (
+        <div className="space-y-3">
+          <div className="rounded-lg border border-black/10 bg-white">
+            <div className="border-b border-black/5 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-status-neutral">Will receive their payslip ({ready.length})</div>
+            <div className="max-h-56 divide-y divide-black/5 overflow-y-auto">
+              {ready.map((r) => (
+                <div key={r.p.key} className="flex items-center gap-2 px-3 py-1.5 text-sm">
+                  <span className="font-medium text-navy">{r.p.full_name}</span>
+                  <span className="truncate text-status-neutral">{r.file.email}</span>
+                  <span className="ml-auto shrink-0 text-[11px] text-status-neutral">{r.p.employee_no}</span>
+                </div>
+              ))}
+              {!ready.length && <p className="px-3 py-6 text-center text-sm text-status-neutral">Nobody here can be emailed — see below.</p>}
+            </div>
+          </div>
+          {blocked.length > 0 && (
+            <div className="rounded-lg border border-status-warning/40 bg-status-warning/5">
+              <div className="border-b border-status-warning/20 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-[#8a6d10]">Skipped ({blocked.length})</div>
+              <div className="max-h-40 divide-y divide-black/5 overflow-y-auto">
+                {blocked.map((r) => (
+                  <div key={r.p.key} className="flex items-center gap-2 px-3 py-1.5 text-sm">
+                    <span className="font-medium text-navy">{r.p.full_name}</span>
+                    <span className="ml-auto shrink-0 text-[11px] text-[#8a6d10]">{BLOCKER_LABEL[sendability(r, protect).blocker!]}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          <p className="rounded-lg bg-canvas px-3 py-2 text-[11px] leading-snug text-status-neutral">
+            {protect ? 'Each PDF is locked with that person\'s NRC. ' : 'PDFs are NOT password protected. '}
+            Sending happens on the server — if nothing arrives, the <code>send-payslips</code> function needs deploying or its mail secrets setting.
+          </p>
+        </div>
+      )}
+
+      {phase !== 'confirm' && (
+        <div className="space-y-2">
+          {phase === 'sending' && (
+            <>
+              <div className="h-1.5 overflow-hidden rounded-full bg-canvas">
+                <div className="h-full rounded-full bg-brand transition-all" style={{ width: `${Math.round((at / Math.max(1, ready.length)) * 100)}%` }} />
+              </div>
+              <p className="text-xs text-status-neutral">Building and sending {at} of {ready.length}…</p>
+            </>
+          )}
+          {phase === 'done' && (
+            <p className={`inline-flex items-center gap-1.5 text-sm font-medium ${failed.length ? 'text-[#8a6d10]' : 'text-status-good'}`}>
+              {failed.length ? <AlertTriangle size={15} /> : <CheckCircle2 size={15} />}
+              {results.length - failed.length} sent{failed.length ? `, ${failed.length} failed` : ''}{blocked.length ? ` · ${blocked.length} skipped` : ''}
+            </p>
+          )}
+          <div className="max-h-64 divide-y divide-black/5 overflow-y-auto rounded-lg border border-black/10 bg-white">
+            {results.map((r, i) => (
+              <div key={i} className="flex items-start gap-2 px-3 py-1.5 text-sm">
+                {r.ok ? <CheckCircle2 size={14} className="mt-0.5 shrink-0 text-status-good" /> : <XCircle size={14} className="mt-0.5 shrink-0 text-status-critical" />}
+                <span className="font-medium text-navy">{r.name}</span>
+                <span className="truncate text-[11px] text-status-neutral">{r.email}</span>
+                {r.error && <span className="ml-auto max-w-[55%] shrink-0 text-right text-[11px] text-status-critical">{r.error}</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </Modal>
   )
 }
 
