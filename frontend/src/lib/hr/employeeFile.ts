@@ -69,10 +69,12 @@ export interface EmployeeFile {
   job_title: string
   contract_type: string   // Permanent / Fixed-term / Casual …
   dept_no: string         // department number (payslip); falls back to a default per department
+  pay_point: string       // payslip: where they are paid from (defaults to the branch)
+  cost_centre: string     // payslip: cost centre code
   tpin: string            // tax number
   napsa: string           // social-security number
-  pay_method: string      // Bank transfer / Cash / Mobile money / Cheque
-  payment_type: string    // Monthly salary / Weekly wage / Contract …
+  pay_method: string      // Bank / Cash / Mobile money / Cheque
+  payment_type: string    // Salaried / Wage / Contract …
   bank_name: string
   bank_branch: string
   bank_account: string
@@ -91,7 +93,7 @@ export interface EmployeeFile {
 export function blankFile(): EmployeeFile {
   return {
     national_id: '', dob: '', gender: '', marital_status: '', address: '', email: '',
-    start_date: '', leave_opening: 0, leave_opening_at: '', job_title: '', contract_type: '', dept_no: '', tpin: '', napsa: '',
+    start_date: '', leave_opening: 0, leave_opening_at: '', job_title: '', contract_type: '', dept_no: '', pay_point: '', cost_centre: '', tpin: '', napsa: '',
     pay_method: '', payment_type: '', bank_name: '', bank_branch: '', bank_account: '',
     next_of_kin: { name: '', relationship: '', phone: '' }, emergency_contacts: [], documents: [], events: [], salary: null, contracts: [], exit: null, notes: '',
     updated_by: '', updated_at: '',

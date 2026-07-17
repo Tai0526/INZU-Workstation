@@ -18,7 +18,8 @@ import { useLeaveLedger, leaveBalance, leavePhase, LEAVE_TYPE_LABEL, type LeaveE
 import { assessRisk, RISK_META } from '@/lib/hr/analytics'
 import { useCases, DECISION_LABEL, INCIDENT_TYPE_META } from '@/lib/safety/cases'
 import { useDeductions } from '@/lib/payroll/deductions'
-import { deptNo, STANDARD_ALLOWANCES } from '@/lib/payroll/payslip'
+import { useTaxConfig, round2 } from '@/lib/payroll/tax'
+import { deptNo, STANDARD_ALLOWANCES, isGratuity } from '@/lib/payroll/payslip'
 import { useSpeedEvents } from '@/lib/speed/store'
 import { countsAgainstDriver } from '@/lib/speed/types'
 import { useDriverLeave } from '@/lib/drivers/leave'
@@ -34,7 +35,7 @@ const TABS: { k: Tab; label: string }[] = [
 ]
 // Scalar (form-edited) fields; documents/events/contracts mutate the store directly,
 // so Save must not write them back from the stale form and clobber live additions.
-const SCALAR_KEYS: (keyof EmployeeFile)[] = ['national_id', 'dob', 'gender', 'marital_status', 'address', 'email', 'start_date', 'leave_opening', 'leave_opening_at', 'job_title', 'contract_type', 'dept_no', 'tpin', 'napsa', 'pay_method', 'payment_type', 'bank_name', 'bank_branch', 'bank_account', 'next_of_kin', 'emergency_contacts', 'salary', 'exit', 'notes']
+const SCALAR_KEYS: (keyof EmployeeFile)[] = ['national_id', 'dob', 'gender', 'marital_status', 'address', 'email', 'start_date', 'leave_opening', 'leave_opening_at', 'job_title', 'contract_type', 'dept_no', 'pay_point', 'cost_centre', 'tpin', 'napsa', 'pay_method', 'payment_type', 'bank_name', 'bank_branch', 'bank_account', 'next_of_kin', 'emergency_contacts', 'salary', 'exit', 'notes']
 const scalars = (x: EmployeeFile): Partial<EmployeeFile> => { const o: Partial<EmployeeFile> = {}; for (const k of SCALAR_KEYS) (o as any)[k] = x[k]; return o }
 
 export default function EmployeeFileDrawer({ person, canManage, onClose }: { person: HrPerson; canManage: boolean; onClose: () => void }) {
@@ -144,15 +145,18 @@ export default function EmployeeFileDrawer({ person, canManage, onClose }: { per
                     <input disabled={!canManage} className={`${inputCls} disabled:bg-canvas disabled:text-status-neutral`} value={f.job_title || person.role} onChange={(e) => set('job_title', e.target.value)} /></label>
                   <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">Dept no</span>
                     <input disabled={!canManage} className={`${inputCls} disabled:bg-canvas disabled:text-status-neutral`} value={f.dept_no} placeholder={deptNo(person.department, '') || '—'} onChange={(e) => set('dept_no', e.target.value)} /></label>
+                  {field('cost_centre', 'Cost centre')}
                   {field('tpin', 'TPIN (tax)')}
-                  {field('napsa', 'NAPSA / social security no')}
+                  {field('napsa', 'Social security no (NAPSA)')}
                 </div>
               </Section>
               {/* Pay method, bank & account — printed on the payslip and exported as a group for the bank file. */}
               <Section icon={Wallet} title="Payment details">
                 <div className="grid grid-cols-2 gap-2">
-                  {pick('pay_method', 'Pay method', ['Bank transfer', 'Cash', 'Mobile money', 'Cheque'])}
-                  {pick('payment_type', 'Payment type', ['Monthly salary', 'Weekly wage', 'Fortnightly', 'Contract', 'Casual'])}
+                  {pick('pay_method', 'Pay method', ['Bank', 'Cash', 'Mobile money', 'Cheque'])}
+                  {pick('payment_type', 'Payment type', ['Salaried', 'Wage', 'Contract', 'Casual'])}
+                  <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">Pay point</span>
+                    <input disabled={!canManage} className={`${inputCls} disabled:bg-canvas disabled:text-status-neutral`} value={f.pay_point} placeholder={person.branch} onChange={(e) => set('pay_point', e.target.value)} /></label>
                   {field('bank_name', 'Bank')}
                   {field('bank_branch', 'Bank branch code')}
                   {field('bank_account', 'Bank account')}
@@ -413,6 +417,7 @@ function ContractsTab({ person, contracts, canManage, today }: { person: HrPerso
 
 function SalaryTab({ salary, onChange, canManage, takenDays }: { salary: SalaryInfo | null; onChange: (s: SalaryInfo) => void; canManage: boolean; takenDays: number }) {
   const bands = useSalaryBands()
+  const tax = useTaxConfig()
   const [bandsOpen, setBandsOpen] = useState(false)
   const s: SalaryInfo = { grade: '', band: '', basic: 0, currency: 'ZMW', effective: '', allowances: [], ...(salary ?? {}) }
   const alw = s.allowances ?? []
@@ -422,10 +427,13 @@ function SalaryTab({ salary, onChange, canManage, takenDays }: { salary: SalaryI
     if (b) set({ grade: b.grade, band: b.band, basic: b.basic || s.basic, currency: b.currency || s.currency }); else set({ grade: gradeId })
   }
   const band = bands.find((b) => b.grade === s.grade)
-  const gross = (s.basic || 0) + alw.reduce((t, a) => t + (a.amount || 0), 0)
+  // Gratuity is a mandatory % of basic set in Payroll → Taxes, never typed here.
+  const gratuity = round2((s.basic || 0) * (tax.gratuity_rate || 0) / 100)
+  const alwTotal = alw.filter((a) => !isGratuity(a.name)).reduce((t, a) => t + (a.amount || 0), 0)
+  const gross = round2((s.basic || 0) + gratuity + alwTotal)
   const rate = leaveDayRate(band ?? { basic: s.basic, leave_day_rate: 0 })
   const leaveCost = Math.round(rate * (takenDays || 0))
-  const money = (n: number) => `${s.currency} ${n.toLocaleString()}`
+  const money = (n: number) => `${s.currency} ${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
   return (
     <div className="space-y-3">
       <Section icon={Banknote} title="Salary (optional)">
@@ -470,7 +478,15 @@ function SalaryTab({ salary, onChange, canManage, takenDays }: { salary: SalaryI
             ) : null
           })()}
         </div>
-        {(s.basic > 0 || alw.length > 0) && <div className="mt-2 flex items-center justify-between rounded-lg bg-canvas px-3 py-2 text-xs"><span className="text-status-neutral">Gross (basic + allowances)</span><b className="text-navy">{money(gross)}</b></div>}
+        {s.basic > 0 && (
+          <div className="mt-2 space-y-1 rounded-lg bg-canvas px-3 py-2 text-xs">
+            <div className="flex items-center justify-between"><span className="text-status-neutral">Basic</span><span className="text-navy">{money(s.basic)}</span></div>
+            <div className="flex items-center justify-between"><span className="text-status-neutral">Gratuity · {tax.gratuity_rate}% of basic <i className="not-italic text-[10px]">(automatic)</i></span><span className="text-navy">{money(gratuity)}</span></div>
+            {alwTotal > 0 && <div className="flex items-center justify-between"><span className="text-status-neutral">Allowances</span><span className="text-navy">{money(alwTotal)}</span></div>}
+            <div className="flex items-center justify-between border-t border-black/10 pt-1"><span className="font-medium text-navy">Gross</span><b className="text-navy">{money(gross)}</b></div>
+          </div>
+        )}
+        <p className="mt-1.5 text-[11px] text-status-neutral">Gratuity is mandatory and added automatically at {tax.gratuity_rate}% of basic — don't add it as an allowance. Its rate is set in <Link to="/payroll/taxes" className="font-medium text-brand hover:underline">Payroll → Taxes</Link>.</p>
       </Section>
 
       <Section icon={CalendarDays} title="Leave cost">

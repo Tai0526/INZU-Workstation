@@ -2,11 +2,12 @@ import { useMemo } from 'react'
 import type { BranchCode } from '@/lib/roles'
 import { useHrPeople, type HrPerson } from '@/lib/hr/directory'
 import { employeeFileStore, useEmployeeFiles, type EmployeeFile } from '@/lib/hr/employeeFile'
-import { useLeaveLedger, leaveBalance, leavePayoutDays, leaveStats } from '@/lib/hr/leaveLedger'
+import { useLeaveLedger, leaveBalance, leavePayoutDays, leaveStats, ACCRUAL_PER_MONTH } from '@/lib/hr/leaveLedger'
 import { useSalaryBands, leaveRateFor } from '@/lib/hr/salaryBands'
 import { leaveStore } from '@/lib/drivers/leave'
 import { empLeaveStore } from '@/lib/hr/leave'
 import { useDeductions } from './deductions'
+import { isGratuity } from './payslip'
 import { useTaxConfig, computePay, type PayLine, type TaxConfig } from './tax'
 
 /**
@@ -27,7 +28,7 @@ export interface PayRow {
   line: PayLine
   /** A plain month at the same salary (no pay-out, no fines) — the basis for prior-month YTD. */
   recurring: PayLine
-  leave: { rate: number; due: number; taken: number; paidDays: number; paidDaysYtd: number }
+  leave: { accrual: number; rate: number; due: number; taken: number; paidDays: number; paidDaysYtd: number }
   fines: { detail: string; amount: number }[]
   finesRecoveredYtd: number
 }
@@ -54,7 +55,9 @@ export function usePayRun(branch: BranchCode, month: string): PayRun {
       const sal = file.salary
       if (!sal || !(sal.basic > 0)) continue
 
-      const allowances = (sal.allowances ?? []).reduce((t, a) => t + (a.amount || 0), 0)
+      // Gratuity is computed from basic by computePay, so a hand-typed "Gratuity"
+      // allowance is ignored rather than paid twice.
+      const allowances = (sal.allowances ?? []).filter((a) => !isGratuity(a.name)).reduce((t, a) => t + (a.amount || 0), 0)
       const rate = leaveRateFor(sal, bands)
       const paidDays = leavePayoutDays(ledger, p.id, { month })
       const paidDaysYtd = leavePayoutDays(ledger, p.id, { year })
@@ -72,7 +75,7 @@ export function usePayRun(branch: BranchCode, month: string): PayRun {
         p, file, grade: sal.grade,
         line: computePay(sal.basic, allowances, fineTotal, tax, leavePay),
         recurring: computePay(sal.basic, allowances, 0, tax, 0),
-        leave: { rate, due: bal.balance, taken: bal.annualTaken || leaveStats(ledger, p.id, year).days, paidDays, paidDaysYtd },
+        leave: { accrual: ACCRUAL_PER_MONTH, rate, due: bal.balance, taken: bal.annualTaken || leaveStats(ledger, p.id, year).days, paidDays, paidDaysYtd },
         fines, finesRecoveredYtd,
       })
     }

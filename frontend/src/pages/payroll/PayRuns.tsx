@@ -9,9 +9,12 @@ import Button from '@/components/ui/Button'
 import Modal from '@/components/ui/Modal'
 import { usePayRun, type PayRow } from '@/lib/payroll/run'
 import { deptNo } from '@/lib/payroll/payslip'
+import { round2 } from '@/lib/payroll/tax'
 import { usePayrunCols, payrunColsStore, PAYRUN_COLUMNS, PAYRUN_COLUMN_LABEL, PAYRUN_NUMERIC } from '@/lib/payroll/columns'
 
 const monthLabel = (ym: string) => { const [y, m] = ym.split('-').map(Number); return new Date(y, m - 1, 1).toLocaleDateString('en', { month: 'long', year: 'numeric' }) }
+/** Money to the ngwee — pay figures carry decimals, so never print a bare toLocaleString. */
+const n2 = (v: number) => v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
 export default function PayRuns() {
   const { user } = useAuth()
@@ -34,11 +37,12 @@ export default function PayRuns() {
     return term ? all.filter((r) => r.p.full_name.toLowerCase().includes(term) || r.p.department.toLowerCase().includes(term)) : all
   }, [all, q])
 
-  const totals = useMemo(() => rows.reduce((t, r) => ({
-    basic: t.basic + r.line.basic, allowances: t.allowances + r.line.allowances, leavePay: t.leavePay + r.line.leavePay,
-    gross: t.gross + r.line.gross, paye: t.paye + r.line.paye, napsa: t.napsa + r.line.napsa,
-    nhima: t.nhima + r.line.nhima, fines: t.fines + r.line.fines, net: t.net + r.line.net,
-  }), { basic: 0, allowances: 0, leavePay: 0, gross: 0, paye: 0, napsa: 0, nhima: 0, fines: 0, net: 0 } as Record<string, number>), [rows])
+  const totals = useMemo(() => {
+    const keys = ['basic', 'gratuity', 'allowances', 'leavePay', 'gross', 'taxable', 'paye', 'napsa', 'nhima', 'fines', 'net'] as const
+    const t: Record<string, number> = {}
+    for (const k of keys) t[k] = round2(rows.reduce((s, r) => s + r.line[k], 0))
+    return t
+  }, [rows])
 
   const colValue = (key: string, r: PayRow): string | number => {
     switch (key) {
@@ -62,7 +66,7 @@ export default function PayRuns() {
 
   function exportXlsx() {
     const flat = rows.map((r) => Object.fromEntries(cols.map((k) => [PAYRUN_COLUMN_LABEL[k], colValue(k, r)])))
-    const totalRow = Object.fromEntries(cols.map((k, i) => [PAYRUN_COLUMN_LABEL[k], i === 0 ? 'TOTAL' : (PAYRUN_NUMERIC.has(k) ? Math.round(totals[k] || 0) : '')]))
+    const totalRow = Object.fromEntries(cols.map((k, i) => [PAYRUN_COLUMN_LABEL[k], i === 0 ? 'TOTAL' : (PAYRUN_NUMERIC.has(k) ? round2(totals[k] || 0) : '')]))
     flat.push(totalRow)
     const ws = XLSX.utils.json_to_sheet(flat.length ? flat : [{ Employee: 'No priced employees' }])
     const wb = XLSX.utils.book_new()
@@ -81,7 +85,7 @@ export default function PayRuns() {
     <div className="page space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <p className="max-w-2xl text-sm text-status-neutral">
-          Pay run for <span className="font-medium text-navy">{branchLabel}</span> — <span className="font-medium text-navy">gross (basic + allowances) is read live from each employee's file</span>; PAYE, NAPSA &amp; NHIS come from <Link to="/payroll/taxes" className="font-medium text-brand hover:underline">Payroll → Taxes</Link>, plus any leave days paid out this month and any pending incident fines. Set an employee's salary in HR → Employees → their file → Salary.
+          Pay run for <span className="font-medium text-navy">{branchLabel}</span> — <span className="font-medium text-navy">basic &amp; allowances are read live from each employee's file</span>; gratuity ({tax.gratuity_rate}% of basic), PAYE, NAPSA &amp; NHIS come from <Link to="/payroll/taxes" className="font-medium text-brand hover:underline">Payroll → Taxes</Link>, plus any leave days paid out this month and any pending incident fines. Set an employee's salary in HR → Employees → their file → Salary.
         </p>
         <div className="flex flex-wrap gap-2">
           <Link to="/payroll/payslips" className="inline-flex items-center gap-1.5 rounded-lg border border-black/15 px-3 py-2 text-sm font-medium text-navy hover:bg-canvas"><ReceiptText size={15} /> Payslips</Link>
@@ -115,7 +119,8 @@ export default function PayRuns() {
             <thead className="bg-navy text-white">
               <tr>
                 <th className="px-3 py-2.5 font-medium">Employee</th><th className="px-3 py-2.5 font-medium">Grade</th>
-                <th className="px-3 py-2.5 text-right font-medium">Basic</th><th className="px-3 py-2.5 text-right font-medium">Allow.</th>
+                <th className="px-3 py-2.5 text-right font-medium">Basic</th>
+                <th className="px-3 py-2.5 text-right font-medium">Gratuity</th><th className="px-3 py-2.5 text-right font-medium">Allow.</th>
                 <th className="px-3 py-2.5 text-right font-medium">Leave pay</th>
                 <th className="px-3 py-2.5 text-right font-medium">Gross</th><th className="px-3 py-2.5 text-right font-medium">PAYE</th>
                 <th className="px-3 py-2.5 text-right font-medium">NAPSA</th><th className="px-3 py-2.5 text-right font-medium">NHIS</th>
@@ -127,29 +132,30 @@ export default function PayRuns() {
                 <tr key={r.p.key} className={i % 2 ? 'bg-canvas/40' : ''}>
                   <td className="px-3 py-2 font-medium text-navy">{r.p.full_name}<div className="text-[11px] font-normal text-status-neutral">{r.p.department}</div></td>
                   <td className="px-3 py-2 text-status-neutral">{r.grade || '—'}</td>
-                  <td className="px-3 py-2 text-right text-status-neutral">{r.line.basic.toLocaleString()}</td>
-                  <td className="px-3 py-2 text-right text-status-neutral">{r.line.allowances ? r.line.allowances.toLocaleString() : '—'}</td>
-                  <td className="px-3 py-2 text-right text-status-neutral">{r.line.leavePay ? <span className="font-medium text-status-good" title={`${r.leave.paidDays} day(s) paid out`}>{r.line.leavePay.toLocaleString()}</span> : '—'}</td>
-                  <td className="px-3 py-2 text-right font-medium text-navy">{r.line.gross.toLocaleString()}</td>
-                  <td className="px-3 py-2 text-right text-status-neutral">{r.line.paye.toLocaleString()}</td>
-                  <td className="px-3 py-2 text-right text-status-neutral">{r.line.napsa.toLocaleString()}</td>
-                  <td className="px-3 py-2 text-right text-status-neutral">{r.line.nhima.toLocaleString()}</td>
-                  <td className="px-3 py-2 text-right text-status-neutral">{r.line.fines ? r.line.fines.toLocaleString() : '—'}</td>
-                  <td className="px-3 py-2 text-right font-bold text-navy">{r.line.net.toLocaleString()}</td>
+                  <td className="px-3 py-2 text-right text-status-neutral">{n2(r.line.basic)}</td>
+                  <td className="px-3 py-2 text-right text-status-neutral" title={`${tax.gratuity_rate}% of basic`}>{n2(r.line.gratuity)}</td>
+                  <td className="px-3 py-2 text-right text-status-neutral">{r.line.allowances ? n2(r.line.allowances) : '—'}</td>
+                  <td className="px-3 py-2 text-right text-status-neutral">{r.line.leavePay ? <span className="font-medium text-status-good" title={`${r.leave.paidDays} day(s) paid out`}>{n2(r.line.leavePay)}</span> : '—'}</td>
+                  <td className="px-3 py-2 text-right font-medium text-navy">{n2(r.line.gross)}</td>
+                  <td className="px-3 py-2 text-right text-status-neutral">{n2(r.line.paye)}</td>
+                  <td className="px-3 py-2 text-right text-status-neutral">{n2(r.line.napsa)}</td>
+                  <td className="px-3 py-2 text-right text-status-neutral">{n2(r.line.nhima)}</td>
+                  <td className="px-3 py-2 text-right text-status-neutral">{r.line.fines ? n2(r.line.fines) : '—'}</td>
+                  <td className="px-3 py-2 text-right font-bold text-navy">{n2(r.line.net)}</td>
                 </tr>
               ))}
-              {rows.length === 0 && <tr><td colSpan={11} className="px-4 py-12 text-center text-sm text-status-neutral"><Wallet size={22} className="mx-auto mb-2 text-status-neutral/60" />No priced employees. Set salaries in the employee files to build the run.</td></tr>}
+              {rows.length === 0 && <tr><td colSpan={12} className="px-4 py-12 text-center text-sm text-status-neutral"><Wallet size={22} className="mx-auto mb-2 text-status-neutral/60" />No priced employees. Set salaries in the employee files to build the run.</td></tr>}
             </tbody>
             {rows.length > 0 && (
               <tfoot>
                 <tr className="border-t-2 border-navy/20 bg-canvas font-bold text-navy">
-                  <td className="px-3 py-2" colSpan={5}>Total ({cur})</td>
-                  <td className="px-3 py-2 text-right">{totals.gross.toLocaleString()}</td>
-                  <td className="px-3 py-2 text-right">{totals.paye.toLocaleString()}</td>
-                  <td className="px-3 py-2 text-right">{totals.napsa.toLocaleString()}</td>
-                  <td className="px-3 py-2 text-right">{totals.nhima.toLocaleString()}</td>
-                  <td className="px-3 py-2 text-right">{totals.fines.toLocaleString()}</td>
-                  <td className="px-3 py-2 text-right">{totals.net.toLocaleString()}</td>
+                  <td className="px-3 py-2" colSpan={6}>Total ({cur})</td>
+                  <td className="px-3 py-2 text-right">{n2(totals.gross)}</td>
+                  <td className="px-3 py-2 text-right">{n2(totals.paye)}</td>
+                  <td className="px-3 py-2 text-right">{n2(totals.napsa)}</td>
+                  <td className="px-3 py-2 text-right">{n2(totals.nhima)}</td>
+                  <td className="px-3 py-2 text-right">{n2(totals.fines)}</td>
+                  <td className="px-3 py-2 text-right">{n2(totals.net)}</td>
                 </tr>
               </tfoot>
             )}

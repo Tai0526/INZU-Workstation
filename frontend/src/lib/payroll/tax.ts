@@ -12,23 +12,32 @@ export interface PayeBand { upTo: number | null; rate: number } // upTo = upper 
 export interface TaxConfig {
   currency: string
   paye_bands: PayeBand[]
-  napsa_rate: number    // % of gross
-  napsa_ceiling: number // max monthly employee NAPSA contribution
-  nhima_rate: number    // % of basic
+  napsa_rate: number     // % of gross (gratuity included)
+  napsa_ceiling: number  // max monthly employee NAPSA contribution
+  nhima_rate: number     // % of basic
+  gratuity_rate: number  // % of basic — paid every month, mandatory
+  gratuity_taxable: boolean // INZU practice: gratuity is outside monthly PAYE
 }
 
-// Zambian defaults (2024-ish) — editable in Payroll → Taxes.
+/**
+ * Zambian defaults — editable in Payroll → Taxes. The PAYE bands and the gratuity
+ * rule below are the ones that reproduce INZU's own payslips to the ngwee
+ * (checked against the November 2024 statement): 25% gratuity on basic, excluded
+ * from taxable pay but inside the NAPSA base, and a 37% top PAYE rate.
+ */
 export const DEFAULT_TAX: TaxConfig = {
   currency: 'ZMW',
   paye_bands: [
     { upTo: 5100, rate: 0 },
     { upTo: 7100, rate: 20 },
     { upTo: 9200, rate: 30 },
-    { upTo: null, rate: 37.5 },
+    { upTo: null, rate: 37 },
   ],
   napsa_rate: 5,
   napsa_ceiling: 1342.4,
   nhima_rate: 1,
+  gratuity_rate: 25,
+  gratuity_taxable: false,
 }
 
 const cfg = createSyncConfig<TaxConfig>({
@@ -43,17 +52,20 @@ export const taxStore = {
 }
 export const useTaxConfig = () => useSyncExternalStore(cfg.subscribe, cfg.get, cfg.get)
 
+/** Money rounding — payslips are stated to the ngwee, so never round to whole units. */
+export const round2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 100
+
 /** Progressive PAYE over the bands (each band's `upTo` is its cumulative upper bound). */
-export function computePaye(gross: number, bands: PayeBand[]): number {
+export function computePaye(taxable: number, bands: PayeBand[]): number {
   let tax = 0, prev = 0
   for (const b of bands) {
     const upper = b.upTo ?? Infinity
-    if (gross <= prev) break
-    const slice = Math.min(gross, upper) - prev
+    if (taxable <= prev) break
+    const slice = Math.min(taxable, upper) - prev
     tax += (slice * (b.rate || 0)) / 100
     prev = upper
   }
-  return Math.round(tax)
+  return round2(tax)
 }
 
 /**
@@ -68,9 +80,11 @@ export function freepay(gross: number, bands: PayeBand[]): number {
 
 export interface PayLine {
   basic: number
+  gratuity: number    // mandatory, % of basic
   allowances: number
   leavePay: number    // leave days paid out this month × the grade's leave-day rate
-  gross: number
+  gross: number       // everything paid — basic + gratuity + allowances + leave pay
+  taxable: number     // the slice PAYE is charged on (gross less untaxed gratuity)
   paye: number
   napsa: number
   nhima: number
@@ -81,15 +95,25 @@ export interface PayLine {
 }
 
 /**
- * Compute a person's pay from their file salary + statutory config + pending fines.
- * `leavePay` is any leave days paid out in the month — it is part of gross and taxed.
+ * A person's pay for one month, from their file salary + the statutory config +
+ * pending fines. `leavePay` is any leave days paid out in the month.
+ *
+ * The order matters and is INZU's, verified against a real payslip:
+ *   gross    = basic + gratuity + allowances + leave pay
+ *   taxable  = gross − gratuity            (gratuity sits outside monthly PAYE)
+ *   PAYE     = progressive bands on taxable
+ *   NAPSA    = % of FULL gross (gratuity included), capped
+ *   NHIS     = % of basic only
  */
 export function computePay(basic: number, allowances: number, fines: number, t: TaxConfig, leavePay = 0): PayLine {
-  const gross = Math.max(0, (basic || 0) + (allowances || 0) + (leavePay || 0))
-  const paye = computePaye(gross, t.paye_bands)
-  const napsa = Math.round(Math.min(gross * (t.napsa_rate || 0) / 100, t.napsa_ceiling || Infinity))
-  const nhima = Math.round((basic || 0) * (t.nhima_rate || 0) / 100)
-  const statutory = paye + napsa + nhima
-  const totalDeductions = statutory + (fines || 0)
-  return { basic: basic || 0, allowances: allowances || 0, leavePay: leavePay || 0, gross, paye, napsa, nhima, fines: fines || 0, statutory, totalDeductions, net: gross - totalDeductions }
+  const b = Math.max(0, basic || 0)
+  const gratuity = round2(b * (t.gratuity_rate || 0) / 100)
+  const gross = round2(b + gratuity + (allowances || 0) + (leavePay || 0))
+  const taxable = round2(t.gratuity_taxable ? gross : gross - gratuity)
+  const paye = computePaye(taxable, t.paye_bands)
+  const napsa = round2(Math.min(gross * (t.napsa_rate || 0) / 100, t.napsa_ceiling || Infinity))
+  const nhima = round2(b * (t.nhima_rate || 0) / 100)
+  const statutory = round2(paye + napsa + nhima)
+  const totalDeductions = round2(statutory + (fines || 0))
+  return { basic: b, gratuity, allowances: allowances || 0, leavePay: leavePay || 0, gross, taxable, paye, napsa, nhima, fines: fines || 0, statutory, totalDeductions, net: round2(gross - totalDeductions) }
 }
