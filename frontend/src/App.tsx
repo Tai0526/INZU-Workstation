@@ -1,56 +1,72 @@
+import { lazy } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import Layout from '@/components/layout/Layout'
 import LoginPage from '@/pages/auth/LoginPage'
-import Dashboard from '@/pages/Dashboard'
-import FleetOverview from '@/pages/fleet/FleetOverview'
-import VehicleRegister from '@/pages/fleet/VehicleRegister'
-import Licensing from '@/pages/fleet/Licensing'
-import OperatedVehicles from '@/pages/fleet/OperatedVehicles'
-import DriversOverview from '@/pages/drivers/DriversOverview'
-import DriverRoster from '@/pages/drivers/DriverRoster'
-import DriverSchedule from '@/pages/drivers/DriverSchedule'
-import DriverProfiles from '@/pages/drivers/DriverProfiles'
-import SpeedOverview from '@/pages/speed/SpeedOverview'
-import SpeedEvents from '@/pages/speed/SpeedEvents'
-import OperationsOverview from '@/pages/operations/OperationsOverview'
-import DailyPlan from '@/pages/operations/DailyPlan'
-import WeeklyPlan from '@/pages/operations/WeeklyPlan'
-import BusAllocation from '@/pages/operations/BusAllocation'
-import Mileage from '@/pages/operations/Mileage'
-import Fuel from '@/pages/operations/Fuel'
-import SafetyOverview from '@/pages/safety/SafetyOverview'
-import Incidents from '@/pages/safety/Incidents'
-import DriverCompliance from '@/pages/safety/DriverCompliance'
-import TrainingRecords from '@/pages/safety/TrainingRecords'
-import HazardRegister from '@/pages/safety/HazardRegister'
-import CapTracker from '@/pages/safety/CapTracker'
-import LotoRegister from '@/pages/safety/LotoRegister'
-import ToolInspections from '@/pages/safety/ToolInspections'
-import GeneralWorkers from '@/pages/safety/GeneralWorkers'
-import WorkshopOverview from '@/pages/workshop/WorkshopOverview'
-import JobCards from '@/pages/workshop/JobCards'
-import MechanicsSchedule from '@/pages/workshop/MechanicsSchedule'
-import DailyChecklists from '@/pages/workshop/DailyChecklists'
-import PmSchedules from '@/pages/workshop/PmSchedules'
-import MonthlyInspections from '@/pages/workshop/MonthlyInspections'
-import TyreManagement from '@/pages/workshop/TyreManagement'
-import CriticalSpares from '@/pages/workshop/CriticalSpares'
-import RcaLog from '@/pages/workshop/RcaLog'
-import HrOverview from '@/pages/hr/HrOverview'
-import Employees from '@/pages/hr/Employees'
-import StaffSchedule from '@/pages/hr/StaffSchedule'
-import HrLeave from '@/pages/hr/Leave'
-import HrReports from '@/pages/hr/HrReports'
-import PayRuns from '@/pages/payroll/PayRuns'
-import PayrollTaxes from '@/pages/payroll/Taxes'
-import Payslips from '@/pages/payroll/Payslips'
-import DocumentsLibrary from '@/pages/documents/DocumentsLibrary'
-import Messages from '@/pages/messages/Messages'
-import Admin from '@/pages/admin/Admin'
-import PettyCash from '@/pages/pettycash/PettyCash'
 import ChangePassword from '@/pages/auth/ChangePassword'
 import PlaceholderPage from '@/components/PlaceholderPage'
 import { ALL_PAGES } from '@/lib/nav'
+import { canView } from '@/lib/permissions'
+import { useAuth } from '@/auth/AuthContext'
+
+/**
+ * Every page is code-split. Importing them eagerly meant one 4 MB bundle: the
+ * login screen waited on Petty Cash's spreadsheet library, Payroll's PDF
+ * renderer, the speed map's mapping library and every other page's code before
+ * it could paint. Now each route fetches only its own chunk, on demand, and the
+ * heavy libraries ride along with the one page that needs them.
+ *
+ * Deliberately NOT lazy: the layout shell, the login page and the forced
+ * password change. They are the first paint — a second round trip for those
+ * would trade the win straight back. <Suspense> lives in Layout, around the
+ * outlet, so the shell stays on screen while a page loads.
+ */
+const Dashboard = lazy(() => import('@/pages/Dashboard'))
+const FleetOverview = lazy(() => import('@/pages/fleet/FleetOverview'))
+const VehicleRegister = lazy(() => import('@/pages/fleet/VehicleRegister'))
+const Licensing = lazy(() => import('@/pages/fleet/Licensing'))
+const OperatedVehicles = lazy(() => import('@/pages/fleet/OperatedVehicles'))
+const DriversOverview = lazy(() => import('@/pages/drivers/DriversOverview'))
+const DriverRoster = lazy(() => import('@/pages/drivers/DriverRoster'))
+const DriverSchedule = lazy(() => import('@/pages/drivers/DriverSchedule'))
+const DriverProfiles = lazy(() => import('@/pages/drivers/DriverProfiles'))
+const SpeedOverview = lazy(() => import('@/pages/speed/SpeedOverview'))
+const SpeedEvents = lazy(() => import('@/pages/speed/SpeedEvents'))
+const OperationsOverview = lazy(() => import('@/pages/operations/OperationsOverview'))
+const DailyPlan = lazy(() => import('@/pages/operations/DailyPlan'))
+const WeeklyPlan = lazy(() => import('@/pages/operations/WeeklyPlan'))
+const BusAllocation = lazy(() => import('@/pages/operations/BusAllocation'))
+const Mileage = lazy(() => import('@/pages/operations/Mileage'))
+const Fuel = lazy(() => import('@/pages/operations/Fuel'))
+const SafetyOverview = lazy(() => import('@/pages/safety/SafetyOverview'))
+const Incidents = lazy(() => import('@/pages/safety/Incidents'))
+const DriverCompliance = lazy(() => import('@/pages/safety/DriverCompliance'))
+const TrainingRecords = lazy(() => import('@/pages/safety/TrainingRecords'))
+const HazardRegister = lazy(() => import('@/pages/safety/HazardRegister'))
+const CapTracker = lazy(() => import('@/pages/safety/CapTracker'))
+const LotoRegister = lazy(() => import('@/pages/safety/LotoRegister'))
+const ToolInspections = lazy(() => import('@/pages/safety/ToolInspections'))
+const GeneralWorkers = lazy(() => import('@/pages/safety/GeneralWorkers'))
+const WorkshopOverview = lazy(() => import('@/pages/workshop/WorkshopOverview'))
+const JobCards = lazy(() => import('@/pages/workshop/JobCards'))
+const MechanicsSchedule = lazy(() => import('@/pages/workshop/MechanicsSchedule'))
+const DailyChecklists = lazy(() => import('@/pages/workshop/DailyChecklists'))
+const PmSchedules = lazy(() => import('@/pages/workshop/PmSchedules'))
+const MonthlyInspections = lazy(() => import('@/pages/workshop/MonthlyInspections'))
+const TyreManagement = lazy(() => import('@/pages/workshop/TyreManagement'))
+const CriticalSpares = lazy(() => import('@/pages/workshop/CriticalSpares'))
+const RcaLog = lazy(() => import('@/pages/workshop/RcaLog'))
+const HrOverview = lazy(() => import('@/pages/hr/HrOverview'))
+const Employees = lazy(() => import('@/pages/hr/Employees'))
+const StaffSchedule = lazy(() => import('@/pages/hr/StaffSchedule'))
+const HrLeave = lazy(() => import('@/pages/hr/Leave'))
+const HrReports = lazy(() => import('@/pages/hr/HrReports'))
+const PayRuns = lazy(() => import('@/pages/payroll/PayRuns'))
+const PayrollTaxes = lazy(() => import('@/pages/payroll/Taxes'))
+const Payslips = lazy(() => import('@/pages/payroll/Payslips'))
+const DocumentsLibrary = lazy(() => import('@/pages/documents/DocumentsLibrary'))
+const Messages = lazy(() => import('@/pages/messages/Messages'))
+const Admin = lazy(() => import('@/pages/admin/Admin'))
+const PettyCash = lazy(() => import('@/pages/pettycash/PettyCash'))
 
 // Real (built) pages, keyed by path. Anything not here renders as a placeholder.
 const REAL_PAGES: Record<string, React.ComponentType> = {
@@ -101,8 +117,6 @@ const REAL_PAGES: Record<string, React.ComponentType> = {
   '/petty-cash': PettyCash,
   '/admin': Admin,
 }
-import { canView } from '@/lib/permissions'
-import { useAuth } from '@/auth/AuthContext'
 
 /** Blocks a page if the current role can't view its module or it's hidden for the user. */
 function Gate({ module, path, children }: { module: any; path: string; children: React.ReactNode }) {

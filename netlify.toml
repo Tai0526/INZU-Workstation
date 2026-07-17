@@ -14,3 +14,26 @@
   from = "/*"
   to = "/index.html"
   status = 200
+
+# ── Caching ──────────────────────────────────────────────────────────────────
+# Netlify sets no far-future caching by default, so every visit re-fetched the
+# whole app. These rules are ordered: the broad one first, the specific one after
+# (for a given header, the last matching rule wins).
+
+# Anything not fingerprinted — above all the HTML shell. It must be revalidated
+# every time, otherwise a browser keeps serving an old index.html that points at
+# JS files a new deploy has already deleted, and the app breaks until a hard
+# refresh. Cheap: it's a ~1 KB conditional request that usually 304s.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+# Vite fingerprints every built asset (index-PyAOoroN.js). The content of a given
+# filename can therefore never change — a new build produces a new name. So these
+# are safe to cache permanently: after the first visit the browser reuses them
+# without even asking, and a deploy only re-downloads the chunks that changed.
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 import { Outlet, Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from '@/auth/AuthContext'
 import { reconcileVehicleDocBranches } from '@/lib/fleet/store'
@@ -8,6 +8,15 @@ import Sidebar from './Sidebar'
 import Topbar from './Topbar'
 
 const LS_COLLAPSED = 'inzu_sidebar_collapsed'
+
+/** Shown only while a page's chunk downloads — usually a single frame on a warm cache. */
+function PageLoading() {
+  return (
+    <div className="flex h-full items-center justify-center py-24">
+      <div className="h-6 w-6 animate-spin rounded-full border-2 border-black/10 border-t-brand" />
+    </div>
+  )
+}
 
 export default function Layout() {
   const { user } = useAuth()
@@ -56,8 +65,14 @@ export default function Layout() {
           collapsed={collapsed}
         />
         <main className="flex-1 overflow-auto bg-canvas">
+          {/* Pages are code-split (see App.tsx), so this boundary catches the
+              moment a route's chunk is still downloading. It sits inside the
+              shell on purpose: the sidebar and top bar stay put, so navigation
+              feels instant even on a slow connection. */}
           <ErrorBoundary key={pathname}>
-            <Outlet />
+            <Suspense fallback={<PageLoading />}>
+              <Outlet />
+            </Suspense>
           </ErrorBoundary>
         </main>
       </div>
