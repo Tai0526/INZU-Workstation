@@ -1,6 +1,13 @@
 import { useSyncExternalStore } from 'react'
 import { getActor } from '@/lib/audit/actor'
 import { createSyncConfig } from '@/lib/supabase/syncTable'
+import type { RoleKey } from '@/lib/roles'
+
+// Employee files hold sensitive personal data (IDs, salary, contracts, medicals),
+// so viewing is limited to HR, the MD and Ops management — never the wider staff
+// who can otherwise reach HR → Employees or a driver profile.
+export const FILE_VIEW_ROLES: RoleKey[] = ['hr_manager', 'hr_officer', 'managing_director', 'operations_manager', 'asst_operations_manager', 'administrator']
+export const canViewEmployeeFile = (role: RoleKey) => FILE_VIEW_ROLES.includes(role)
 
 /**
  * Employee file — the rich personnel record that supplements the lightweight
@@ -63,6 +70,7 @@ export interface EmployeeFile {
   tpin: string            // tax number
   napsa: string           // social-security number
   bank_name: string
+  bank_branch: string
   bank_account: string
   next_of_kin: Contact
   emergency_contacts: Contact[]
@@ -79,7 +87,7 @@ export interface EmployeeFile {
 export function blankFile(): EmployeeFile {
   return {
     national_id: '', dob: '', gender: '', marital_status: '', address: '', email: '',
-    start_date: '', leave_opening: 0, leave_opening_at: '', job_title: '', contract_type: '', tpin: '', napsa: '', bank_name: '', bank_account: '',
+    start_date: '', leave_opening: 0, leave_opening_at: '', job_title: '', contract_type: '', tpin: '', napsa: '', bank_name: '', bank_branch: '', bank_account: '',
     next_of_kin: { name: '', relationship: '', phone: '' }, emergency_contacts: [], documents: [], events: [], salary: null, contracts: [], exit: null, notes: '',
     updated_by: '', updated_at: '',
   }

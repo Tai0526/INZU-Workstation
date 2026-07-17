@@ -18,6 +18,7 @@ import { useScheduling, crewLabel } from '@/lib/drivers/scheduling'
 import { useDriverShifts } from '@/lib/drivers/driverShifts'
 import { scheduledShift, dutyLabel, dutyHours, driverShiftOnDate, SHIFT_META } from '@/lib/drivers/schedule'
 import { leaveStore, useDriverLeave } from '@/lib/drivers/leave'
+import { leaveLedgerStore, LEAVE_TYPES, LEAVE_TYPE_LABEL, type LeaveType } from '@/lib/hr/leaveLedger'
 import { useSpeedEvents } from '@/lib/speed/store'
 import { overBy, STATUS_META } from '@/lib/speed/types'
 import { useCases, INCIDENT_TYPE_META, CASE_STAGE_META } from '@/lib/safety/cases'
@@ -183,6 +184,7 @@ function LeaveModal({ driver, onClose }: { driver: Driver; onClose: () => void }
   const existing = leaveStore.for(driver.id)
   const [start, setStart] = useState(existing?.start || isoOf(new Date()))
   const [days, setDays] = useState(existing ? daysInclusive(existing.start, existing.end) : 7)
+  const [type, setType] = useState<LeaveType>('annual')
   const [err, setErr] = useState('')
   const n = Math.max(1, Number(days) || 1)
   const end = addDaysISO(start, n - 1)
@@ -191,6 +193,9 @@ function LeaveModal({ driver, onClose }: { driver: Driver; onClose: () => void }
   function save() {
     if (startOff) { setErr('The driver is off-rotation on that start date — leave can only begin on a working day.'); return }
     leaveStore.set(driver.id, start, end)
+    // Record it in the leave ledger so it counts toward the driver's balance & file
+    // (only on a fresh grant, not an edit, to avoid double-counting).
+    if (!existing) leaveLedgerStore.add({ branch: driver.branch, person_id: driver.id, person_name: driver.full_name, source: 'driver', kind: 'leave', type, start, end, days: n, note: '', attachment: null })
     onClose()
   }
   function endLeave() { leaveStore.clear(driver.id); onClose() }
@@ -204,6 +209,8 @@ function LeaveModal({ driver, onClose }: { driver: Driver; onClose: () => void }
         </div>
       }>
       {err && <div className="mb-3 rounded-lg border border-status-critical/30 bg-status-critical/5 px-3 py-2 text-sm text-status-critical">{err}</div>}
+      {!existing && <label className="mb-3 block"><span className="mb-1 block text-xs font-medium text-navy">Leave type</span>
+        <select className="w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand" value={type} onChange={(e) => setType(e.target.value as LeaveType)}>{LEAVE_TYPES.map((t) => <option key={t} value={t}>{LEAVE_TYPE_LABEL[t]}</option>)}</select></label>}
       <div className="grid grid-cols-2 gap-3">
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Start date</span>
           <input type="date" className="w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand" value={start} onChange={(e) => { setStart(e.target.value); setErr('') }} /></label>

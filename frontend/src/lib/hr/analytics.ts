@@ -22,6 +22,8 @@ export interface RiskAssessment {
   reasons: string[]
   leave: LeaveStats
   disciplinary: number // closed cases with an upheld outcome
+  incidents: number    // all incident/disciplinary cases on record
+  speedEvents: number  // confirmed speeding events against the driver
   fines: number
   absenceDays: number  // sick + unpaid + compassionate days (unplanned-ish)
 }
@@ -34,24 +36,30 @@ function upheldCases(cases: DisciplinaryCase[], personId: string, personName: st
 }
 
 export function assessRisk(opts: {
-  personId: string; personName: string; ledger: LeaveEntry[]; cases: DisciplinaryCase[]; deductions: PayrollDeduction[]; year: number
+  personId: string; personName: string; ledger: LeaveEntry[]; cases: DisciplinaryCase[]; deductions: PayrollDeduction[]; year: number; speedEvents?: number
 }): RiskAssessment {
   const { personId, personName, ledger, cases, deductions, year } = opts
   const leave = leaveStats(ledger, personId, year)
   const disciplinary = upheldCases(cases, personId, personName)
+  const incidents = cases.filter((c) => (personId ? c.driver_id === personId : c.driver_name === personName)).length
+  const speedEvents = opts.speedEvents ?? 0
   const fines = deductions.filter((d) => (personId ? d.driver_id === personId : d.driver_name === personName)).length
   const unsupportedSick = Math.max(0, leave.sickSpells - leave.sickNotes)
   const absenceDays = leave.byType.sick.days + leave.byType.unpaid.days + leave.byType.compassionate.days
 
   const reasons: string[] = []
   let score = 0
+  // Conduct — the strongest signals. Many speeding events must never read as "good standing".
+  if (speedEvents >= 3) { score += speedEvents >= 8 ? 3 : speedEvents >= 5 ? 2 : 1; reasons.push(`${speedEvents} confirmed speeding events`) }
+  if (disciplinary > 0) { score += Math.min(2, disciplinary); reasons.push(`${disciplinary} disciplinary outcome${disciplinary === 1 ? '' : 's'}`) }
+  else if (incidents >= 3) { score++; reasons.push(`${incidents} incidents on record`) }
+  if (fines >= 2) { score++; reasons.push(`${fines} fines on record`) }
+  // Attendance / leave patterns.
   if (leave.sickSpells >= 3) { score++; reasons.push(`${leave.sickSpells} sick spells this year`) }
   if (unsupportedSick >= 2) { score++; reasons.push(`${unsupportedSick} sick spells with no note`) }
   if (leave.spells >= 6) { score++; reasons.push(`${leave.spells} leave spells this year`) }
   if (absenceDays >= 15) { score++; reasons.push(`${absenceDays} sick/unpaid days this year`) }
-  if (disciplinary > 0) { score += Math.min(2, disciplinary); reasons.push(`${disciplinary} disciplinary outcome${disciplinary === 1 ? '' : 's'}`) }
-  if (fines >= 2) { score++; reasons.push(`${fines} fines on record`) }
 
   const tier: RiskTier = score >= 3 ? 'high' : score === 2 ? 'watch' : 'low'
-  return { tier, score, reasons, leave, disciplinary, fines, absenceDays }
+  return { tier, score, reasons, leave, disciplinary, incidents, speedEvents, fines, absenceDays }
 }

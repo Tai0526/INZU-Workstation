@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { X, Save, FileText, Trash2, Plus, Paperclip, ShieldAlert, CalendarDays, Coins, User, Briefcase, Phone, DoorOpen, AlertTriangle, Banknote, FileClock, Settings2 } from 'lucide-react'
+import { X, Save, FileText, Trash2, Plus, Paperclip, ShieldAlert, CalendarDays, Coins, User, Briefcase, Phone, DoorOpen, AlertTriangle, Banknote, FileClock, Settings2, Search } from 'lucide-react'
 import Button from '@/components/ui/Button'
 import StatusBadge from '@/components/ui/StatusBadge'
 import Modal from '@/components/ui/Modal'
@@ -17,6 +17,10 @@ import { useLeaveLedger, leaveBalance, LEAVE_TYPE_LABEL, type LeaveEntry } from 
 import { assessRisk, RISK_META } from '@/lib/hr/analytics'
 import { useCases, DECISION_LABEL, INCIDENT_TYPE_META } from '@/lib/safety/cases'
 import { useDeductions } from '@/lib/payroll/deductions'
+import { useSpeedEvents } from '@/lib/speed/store'
+import { countsAgainstDriver } from '@/lib/speed/types'
+import { useDriverLeave } from '@/lib/drivers/leave'
+import { useEmployeeLeave } from '@/lib/hr/leave'
 
 const inputCls = 'w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand'
 const fmt = (iso: string) => { try { return iso ? new Date(`${iso.slice(0, 10)}T00:00:00`).toLocaleDateString('en', { day: '2-digit', month: 'short', year: 'numeric' }) : '—' } catch { return iso } }
@@ -28,7 +32,7 @@ const TABS: { k: Tab; label: string }[] = [
 ]
 // Scalar (form-edited) fields; documents/events/contracts mutate the store directly,
 // so Save must not write them back from the stale form and clobber live additions.
-const SCALAR_KEYS: (keyof EmployeeFile)[] = ['national_id', 'dob', 'gender', 'marital_status', 'address', 'email', 'start_date', 'leave_opening', 'leave_opening_at', 'job_title', 'contract_type', 'tpin', 'napsa', 'bank_name', 'bank_account', 'next_of_kin', 'emergency_contacts', 'salary', 'exit', 'notes']
+const SCALAR_KEYS: (keyof EmployeeFile)[] = ['national_id', 'dob', 'gender', 'marital_status', 'address', 'email', 'start_date', 'leave_opening', 'leave_opening_at', 'job_title', 'contract_type', 'tpin', 'napsa', 'bank_name', 'bank_branch', 'bank_account', 'next_of_kin', 'emergency_contacts', 'salary', 'exit', 'notes']
 const scalars = (x: EmployeeFile): Partial<EmployeeFile> => { const o: Partial<EmployeeFile> = {}; for (const k of SCALAR_KEYS) (o as any)[k] = x[k]; return o }
 
 export default function EmployeeFileDrawer({ person, canManage, onClose }: { person: HrPerson; canManage: boolean; onClose: () => void }) {
@@ -37,8 +41,12 @@ export default function EmployeeFileDrawer({ person, canManage, onClose }: { per
   const ledger = useLeaveLedger()
   const cases = useCases()
   const deductions = useDeductions()
+  const speed = useSpeedEvents()
+  const driverLeave = useDriverLeave()
+  const empLeave = useEmployeeLeave()
   const year = new Date().getFullYear()
   const today = new Date().toISOString().slice(0, 10)
+  const curLeave = person.source === 'driver' ? driverLeave[person.id] : empLeave[person.id]
 
   const [tab, setTab] = useState<Tab>('details')
   const [f, setF] = useState<EmployeeFile>(stored)
@@ -52,7 +60,8 @@ export default function EmployeeFileDrawer({ person, canManage, onClose }: { per
 
   const bal = useMemo(() => leaveBalance(ledger, person.id, { openingBalance: f.leave_opening, openingAt: f.leave_opening_at, asOf: today }), [ledger, person.id, f.leave_opening, f.leave_opening_at, today])
   const myLeave = useMemo(() => ledger.filter((e) => e.person_id === person.id && e.kind === 'leave').sort((a, b) => b.start.localeCompare(a.start)), [ledger, person.id])
-  const risk = useMemo(() => assessRisk({ personId: person.id, personName: person.full_name, ledger, cases, deductions, year }), [ledger, cases, deductions, person, year])
+  const speedCount = useMemo(() => speed.filter((e) => (e.driver_id ? e.driver_id === person.id : e.driver_name === person.full_name) && countsAgainstDriver(e)).length, [speed, person])
+  const risk = useMemo(() => assessRisk({ personId: person.id, personName: person.full_name, ledger, cases, deductions, year, speedEvents: speedCount }), [ledger, cases, deductions, person, year, speedCount])
   const myCases = useMemo(() => cases.filter((c) => (c.driver_id ? c.driver_id === person.id : c.driver_name === person.full_name)).sort((a, b) => b.event_datetime.localeCompare(a.event_datetime)), [cases, person])
   const myFines = useMemo(() => deductions.filter((d) => (d.driver_id ? d.driver_id === person.id : d.driver_name === person.full_name)).sort((a, b) => b.date.localeCompare(a.date)), [deductions, person])
   const finesTotal = myFines.reduce((s, d) => s + (d.status !== 'cancelled' ? d.amount : 0), 0)
@@ -84,7 +93,7 @@ export default function EmployeeFileDrawer({ person, canManage, onClose }: { per
               <span className="font-display text-lg font-bold text-navy">{person.full_name}</span>
               <StatusBadge tone={RISK_META[risk.tier].tone}>{RISK_META[risk.tier].label}</StatusBadge>
             </div>
-            <div className="text-xs text-status-neutral">{person.role} · {person.department}{person.employee_no ? ` · ${person.employee_no}` : ''}</div>
+            <div className="text-xs text-status-neutral">{f.job_title || person.role} · {person.department}{person.employee_no ? ` · ${person.employee_no}` : ''}</div>
             <div className="mt-1 text-[11px] text-status-neutral">File {completeness}% complete{f.updated_at ? ` · updated ${fmt(f.updated_at)}` : ''}</div>
           </div>
           <button onClick={onClose} className="rounded-lg p-1.5 text-status-neutral hover:bg-canvas"><X size={18} /></button>
@@ -112,17 +121,21 @@ export default function EmployeeFileDrawer({ person, canManage, onClose }: { per
               <Section icon={User} title="Personal">
                 <div className="grid grid-cols-2 gap-2">
                   {field('national_id', 'National ID / NRC')}{field('dob', 'Date of birth', 'date')}
-                  {field('gender', 'Gender')}{field('marital_status', 'Marital status')}
+                  <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">Gender</span>
+                    <select disabled={!canManage} className={`${inputCls} disabled:bg-canvas disabled:text-status-neutral`} value={f.gender || 'Male'} onChange={(e) => set('gender', e.target.value)}><option value="Male">Male</option><option value="Female">Female</option></select></label>
+                  {field('marital_status', 'Marital status')}
                   {field('email', 'Email', 'email')}
                   <label className="block col-span-2"><span className="mb-1 block text-[11px] font-medium text-navy">Residential address</span><input disabled={!canManage} className={`${inputCls} disabled:bg-canvas`} value={f.address} onChange={(e) => set('address', e.target.value)} /></label>
                 </div>
               </Section>
               <Section icon={Briefcase} title="Employment">
                 <div className="grid grid-cols-2 gap-2">
-                  {field('start_date', 'Start date (hired)', 'date')}{field('job_title', 'Job title')}
+                  {field('start_date', 'Start date (hired)', 'date')}
+                  <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">Role / job title</span>
+                    <input disabled={!canManage} className={`${inputCls} disabled:bg-canvas disabled:text-status-neutral`} value={f.job_title || person.role} onChange={(e) => set('job_title', e.target.value)} /></label>
                   {field('contract_type', 'Contract type')}{field('tpin', 'TPIN (tax)')}
                   {field('napsa', 'NAPSA / social security')}{field('bank_name', 'Bank')}
-                  {field('bank_account', 'Bank account')}
+                  {field('bank_branch', 'Bank branch')}{field('bank_account', 'Bank account')}
                 </div>
               </Section>
               <Section icon={FileText} title="Notes">
@@ -179,6 +192,7 @@ export default function EmployeeFileDrawer({ person, canManage, onClose }: { per
                 <Stat label="Taken" value={bal.annualTaken} />
                 <Stat label="Balance" value={bal.balance} tone={bal.balance <= 0 ? 'critical' : bal.balance <= 3 ? 'warning' : 'good'} />
               </div>
+              {curLeave && <div className="rounded-lg bg-status-warning/10 px-3 py-2 text-[11px] text-[#8a6d10]">Currently on leave: <b>{fmt(curLeave.start)} → {fmt(curLeave.end)}</b>{person.source === 'driver' ? ' (set from the driver profile).' : '.'}</div>}
               <div className="text-[11px] text-status-neutral">{bal.paidOut ? `${bal.paidOut} day(s) paid out. ` : ''}Accruing from {fmt(bal.since)}. Grant/adjust leave in <Link to="/hr/leave" className="font-medium text-brand hover:underline">HR → Leave</Link>.</div>
               <Section icon={CalendarDays} title={`Leave this year (${year})`}>
                 {myLeave.filter((e) => e.start.slice(0, 4) === String(year)).length ? (
@@ -283,6 +297,9 @@ function Stat({ label, value, tone = 'neutral' }: { label: string; value: string
 function DocumentsTab({ file, canManage, onUpload, onRemove }: { file: EmployeeFile; canManage: boolean; onUpload: (c: DocCategory, f: File, name: string) => void; onRemove: (docId: string, fileId: string) => void }) {
   const [cat, setCat] = useState<DocCategory>('interview')
   const [name, setName] = useState('')
+  const [q, setQ] = useState('')
+  const term = q.trim().toLowerCase()
+  const docs = file.documents.filter((d) => !term || d.name.toLowerCase().includes(term) || DOC_CATEGORY_LABEL[d.category].toLowerCase().includes(term))
   return (
     <div className="space-y-3">
       {canManage && (
@@ -299,11 +316,14 @@ function DocumentsTab({ file, canManage, onUpload, onRemove }: { file: EmployeeF
           </label>
         </div>
       )}
-      {DOC_CATEGORIES.filter((c) => file.documents.some((d) => d.category === c)).map((c) => (
+      {file.documents.length > 0 && (
+        <div className="relative"><Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-status-neutral" /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search documents…" className="w-full rounded-lg border border-black/15 bg-white py-1.5 pl-8 pr-3 text-sm text-navy outline-none focus:border-brand" /></div>
+      )}
+      {DOC_CATEGORIES.filter((c) => docs.some((d) => d.category === c)).map((c) => (
         <div key={c}>
           <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-status-neutral">{DOC_CATEGORY_LABEL[c]}</div>
           <div className="space-y-1">
-            {file.documents.filter((d) => d.category === c).map((d) => (
+            {docs.filter((d) => d.category === c).map((d) => (
               <div key={d.id} className="flex items-center gap-2 rounded-lg border border-black/10 bg-white px-3 py-1.5 text-xs">
                 <FileText size={13} className="shrink-0 text-brand" />
                 <button onClick={() => viewFile(d.file_id, d.file_name)} className="min-w-0 flex-1 truncate text-left font-medium text-navy hover:underline">{d.name}</button>
@@ -315,6 +335,7 @@ function DocumentsTab({ file, canManage, onUpload, onRemove }: { file: EmployeeF
         </div>
       ))}
       {file.documents.length === 0 && <p className="rounded-lg bg-canvas px-3 py-6 text-center text-xs text-status-neutral">No documents yet. Upload the interview transcript, qualifications, IDs and contract.</p>}
+      {file.documents.length > 0 && docs.length === 0 && <p className="rounded-lg bg-canvas px-3 py-6 text-center text-xs text-status-neutral">No documents match your search.</p>}
     </div>
   )
 }

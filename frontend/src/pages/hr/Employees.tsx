@@ -15,7 +15,10 @@ import { useEmployeeLeave, empOnLeave } from '@/lib/hr/leave'
 import { useLeaveLedger } from '@/lib/hr/leaveLedger'
 import { useCases } from '@/lib/safety/cases'
 import { useDeductions } from '@/lib/payroll/deductions'
+import { useSpeedEvents } from '@/lib/speed/store'
+import { countsAgainstDriver } from '@/lib/speed/types'
 import { assessRisk, RISK_META } from '@/lib/hr/analytics'
+import { canViewEmployeeFile } from '@/lib/hr/employeeFile'
 import EmployeeFileDrawer from '@/components/hr/EmployeeFileDrawer'
 
 const inputCls = 'w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand'
@@ -37,10 +40,15 @@ export default function Employees() {
   const ledger = useLeaveLedger()
   const cases = useCases()
   const deductions = useDeductions()
+  const speed = useSpeedEvents().filter((e) => e.branch === branch)
+  const canFile = canViewEmployeeFile(role)
   const year = new Date().getFullYear()
   const today = new Date().toISOString().slice(0, 10)
   const onLeaveNow = (p: HrPerson) => (p.source === 'driver' ? isOnLeave(p.id, today) : empOnLeave(p.id, today))
-  const riskById = useMemo(() => new Map(people.map((p) => [p.id, assessRisk({ personId: p.id, personName: p.full_name, ledger, cases, deductions, year })])), [people, ledger, cases, deductions, year])
+  const riskById = useMemo(() => new Map(people.map((p) => {
+    const se = speed.filter((e) => (e.driver_id ? e.driver_id === p.id : e.driver_name === p.full_name) && countsAgainstDriver(e)).length
+    return [p.id, assessRisk({ personId: p.id, personName: p.full_name, ledger, cases, deductions, year, speedEvents: se })]
+  })), [people, ledger, cases, deductions, year, speed])
 
   const [q, setQ] = useState('')
   const [dept, setDept] = useState('all')
@@ -122,7 +130,7 @@ export default function Employees() {
                   <td className="px-4 py-2"><StatusBadge tone={p.status === 'active' ? 'good' : 'neutral'}>{p.status === 'active' ? 'Active' : 'Inactive'}</StatusBadge></td>
                   <td className="px-4 py-2">
                     <div className="flex items-center justify-end gap-1">
-                      <button onClick={() => setFileFor(p)} className="inline-flex items-center gap-1 rounded-md border border-black/15 px-2 py-1 text-xs font-medium text-navy hover:bg-canvas" title="Open employee file"><FolderOpen size={12} /> File</button>
+                      {canFile && <button onClick={() => setFileFor(p)} className="inline-flex items-center gap-1 rounded-md border border-black/15 px-2 py-1 text-xs font-medium text-navy hover:bg-canvas" title="Open employee file"><FolderOpen size={12} /> File</button>}
                       {p.source === 'hr' && canManage && (
                         <>
                           <button onClick={() => openEdit(p)} className="rounded-md p-1.5 text-status-neutral hover:bg-canvas hover:text-navy" title="Edit"><Pencil size={14} /></button>
