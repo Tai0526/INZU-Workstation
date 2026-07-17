@@ -4,7 +4,6 @@ import { X, Save, FileText, Trash2, Plus, Paperclip, ShieldAlert, CalendarDays, 
 import Button from '@/components/ui/Button'
 import StatusBadge from '@/components/ui/StatusBadge'
 import Modal from '@/components/ui/Modal'
-import { BRANCHES } from '@/lib/roles'
 import { type HrPerson } from '@/lib/hr/directory'
 import { putFile, viewFile, deleteFile } from '@/lib/storage/fileStore'
 import { useCompliance, useTraining, useComplianceClasses, classMap, credStatus, CRED_STATUS_META, TRAINING_META } from '@/lib/safety/registers'
@@ -135,11 +134,10 @@ export default function EmployeeFileDrawer({ person, canManage, onClose }: { per
                   {field('start_date', 'Start date (hired)', 'date')}
                   <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">Role / job title</span>
                     <input disabled={!canManage} className={`${inputCls} disabled:bg-canvas disabled:text-status-neutral`} value={f.job_title || person.role} onChange={(e) => set('job_title', e.target.value)} /></label>
-                  <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">Branch</span>
-                    <div className="flex h-[38px] items-center rounded-lg border border-black/10 bg-canvas px-3 text-sm text-status-neutral">{BRANCHES.find((b) => b.code === person.branch)?.short || person.branch}</div></label>
                   {field('tpin', 'TPIN (tax)')}
                   {field('napsa', 'NAPSA / social security')}
-                  {field('bank_name', 'Bank')}{field('bank_branch', 'Bank branch')}
+                  {field('bank_name', 'Bank')}
+                  {field('bank_branch', 'Bank branch code')}
                   {field('bank_account', 'Bank account')}
                 </div>
               </Section>

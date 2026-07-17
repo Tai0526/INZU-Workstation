@@ -1,14 +1,17 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import * as XLSX from 'xlsx'
-import { Wallet, FileSpreadsheet, Search, Settings2, AlertTriangle } from 'lucide-react'
+import { Wallet, FileSpreadsheet, Search, Settings2, AlertTriangle, Columns3, ArrowUp, ArrowDown, X, Plus, RotateCcw } from 'lucide-react'
 import { useAuth } from '@/auth/AuthContext'
 import { ROLES, BRANCHES } from '@/lib/roles'
+import { canEdit } from '@/lib/permissions'
 import Button from '@/components/ui/Button'
+import Modal from '@/components/ui/Modal'
 import { useHrPeople } from '@/lib/hr/directory'
-import { useEmployeeFiles, employeeFileStore } from '@/lib/hr/employeeFile'
+import { useEmployeeFiles, employeeFileStore, type EmployeeFile } from '@/lib/hr/employeeFile'
 import { useDeductions } from '@/lib/payroll/deductions'
 import { useTaxConfig, computePay } from '@/lib/payroll/tax'
+import { usePayrunCols, payrunColsStore, PAYRUN_COLUMNS, PAYRUN_COLUMN_LABEL, PAYRUN_NUMERIC } from '@/lib/payroll/columns'
 
 const monthLabel = (ym: string) => { const [y, m] = ym.split('-').map(Number); return new Date(y, m - 1, 1).toLocaleDateString('en', { month: 'long', year: 'numeric' }) }
 
@@ -25,39 +28,56 @@ export default function PayRuns() {
   const cur = tax.currency || 'ZMW'
   const money = (n: number) => `${cur} ${Math.round(n).toLocaleString()}`
 
+  const cols = usePayrunCols()
+  const canManage = canEdit(role, 'payroll')
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7))
   const [q, setQ] = useState('')
+  const [colsOpen, setColsOpen] = useState(false)
 
   const finesFor = (id: string, name: string) => deductions.filter((d) => (d.driver_id ? d.driver_id === id : d.driver_name === name)).reduce((s, d) => s + d.amount, 0)
 
+  type Row = { p: (typeof people)[number]; file: EmployeeFile; grade: string; line: ReturnType<typeof computePay> }
   const rows = useMemo(() => {
     const term = q.trim().toLowerCase()
     return people
       .map((p) => {
-        const sal = employeeFileStore.for(p.id).salary
+        const file = employeeFileStore.for(p.id); const sal = file.salary
         if (!sal || !(sal.basic > 0)) return null
         const allowances = (sal.allowances ?? []).reduce((t, a) => t + (a.amount || 0), 0)
         const line = computePay(sal.basic, allowances, finesFor(p.id, p.full_name), tax)
-        return { p, grade: sal.grade, line }
+        return { p, file, grade: sal.grade, line }
       })
       .filter(Boolean)
-      .filter((r) => !term || r!.p.full_name.toLowerCase().includes(term) || r!.p.department.toLowerCase().includes(term)) as { p: (typeof people)[number]; grade: string; line: ReturnType<typeof computePay> }[]
+      .filter((r) => !term || r!.p.full_name.toLowerCase().includes(term) || r!.p.department.toLowerCase().includes(term)) as Row[]
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [people, q, tax, deductions])
 
   const totals = useMemo(() => rows.reduce((t, r) => ({
+    basic: t.basic + r.line.basic, allowances: t.allowances + r.line.allowances,
     gross: t.gross + r.line.gross, paye: t.paye + r.line.paye, napsa: t.napsa + r.line.napsa,
     nhima: t.nhima + r.line.nhima, fines: t.fines + r.line.fines, net: t.net + r.line.net,
-  }), { gross: 0, paye: 0, napsa: 0, nhima: 0, fines: 0, net: 0 }), [rows])
+  }), { basic: 0, allowances: 0, gross: 0, paye: 0, napsa: 0, nhima: 0, fines: 0, net: 0 } as Record<string, number>), [rows])
 
   const unpriced = people.filter((p) => !(employeeFileStore.for(p.id).salary?.basic ?? 0)).length
 
+  const colValue = (key: string, r: Row): string | number => {
+    switch (key) {
+      case 'employee': return r.p.full_name
+      case 'employee_no': return r.p.employee_no
+      case 'department': return r.p.department
+      case 'grade': return r.grade || ''
+      case 'nrc': return r.file.national_id || ''
+      case 'bank': return r.file.bank_name || ''
+      case 'bank_branch': return r.file.bank_branch || ''
+      case 'bank_account': return r.file.bank_account || ''
+      default: return (r.line as any)[key] ?? ''
+    }
+  }
+
   function exportXlsx() {
-    const flat = rows.map((r) => ({
-      Employee: r.p.full_name, Department: r.p.department, Grade: r.grade || '', Basic: r.line.basic, Allowances: r.line.allowances,
-      Gross: r.line.gross, PAYE: r.line.paye, NAPSA: r.line.napsa, NHIMA: r.line.nhima, Fines: r.line.fines, Net: r.line.net,
-    }))
-    flat.push({ Employee: 'TOTAL', Department: '', Grade: '', Basic: 0, Allowances: 0, Gross: totals.gross, PAYE: totals.paye, NAPSA: totals.napsa, NHIMA: totals.nhima, Fines: totals.fines, Net: totals.net } as any)
+    const flat = rows.map((r) => Object.fromEntries(cols.map((k) => [PAYRUN_COLUMN_LABEL[k], colValue(k, r)])))
+    const totalRow = Object.fromEntries(cols.map((k, i) => [PAYRUN_COLUMN_LABEL[k], i === 0 ? 'TOTAL' : (PAYRUN_NUMERIC.has(k) ? Math.round(totals[k] || 0) : '')]))
+    flat.push(totalRow)
     const ws = XLSX.utils.json_to_sheet(flat.length ? flat : [{ Employee: 'No priced employees' }])
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, ws, 'Pay run')
@@ -77,7 +97,10 @@ export default function PayRuns() {
         <p className="max-w-2xl text-sm text-status-neutral">
           Pay run for <span className="font-medium text-navy">{branchLabel}</span> — <span className="font-medium text-navy">gross (basic + allowances) is read live from each employee's file</span>; PAYE, NAPSA &amp; NHIMA come from <Link to="/payroll/taxes" className="font-medium text-brand hover:underline">Payroll → Taxes</Link>, plus any pending incident fines. Set an employee's salary in HR → Employees → their file → Salary.
         </p>
-        <Button variant="secondary" onClick={exportXlsx} disabled={rows.length === 0}><FileSpreadsheet size={15} /> Export</Button>
+        <div className="flex flex-wrap gap-2">
+          {canManage && <Button variant="secondary" onClick={() => setColsOpen(true)}><Columns3 size={15} /> Columns</Button>}
+          <Button variant="secondary" onClick={exportXlsx} disabled={rows.length === 0}><FileSpreadsheet size={15} /> Export</Button>
+        </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -147,6 +170,47 @@ export default function PayRuns() {
 
       {!ROLES[role].canToggleBranch && <p className="text-xs text-status-neutral">Showing {branchLabel} only.</p>}
       <p className="text-[11px] text-status-neutral">Figures are computed live — a costing view. Salaries are the master values from each employee's file; statutory rates are configured in Payroll → Taxes.</p>
+
+      {colsOpen && <ColumnArrangeModal onClose={() => setColsOpen(false)} />}
     </div>
+  )
+}
+
+// Arrange which columns the Excel export includes, and in what order (e.g. bank
+// name / branch code / account grouped with net pay for a bank payment file).
+function ColumnArrangeModal({ onClose }: { onClose: () => void }) {
+  const cols = usePayrunCols()
+  const available = PAYRUN_COLUMNS.filter((c) => !cols.includes(c.key))
+  const move = (i: number, delta: number) => {
+    const j = i + delta; if (j < 0 || j >= cols.length) return
+    const next = [...cols];[next[i], next[j]] = [next[j], next[i]]; payrunColsStore.set(next)
+  }
+  return (
+    <Modal open onClose={onClose} title="Arrange export columns" subtitle="Choose which columns the Excel export includes and their order — e.g. group the bank details with net pay for a payment file."
+      footer={<><Button variant="secondary" onClick={() => payrunColsStore.reset()}><RotateCcw size={15} /> Reset</Button><Button onClick={onClose}>Done</Button></>}>
+      <div className="space-y-1.5">
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-status-neutral">Included ({cols.length}) — in export order</div>
+        {cols.map((k, i) => (
+          <div key={k} className="flex items-center gap-2 rounded-lg border border-black/10 bg-white px-3 py-1.5 text-sm">
+            <span className="w-5 text-right text-[11px] text-status-neutral">{i + 1}</span>
+            <span className="flex-1 font-medium text-navy">{PAYRUN_COLUMN_LABEL[k]}</span>
+            <button onClick={() => move(i, -1)} disabled={i === 0} className="rounded p-1 text-status-neutral hover:bg-canvas hover:text-navy disabled:opacity-30"><ArrowUp size={14} /></button>
+            <button onClick={() => move(i, 1)} disabled={i === cols.length - 1} className="rounded p-1 text-status-neutral hover:bg-canvas hover:text-navy disabled:opacity-30"><ArrowDown size={14} /></button>
+            <button onClick={() => payrunColsStore.set(cols.filter((x) => x !== k))} className="rounded p-1 text-status-neutral hover:bg-status-critical/10 hover:text-status-critical" title="Remove"><X size={14} /></button>
+          </div>
+        ))}
+        {cols.length === 0 && <p className="text-xs text-status-neutral">No columns selected — add some below.</p>}
+      </div>
+      {available.length > 0 && (
+        <div className="mt-3 space-y-1.5">
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-status-neutral">Available</div>
+          <div className="flex flex-wrap gap-1.5">
+            {available.map((c) => (
+              <button key={c.key} onClick={() => payrunColsStore.set([...cols, c.key])} className="inline-flex items-center gap-1 rounded-full border border-dashed border-brand/40 px-2.5 py-1 text-[11px] font-medium text-brand hover:border-brand"><Plus size={12} /> {c.label}</button>
+            ))}
+          </div>
+        </div>
+      )}
+    </Modal>
   )
 }
