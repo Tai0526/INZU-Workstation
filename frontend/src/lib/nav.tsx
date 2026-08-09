@@ -81,7 +81,7 @@ export const NAV: NavNode[] = [
     ],
   },
   {
-    module: 'operations', label: 'Fuel', icon: Fuel,
+    module: 'fuel', label: 'Fuel', icon: Fuel,
     pages: [
       { label: 'Overview', path: '/fuel', blurb: 'Who the fuel goes to, monthly: Enterprise vs Sentinel buses, the workshop generator and authorised vehicles — litres, cost and km/L, with last-month deltas.' },
       { label: 'Issuances', path: '/fuel/issuances', blurb: 'Fuel issued per refuel — driver, vehicle, route, odometer — plus generator and authorised-vehicle draws.' },

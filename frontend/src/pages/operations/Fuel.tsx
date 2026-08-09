@@ -83,7 +83,7 @@ export default function Fuel({ tab = 'issuances' }: { tab?: Tab }) {
   const role = user!.role
   const branch = user!.branch
   const branchLabel = BRANCHES.find((b) => b.code === branch)!.short
-  const canManage = canEdit(role, 'operations')
+  const canManage = canEdit(role, 'fuel')
   // Fuel draws can be authorised by the Fuel Supervisor, the Ops / Asst Ops
   // Managers, the MD and the Admin. The authoriser's name is stamped ("Authorised by").
   const canAuthorize = role === 'fuel_supervisor' || role === 'operations_manager' || role === 'asst_operations_manager' || role === 'managing_director' || role === 'administrator'
