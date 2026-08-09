@@ -22,7 +22,7 @@ import {
   EXPIRING_WINDOW_DAYS, type CellTone, type LicCell, type LicFilter, type LicFlags,
 } from '@/lib/fleet/licensingStatus'
 import {
-  useBookings, bookingsStore, bookingKey, bookingState,
+  useBookings, bookingsStore, bookingKey, bookingState, autoSchedule, bookingPriority,
   type Booking, type BookingStatus, type BookingState,
 } from '@/lib/fleet/inspectionBookings'
 
@@ -408,7 +408,12 @@ function BookingModal({ open, onClose, vehicles, docs, cats, branchLabel, prepar
         return { v, cell, booking: b, due, state: bookingState(b, cell.expiry || undefined, today) }
       })
       .filter((x) => showAll || x.due || x.booking)
-      .sort((a, b) => (a.cell.days ?? 9999) - (b.cell.days ?? 9999) || a.v.fleet_no.localeCompare(b.v.fleet_no, undefined, { numeric: true }))
+      // Same order the auto-scheduler works in: about to lapse (a deadline we
+      // can still beat) → already expired → never uploaded → still valid.
+      .sort((a, b) =>
+        bookingPriority(a.cell.tone) - bookingPriority(b.cell.tone)
+        || (a.cell.days ?? 9999) - (b.cell.days ?? 9999)
+        || a.v.fleet_no.localeCompare(b.v.fleet_no, undefined, { numeric: true }))
   }, [vehicles, docs, cat, bookings, showAll, today])
 
   const valueFor = (vid: string): Edit => {
@@ -419,17 +424,19 @@ function BookingModal({ open, onClose, vehicles, docs, cats, branchLabel, prepar
   }
   const patch = (vid: string, p: Partial<Edit>) => setEdits((s) => ({ ...s, [vid]: { ...valueFor(vid), ...p } }))
 
-  /** Fill dates down the list, N vehicles a day, skipping weekends. */
-  function spread() {
+  /**
+   * Fill every date by deadline, not by list position: each vehicle gets the
+   * working day before its document lapses (earlier if that day is full), and
+   * anything already expired or missing takes the earliest free day.
+   */
+  function autoFill() {
     if (!bulkDate) return
+    const plan = autoSchedule(
+      candidates.map((c) => ({ id: c.v.id, expiry: c.cell.expiry, tone: c.cell.tone, days: c.cell.days })),
+      { start: bulkDate, perDay },
+    )
     const next: Record<string, Edit> = { ...edits }
-    let d = new Date(`${bulkDate}T00:00:00Z`)
-    let onDay = 0
-    for (const c of candidates) {
-      while (d.getUTCDay() === 0 || d.getUTCDay() === 6) d = new Date(d.getTime() + 86_400_000)
-      next[c.v.id] = { ...valueFor(c.v.id), date: d.toISOString().slice(0, 10) }
-      if (++onDay >= Math.max(1, perDay)) { onDay = 0; d = new Date(d.getTime() + 86_400_000) }
-    }
+    for (const [vid, date] of Object.entries(plan)) next[vid] = { ...valueFor(vid), date }
     setEdits(next)
   }
   function setAll() {
@@ -497,9 +504,12 @@ function BookingModal({ open, onClose, vehicles, docs, cats, branchLabel, prepar
             <span className="mb-1 block text-[11px] font-medium text-navy">Per day</span>
             <input type="number" min={1} className="w-20 rounded-lg border border-black/15 bg-white px-2.5 py-1.5 text-sm text-navy outline-none focus:border-brand" value={perDay} onChange={(e) => setPerDay(Number(e.target.value) || 1)} />
           </label>
-          <Button variant="secondary" onClick={spread} disabled={!bulkDate}>Spread over weekdays</Button>
+          <Button onClick={autoFill} disabled={!bulkDate}><CalendarCheck size={15} /> Auto-schedule</Button>
           <Button variant="secondary" onClick={setAll} disabled={!bulkDate}>Set all to this date</Button>
-          <p className="w-full text-[11px] text-status-neutral">Spreading fills the list at {perDay} a day from the start date, skipping weekends — then adjust any row by hand.</p>
+          <p className="w-full text-[11px] leading-relaxed text-status-neutral">
+            Auto-schedule books each vehicle the working day <b className="text-navy">before its document expires</b> — so nothing lapses — moving earlier when a day is full ({perDay} a day, weekends skipped).
+            Anything already expired or never uploaded has no deadline left to protect, so it takes the earliest free day. Every date stays editable below.
+          </p>
         </div>
 
         {/* The list */}

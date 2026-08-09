@@ -176,7 +176,7 @@ function LogTab({ trips, branch, project, routes, vehicles, canManage }: { trips
         </div>
       </div>
 
-      <AddTripsModal open={addOpen} onClose={() => setAddOpen(false)} branch={branch} project={project} routes={routes} vehicles={vehicles} />
+      <AddTripsModal open={addOpen} onClose={() => setAddOpen(false)} branch={branch} project={project} routes={routes} vehicles={vehicles} trips={trips} />
       <EditTripModal editing={editing} onClose={() => setEditing(null)} routes={routes} vehicles={vehicles} />
       <ImportModal open={importOpen} onClose={() => setImportOpen(false)} branch={branch} project={project} />
     </div>
@@ -186,12 +186,18 @@ function LogTab({ trips, branch, project, routes, vehicles, canManage }: { trips
 // ── Log movements (multi-row) ──────────────────────────────────────────
 interface Draft { date: string; shift: Shift; route: string; internal_km: string; external_km: string }
 const draft = (date = '', shift: Shift = 'Morning'): Draft => ({ date, shift, route: '', internal_km: '', external_km: '' })
+const todayIso = () => new Date().toISOString().slice(0, 10)
+const shiftIso = (iso: string, n: number) => new Date(new Date(`${iso}T00:00:00Z`).getTime() + n * 86_400_000).toISOString().slice(0, 10)
+/** The shift after this one — so adding a row continues the day rather than repeating it. */
+const nextShift = (s: Shift): Shift => SHIFTS[Math.min(SHIFTS.indexOf(s) + 1, SHIFTS.length - 1)]
 
-function AddTripsModal({ open, onClose, branch, project, routes, vehicles }: { open: boolean; onClose: () => void; branch: BranchCode; project: string; routes: any[]; vehicles: any[] }) {
+function AddTripsModal({ open, onClose, branch, project, routes, vehicles, trips }: { open: boolean; onClose: () => void; branch: BranchCode; project: string; routes: any[]; vehicles: any[]; trips: MileageTrip[] }) {
   const [fleet, setFleet] = useState(''); const [reg, setReg] = useState(''); const [seat, setSeat] = useState<SeatClass>('40')
-  const [rows, setRows] = useState<Draft[]>([draft('2026-06-01', 'Morning'), draft('2026-06-01', 'Evening')])
+  const startRows = () => [draft(todayIso(), 'Morning'), draft(todayIso(), 'Afternoon')]
+  const [rows, setRows] = useState<Draft[]>(startRows)
   const [wasOpen, setWasOpen] = useState(false)
-  if (open && !wasOpen) { setWasOpen(true); setFleet(''); setReg(''); setSeat('40'); setRows([draft('2026-06-01', 'Morning'), draft('2026-06-01', 'Evening')]) }
+  // Reset on every open — and default to TODAY, not whenever this was written.
+  if (open && !wasOpen) { setWasOpen(true); setFleet(''); setReg(''); setSeat('40'); setRows(startRows()) }
   if (!open && wasOpen) setWasOpen(false)
 
   function onFleet(v: string) { setFleet(v); const veh = vehicles.find((x: any) => x.fleet_no.toLowerCase() === v.toLowerCase()); if (veh) { setReg(veh.reg_plate); setSeat(classFromCapacity(veh.capacity)) } }
@@ -200,6 +206,31 @@ function AddTripsModal({ open, onClose, branch, project, routes, vehicles }: { o
     const r = routes.find((x: any) => x.name === name)
     setRow(i, { route: name, ...(r ? { internal_km: String(r.internal_km), external_km: String(r.external_km) } : {}) })
   }
+  const addRow = () => setRows((rs) => {
+    const last = rs[rs.length - 1]
+    return [...rs, draft(last?.date || todayIso(), last ? nextShift(last.shift) : 'Morning')]
+  })
+  /** Set every row's date at once — most entry is one bus, one day. */
+  const setAllDates = (d: string) => setRows((rs) => rs.map((r) => ({ ...r, date: d })))
+
+  /**
+   * Most days repeat: the same bus runs the same routes. Pull the last day this
+   * bus was logged and re-use its runs against today, ready to tweak.
+   */
+  const lastDay = useMemo(() => {
+    if (!fleet.trim()) return null
+    const mine = trips.filter((t) => t.fleet_no.toLowerCase() === fleet.trim().toLowerCase())
+    if (mine.length === 0) return null
+    const date = mine.reduce((best, t) => (t.date > best ? t.date : best), mine[0].date)
+    return { date, runs: mine.filter((t) => t.date === date).sort((a, b) => SHIFTS.indexOf(a.shift) - SHIFTS.indexOf(b.shift)) }
+  }, [trips, fleet])
+
+  function repeatLastDay() {
+    if (!lastDay) return
+    const d = rows[0]?.date || todayIso()
+    setRows(lastDay.runs.map((t) => ({ date: d, shift: t.shift, route: t.route, internal_km: String(t.internal_km), external_km: String(t.external_km) })))
+  }
+
   const ready = rows.filter((r) => r.date && (Number(r.internal_km) > 0 || Number(r.external_km) > 0))
 
   function save() {
@@ -215,12 +246,31 @@ function AddTripsModal({ open, onClose, branch, project, routes, vehicles }: { o
       subtitle="One row per run/shift. Pick a route to auto-fill the internal/external split (editable)."
       footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={save} disabled={ready.length === 0 || !fleet.trim()}>Save {ready.length} run{ready.length === 1 ? '' : 's'}</Button></>}>
       <div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Fleet No</span><input list="dl-mil-fleet" className={inputCls} placeholder="INZ 121" value={fleet} onChange={(e) => onFleet(e.target.value)} /></label>
+        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Fleet No</span><input list="dl-mil-fleet" autoFocus className={inputCls} placeholder="INZ 121" value={fleet} onChange={(e) => onFleet(e.target.value)} /></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Reg No</span><input className={inputCls} placeholder="BCG 4271" value={reg} onChange={(e) => setReg(e.target.value)} /></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Bus class</span>
           <select className={inputCls} value={seat} onChange={(e) => setSeat(e.target.value as SeatClass)}>{SEAT_CLASSES.map((s) => <option key={s} value={s}>{SEAT_LABEL[s]}</option>)}</select></label>
+        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Day</span>
+          <input type="date" className={inputCls} value={rows[0]?.date ?? ''} onChange={(e) => setAllDates(e.target.value)} /></label>
       </div>
       <datalist id="dl-mil-fleet">{vehicles.map((v: any) => <option key={v.id} value={v.fleet_no} />)}</datalist>
+
+      {/* Quick entry: the day, and yesterday's runs for this bus */}
+      <div className="mb-3 flex flex-wrap items-center gap-1.5 text-xs">
+        <span className="text-status-neutral">Quick set:</span>
+        {([['Today', todayIso()], ['Yesterday', shiftIso(todayIso(), -1)]] as [string, string][]).map(([label, d]) => (
+          <button key={label} onClick={() => setAllDates(d)}
+            className={clsx('rounded-full border px-2.5 py-1 font-medium transition-colors', rows[0]?.date === d ? 'border-brand bg-brand-tint/50 text-navy' : 'border-black/15 bg-white text-status-neutral hover:text-navy')}>
+            {label}
+          </button>
+        ))}
+        {lastDay && (
+          <button onClick={repeatLastDay} title={`Copy the ${lastDay.runs.length} run(s) logged for ${fleet} on ${lastDay.date}`}
+            className="ml-1 inline-flex items-center gap-1 rounded-full border border-brand/40 bg-brand-tint/30 px-2.5 py-1 font-medium text-brand hover:border-brand">
+            <Plus size={12} /> Repeat {fleet}'s last day ({lastDay.runs.length} run{lastDay.runs.length === 1 ? '' : 's'})
+          </button>
+        )}
+      </div>
 
       <div className="overflow-x-auto rounded-lg border border-black/10">
         <table className="w-full text-left">
@@ -236,8 +286,8 @@ function AddTripsModal({ open, onClose, branch, project, routes, vehicles }: { o
                 <td className="px-1.5 py-1"><input type="date" className={cellCls} value={r.date} onChange={(e) => setRow(i, { date: e.target.value })} /></td>
                 <td className="px-1.5 py-1"><select className={cellCls} value={r.shift} onChange={(e) => setRow(i, { shift: e.target.value as Shift })}>{SHIFTS.map((s) => <option key={s} value={s}>{s}</option>)}</select></td>
                 <td className="px-1.5 py-1"><select className={cellCls} value={r.route} onChange={(e) => onRoute(i, e.target.value)}><option value="">Route…</option>{routes.map((x: any) => <option key={x.id} value={x.name}>{x.name}</option>)}</select></td>
-                <td className="px-1.5 py-1"><input type="number" className={cellCls} value={r.internal_km} onChange={(e) => setRow(i, { internal_km: e.target.value })} /></td>
-                <td className="px-1.5 py-1"><input type="number" className={cellCls} value={r.external_km} onChange={(e) => setRow(i, { external_km: e.target.value })} /></td>
+                <td className="px-1.5 py-1"><input type="number" className={cellCls} value={r.internal_km} onChange={(e) => setRow(i, { internal_km: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addRow() } }} /></td>
+                <td className="px-1.5 py-1"><input type="number" className={cellCls} value={r.external_km} onChange={(e) => setRow(i, { external_km: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addRow() } }} /></td>
                 <td className="px-2 py-1 text-xs font-medium text-navy">{(Number(r.internal_km) || 0) + (Number(r.external_km) || 0)}</td>
                 <td className="px-1.5 py-1"><button onClick={() => setRows((rs) => rs.filter((_, idx) => idx !== i))} className="rounded p-1 text-status-neutral hover:bg-status-critical/10 hover:text-status-critical"><Trash2 size={13} /></button></td>
               </tr>
@@ -245,7 +295,10 @@ function AddTripsModal({ open, onClose, branch, project, routes, vehicles }: { o
           </tbody>
         </table>
       </div>
-      <button onClick={() => setRows((rs) => [...rs, draft(rs[rs.length - 1]?.date ?? '')])} className="mt-2 inline-flex items-center gap-1 rounded-lg border border-dashed border-navy/25 px-3 py-1.5 text-xs font-medium text-brand hover:border-brand"><Plus size={14} /> Add row</button>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <button onClick={addRow} className="inline-flex items-center gap-1 rounded-lg border border-dashed border-navy/25 px-3 py-1.5 text-xs font-medium text-brand hover:border-brand"><Plus size={14} /> Add row</button>
+        <span className="text-[11px] text-status-neutral">New rows keep the day and move to the next shift · press <kbd className="rounded border border-black/15 bg-canvas px-1 font-sans">Enter</kbd> in a kilometre box to add another</span>
+      </div>
       {routes.length === 0 && <p className="mt-1 rounded-lg bg-brand-tint/40 px-3 py-2 text-[11px] text-[#8a4513]">No routes for {project} yet — add them under Setup → Route catalogue to auto-fill the internal/external split.</p>}
     </Modal>
   )
