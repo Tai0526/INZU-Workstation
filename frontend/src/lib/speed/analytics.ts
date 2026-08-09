@@ -52,7 +52,6 @@ export function computeSpeedAnalytics(allEvents: SpeedEvent[], allVehicles: Vehi
   const months = lastMonths(span, new Date(ey, em - 1, 1))
 
   const branchEvents = allEvents.filter((e) => e.branch === branch)
-  const glitches = branchEvents.filter(isGlitch)
   const valid = branchEvents.filter((e) => !isGlitch(e))
   const vehicles = allVehicles.filter((v) => v.branch === branch)
   const modelByFleet = new Map(vehicles.map((v) => [v.id, v.model || 'Unknown']))
@@ -60,6 +59,13 @@ export function computeSpeedAnalytics(allEvents: SpeedEvent[], allVehicles: Vehi
   const inMonth = (e: SpeedEvent, k: string) => monthKey(e.event_datetime) === k
   const thisEvents = valid.filter((e) => inMonth(e, thisKey))
   const lastEvents = valid.filter((e) => inMonth(e, lastKey))
+
+  // Glitches for the month(s) ACTUALLY under review — this panel explains what
+  // was excluded from the figures on screen, so listing the whole branch
+  // history (as it used to) answered a question nobody asked.
+  const glitches = branchEvents
+    .filter((e) => isGlitch(e) && (inMonth(e, thisKey) || (lastKey !== thisKey && inMonth(e, lastKey))))
+    .sort((x, y) => y.event_datetime.localeCompare(x.event_datetime))
 
   // Buses actually on the road that month = distinct fleet numbers that logged
   // mileage (no duplicates), so a bus that ran both projects counts once. Falls
