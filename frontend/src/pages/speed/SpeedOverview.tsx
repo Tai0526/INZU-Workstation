@@ -46,15 +46,13 @@ const fmtDayMonth = (iso: string) =>
 const fmtTime = (iso: string) => iso.slice(11, 16)
 
 /**
- * The comparable number, in words anyone can repeat: "for every 100 buses on
- * the road, this many speeding events in the month". It is just
- * events ÷ buses × 100 — no per-day arithmetic, nothing to explain twice —
- * and it keeps months fair when the number of buses running changes.
+ * No scaled rates, no normalised units. The headline is the plain count of
+ * speeding events in the month and how that compares with the month before —
+ * a number anybody can repeat without being taught what it means. Fleet size
+ * only gets mentioned when it actually moved enough to explain part of the
+ * change (see fleetNote below).
  */
-const RATE_UNIT = 'per 100 buses'
-const RATE_HELP = 'Speeding events for every 100 buses on the road that month — simply events ÷ buses × 100. Scaled this way so a month with more buses running does not look worse just for being busier.'
-const perHundred = (events: number, buses: number) => (buses > 0 ? (events / buses) * 100 : 0)
-const rateFmt = (r: number) => (r >= 100 ? Math.round(r).toString() : r.toFixed(1))
+const pctChange = (now: number, before: number) => (before > 0 ? Math.round(((now - before) / before) * 100) : now > 0 ? 100 : 0)
 
 const currentMonthKey = (today = new Date()) => `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`
 
@@ -143,35 +141,48 @@ export default function SpeedOverview() {
     return keys.map((k) => {
       const evs = validAll.filter((e) => monthKey(e.event_datetime) === k)
       const busesLogged = busesOnRoad(k)
-      const busesUsed = busesLogged || branchFleetCount || 1
-      const rate = perHundred(evs.length, busesUsed)
+      // How many DIFFERENT buses sped — the honest answer to "is this the whole
+      // fleet or a handful of buses?", and far easier to grasp than any rate.
+      const busesSped = new Set(evs.map((e) => e.vehicle_label)).size
       const row = {
         key: k, label: monthLabel(k), full: monthFull(k),
-        events: evs.length, busesLogged, busesUsed,
-        rate: +rate.toFixed(1),
+        events: evs.length, busesLogged, busesSped,
         avgOver: evs.length ? Math.round(evs.reduce((s, e) => s + overBy(e), 0) / evs.length) : 0,
         open: evs.filter((e) => zoneOf(e) === 'open').length,
-        delta: prev != null && prev > 0 ? (rate - prev) / prev : null,
+        delta: prev != null && prev > 0 ? (evs.length - prev) / prev : null,
         hasData: evs.length > 0 || busesLogged > 0,
         // A month still running isn't finished — say so rather than let a part
         // month look like an improvement.
         inProgress: k === thisCalendarMonth,
       }
-      prev = rate
+      prev = evs.length
       return row
     })
-  }, [validAll, busesOnRoad, effCmp, branchFleetCount, thisCalendarMonth])
+  }, [validAll, busesOnRoad, effCmp, thisCalendarMonth])
   const withData = useMemo(() => history.filter((h) => h.hasData), [history])
 
-  // The headline metric belongs to this page: events per 100 buses, per month.
-  // computeSpeedAnalytics still supplies every breakdown below.
+  // Headline = the plain count and its change. Nothing to explain.
   const cmpRow = history.find((h) => h.key === effCmp)
   const baseRow = single ? undefined : history.find((h) => h.key === effBase)
-  const rateThis = cmpRow?.rate ?? 0
-  const rateLast = baseRow?.rate ?? 0
-  const ratePct = baseRow && rateLast > 0 ? Math.round(((rateThis - rateLast) / rateLast) * 100) : (rateThis ? 100 : 0)
-  const improving = !!baseRow && rateThis < rateLast
-  const sameRate = !!baseRow && Math.abs(rateThis - rateLast) < 0.05
+  const eventsThis = cmpRow?.events ?? 0
+  const eventsLast = baseRow?.events ?? 0
+  const ratePct = baseRow ? pctChange(eventsThis, eventsLast) : 0
+  const improving = !!baseRow && eventsThis < eventsLast
+  const sameRate = !!baseRow && eventsThis === eventsLast
+  const busesSpedThis = cmpRow?.busesSped ?? 0
+  const busesRunThis = cmpRow?.busesLogged || branchFleetCount || 0
+  /**
+   * Only worth mentioning fleet size when it genuinely moved — otherwise it is
+   * noise. Above ~10% difference, part of the change is simply more buses.
+   */
+  const fleetNote = useMemo(() => {
+    if (!baseRow) return null
+    const now = cmpRow?.busesLogged ?? 0
+    const before = baseRow.busesLogged ?? 0
+    if (!now || !before) return null
+    const diff = pctChange(now, before)
+    return Math.abs(diff) >= 10 ? { now, before, diff } : null
+  }, [cmpRow, baseRow])
 
   // ── Accountability scope ──
   const [offPeriod, setOffPeriod] = useState<'month' | 'ytd' | 'all'>('month')
@@ -363,12 +374,12 @@ export default function SpeedOverview() {
         if (png) charts.push({ title, ...png })
       }
       const verdict = single
-        ? `${monthFull(a.thisKey)}: ${a.countThis} speeding event${a.countThis === 1 ? '' : 's'} from ${a.activeBuses} buses on the road — ${rateFmt(rateThis)} ${RATE_UNIT} — averaging ${a.avgSevThis.toFixed(1)} km/h over the limit.`
+        ? `${monthFull(a.thisKey)}: ${a.countThis} speeding event${a.countThis === 1 ? '' : 's'} from ${busesSpedThis} of ${busesRunThis} buses on the road, averaging ${a.avgSevThis.toFixed(1)} km/h over the limit.`
         : sameRate
-          ? `Speeding held steady in ${monthFull(a.thisKey)}: ${a.countThis} events, ${rateFmt(rateThis)} ${RATE_UNIT}, unchanged from ${monthFull(a.lastKey)}.`
+          ? `Speeding held steady in ${monthFull(a.thisKey)}: ${a.countThis} events, the same as ${monthFull(a.lastKey)}.`
           : improving
-            ? `Speeding improved ${Math.abs(ratePct)}% in ${monthFull(a.thisKey)}: ${a.countThis} events (${rateFmt(rateThis)} ${RATE_UNIT}), down from ${a.countLast} (${rateFmt(rateLast)}) in ${monthFull(a.lastKey)}.`
-            : `Speeding deteriorated ${ratePct}% in ${monthFull(a.thisKey)}: ${a.countThis} events (${rateFmt(rateThis)} ${RATE_UNIT}), up from ${a.countLast} (${rateFmt(rateLast)}) in ${monthFull(a.lastKey)}.`
+            ? `Speeding fell ${Math.abs(ratePct)}% in ${monthFull(a.thisKey)}: ${a.countThis} events, down from ${a.countLast} in ${monthFull(a.lastKey)}.`
+            : `Speeding rose ${ratePct}% in ${monthFull(a.thisKey)}: ${a.countThis} events, up from ${a.countLast} in ${monthFull(a.lastKey)}.`
       const suggestions: string[] = []
       if (hotspots[0]) suggestions.push(`${hotspots[0].name} is the worst location (${hotspots[0].count} events) — prioritise signage and enforcement there.`)
       if (peakHour.count > 0) suggestions.push(`Most breaches cluster around ${String(peakHour.hour).padStart(2, '0')}:00 — brief crews before that window.`)
@@ -380,7 +391,7 @@ export default function SpeedOverview() {
         generated: new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
         verdict,
         kpis: [
-          { label: `Events ${RATE_UNIT}`, value: rateFmt(rateThis), sub: single ? monthLabel(a.thisKey) : `vs ${rateFmt(rateLast)} last` },
+          { label: 'Speeding events', value: String(a.countThis), sub: single ? monthLabel(a.thisKey) : `vs ${a.countLast} in ${monthLabel(a.lastKey)}` },
           { label: 'Valid events', value: String(a.countThis), sub: monthLabel(a.thisKey) },
           { label: 'Avg over limit', value: `${a.avgSevThis.toFixed(1)} km/h`, sub: 'severity' },
           { label: 'Repeat offenders', value: String(repeatOffenders.length), sub: `2+ events · ${offPeriodLabel}` },
@@ -407,7 +418,7 @@ export default function SpeedOverview() {
       {/* Controls */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-status-neutral">
-          Is speeding being curbed at {branchLabel}? Rates are {RATE_UNIT} — normalised by how many buses were actually on the road, so a bigger fleet never looks worse by accident.
+          Is speeding being curbed at {branchLabel}? Straight counts, month against month — no adjusted figures to decode.
         </p>
         <div className="flex flex-wrap items-center gap-2">
           <label className="flex items-center gap-1.5 text-xs text-status-neutral">
@@ -443,16 +454,22 @@ export default function SpeedOverview() {
               <div className="mt-1.5 flex items-baseline gap-2">
                 <span className={clsx('font-display text-4xl font-bold leading-none',
                   trendTone === 'good' ? 'text-status-good' : trendTone === 'critical' ? 'text-status-critical' : 'text-navy')}>
-                  {rateFmt(rateThis)}
+                  {eventsThis}
                 </span>
-                <span className="text-xs text-status-neutral" title={RATE_HELP}>speeding events<br />{RATE_UNIT}</span>
+                <span className="text-xs text-status-neutral">speeding event{eventsThis === 1 ? '' : 's'}<br />in the month</span>
               </div>
               <p className="mt-2.5 text-[13px] leading-relaxed text-status-neutral">
-                {a.countThis} valid event{a.countThis === 1 ? '' : 's'} across <b className="text-navy">{a.activeBuses}</b> bus{a.activeBuses === 1 ? '' : 'es'} on the road, averaging {a.avgSevThis.toFixed(1)} km/h over the limit.
+                From <b className="text-navy">{busesSpedThis}</b> of {busesRunThis} bus{busesRunThis === 1 ? '' : 'es'} on the road, averaging {a.avgSevThis.toFixed(1)} km/h over the limit.
                 {single
                   ? ' Pick an earlier month in the “vs” box to see the direction of travel.'
-                  : <> That is <b className="text-navy">{a.countThis}</b> events from {a.activeBuses} buses, against {a.countLast} from {monthFull(a.lastKey)} ({rateFmt(rateLast)} {RATE_UNIT}). {improving ? 'The measures are working — keep them up.' : sameRate ? '' : 'Act before it becomes a habit.'}</>}
+                  : <> Against <b className="text-navy">{eventsLast}</b> in {monthFull(a.lastKey)}. {improving ? 'The measures are working — keep them up.' : sameRate ? '' : 'Act before it becomes a habit.'}</>}
               </p>
+              {/* The one caveat worth making: part of a change can just be more buses. */}
+              {fleetNote && (
+                <p className="mt-1.5 text-[11px] leading-relaxed text-[#8a6d10]">
+                  Note: {fleetNote.now} buses ran in {monthFull(effCmp)} against {fleetNote.before} in {monthFull(a.lastKey)} ({fleetNote.diff > 0 ? '+' : ''}{fleetNote.diff}%), so part of the change is simply fleet size.
+                </p>
+              )}
             </div>
           </div>
 
@@ -460,7 +477,7 @@ export default function SpeedOverview() {
           <div>
             <div className="mb-1 flex items-baseline justify-between">
               <span className="text-[11px] font-semibold uppercase tracking-wide text-status-neutral">Direction of travel</span>
-              <span className="text-[11px] text-status-neutral">events {RATE_UNIT} · 12 months</span>
+              <span className="text-[11px] text-status-neutral">speeding events a month · last 12</span>
             </div>
             <div className="h-[132px]">
               <ResponsiveContainer width="100%" height="100%">
@@ -475,13 +492,13 @@ export default function SpeedOverview() {
                   <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#6B7280' }} axisLine={false} tickLine={false} interval="preserveStartEnd" />
                   <YAxis tick={{ fontSize: 10, fill: '#6B7280' }} axisLine={false} tickLine={false} width={44} />
                   <Tooltip contentStyle={tip} labelFormatter={(l: any, p: any) => (p?.[0]?.payload?.full ?? l)}
-                    formatter={(v: number, _n: any, p: any) => [`${v} ${RATE_UNIT} · ${p.payload.events} events`, 'Rate']} />
-                  {!single && <ReferenceLine y={rateLast} stroke={NAVY} strokeDasharray="4 4" />}
-                  <Area type="monotone" dataKey="rate" stroke={BRAND} strokeWidth={2.5} fill="url(#spdGrad)" dot={{ r: 2 }} activeDot={{ r: 4 }} />
+                    formatter={(v: number, _n: any, p: any) => [`${v} event${v === 1 ? '' : 's'} · ${p.payload.busesSped} bus${p.payload.busesSped === 1 ? '' : 'es'} involved`, 'Speeding']} />
+                  {!single && <ReferenceLine y={eventsLast} stroke={NAVY} strokeDasharray="4 4" />}
+                  <Area type="monotone" dataKey="events" stroke={BRAND} strokeWidth={2.5} fill="url(#spdGrad)" dot={{ r: 2 }} activeDot={{ r: 4 }} />
                 </AreaChart>
               </ResponsiveContainer>
             </div>
-            {!single && <p className="mt-1 text-[10px] text-status-neutral">Dashed line = {monthFull(a.lastKey)}'s rate, for reference.</p>}
+            {!single && <p className="mt-1 text-[10px] text-status-neutral">Dashed line = {monthFull(a.lastKey)}'s total ({eventsLast}), for reference.</p>}
           </div>
         </div>
       </div>
@@ -489,14 +506,14 @@ export default function SpeedOverview() {
       {/* KPIs */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <KpiCard
-          label={`Speeding ${RATE_UNIT}`}
-          info={RATE_HELP}
-          value={rateFmt(rateThis)}
+          label="Speeding events"
+          info="Genuine speeding events this month, after GPS glitches are removed."
+          value={eventsThis}
           tone={single ? 'neutral' : improving || sameRate ? 'good' : 'critical'}
           trend={single || sameRate ? undefined : { dir: improving ? 'down' : 'up', text: `${Math.abs(ratePct)}%`, good: improving }}
-          sub={single ? monthLabel(a.thisKey) : `vs ${rateFmt(rateLast)} in ${monthLabel(a.lastKey)}`}
+          sub={single ? monthFull(a.thisKey) : `vs ${eventsLast} in ${monthLabel(a.lastKey)}`}
         />
-        <KpiCard label="Valid events" value={a.countThis} sub={monthFull(a.thisKey)} info="Genuine speeding events this month, after removing GPS glitches." />
+        <KpiCard label="Buses involved" value={`${busesSpedThis} of ${busesRunThis}`} tone={busesSpedThis === 0 ? 'good' : busesSpedThis > busesRunThis / 2 ? 'critical' : 'warning'} sub={busesRunThis ? `${Math.round((busesSpedThis / busesRunThis) * 100)}% of buses on the road` : 'no mileage logged'} info="How many different buses were involved. A few repeat offenders is a coaching problem; half the fleet is a systemic one." />
         <KpiCard label="Avg over limit" value={`${a.avgSevThis.toFixed(1)} km/h`} tone={a.avgSevThis >= 15 ? 'critical' : a.avgSevThis >= 10 ? 'warning' : 'good'} sub="severity" info="How far over the limit the average breach was — severity matters as much as frequency." />
         <KpiCard label="Repeat offenders" value={repeatOffenders.length} tone={repeatOffenders.length ? 'critical' : 'good'} sub={`2+ events · ${offPeriodLabel}`} info="Drivers with 2+ counted events in the accountability period — change it (month / YTD / all time) under the leaderboard." />
         {single
@@ -508,7 +525,7 @@ export default function SpeedOverview() {
       {/* ── Month by month ── */}
       <Card
         title="Month by month"
-        subtitle="Events, the fair per-bus rate, and how hard each breach was — click a month to review it."
+        subtitle="How many events, how many buses were involved, and how hard each breach was — click a month to review it."
         id="spd-chart-trend"
       >
         <div className="h-56">
@@ -523,7 +540,7 @@ export default function SpeedOverview() {
               <Bar yAxisId="l" dataKey="events" name="Events" radius={[5, 5, 0, 0]} maxBarSize={40}>
                 {withData.map((h) => <Cell key={h.key} fill={h.key === a.thisKey ? NAVY : h.key === a.lastKey && !single ? BRAND : 'rgba(15,27,51,0.18)'} />)}
               </Bar>
-              <Line yAxisId="r" dataKey="rate" name={`Rate ${RATE_UNIT}`} stroke={CRIT} strokeWidth={2.5} dot={{ r: 2.5 }} />
+              <Line yAxisId="r" dataKey="busesSped" name="Buses involved" stroke={CRIT} strokeWidth={2.5} dot={{ r: 2.5 }} />
             </ComposedChart>
           </ResponsiveContainer>
         </div>
@@ -534,8 +551,7 @@ export default function SpeedOverview() {
               <tr>
                 <th className="px-4 py-2 text-left font-medium">Month</th>
                 <th className="px-3 py-2 font-medium">Events</th>
-                <th className="px-3 py-2 font-medium">Buses</th>
-                <th className="px-3 py-2 font-medium" title={RATE_HELP}>Rate {RATE_UNIT}</th>
+                <th className="px-3 py-2 font-medium" title="How many different buses were involved — a handful of repeat offenders looks very different from a fleet-wide problem.">Buses involved</th>
                 <th className="px-3 py-2 font-medium">Avg over</th>
                 <th className="px-3 py-2 font-medium">Open road</th>
                 <th className="px-4 py-2 font-medium">vs prior</th>
@@ -548,12 +564,7 @@ export default function SpeedOverview() {
                     <button onClick={() => setCmpKey(h.key)} className="hover:underline" title={`Review ${h.full}`}>{h.full}</button>
                   </td>
                   <td className="px-3 py-2 text-navy">{h.events}</td>
-                  <td className="px-3 py-2 text-status-neutral">
-                    {h.busesLogged || (
-                      <span title={`No mileage logged for ${h.full}, so the rate uses the branch fleet (${h.busesUsed} buses) instead.`}>{h.busesUsed}*</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2 font-medium text-navy">{rateFmt(h.rate)}{h.inProgress && <span className="ml-1 text-[10px] font-normal text-[#8a6d10]" title="This month is still running — the figure will rise as more days are logged.">so far</span>}</td>
+                  <td className="px-3 py-2 font-medium text-navy">{h.busesSped || '—'}{h.busesLogged ? <span className="text-[10px] font-normal text-status-neutral"> of {h.busesLogged}</span> : null}</td>
                   <td className={clsx('px-3 py-2', h.avgOver >= 15 ? 'text-status-critical' : 'text-status-neutral')}>{h.events ? `+${h.avgOver} km/h` : '—'}</td>
                   <td className="px-3 py-2 text-status-neutral">{h.events ? `${Math.round((h.open / h.events) * 100)}%` : '—'}</td>
                   <td className="px-4 py-2">
@@ -561,13 +572,13 @@ export default function SpeedOverview() {
                       <span className={clsx('inline-flex items-center gap-0.5 font-medium',
                         h.delta < -0.02 ? 'text-status-good' : h.delta > 0.02 ? 'text-status-critical' : 'text-status-neutral')}>
                         {h.delta < -0.02 ? <TrendingDown size={12} /> : h.delta > 0.02 ? <TrendingUp size={12} /> : null}
-                        {h.delta >= 0 ? '+' : ''}{Math.round(h.delta * 100)}%
+                        {h.delta === 0 ? 'same' : `${h.delta > 0 ? '+' : ''}${Math.round(h.delta * 100)}%`}
                       </span>
                     )}
                   </td>
                 </tr>
               ))}
-              {withData.length === 0 && <tr><td colSpan={7} className="px-4 py-10 text-center text-sm text-status-neutral">No speed events recorded yet.</td></tr>}
+              {withData.length === 0 && <tr><td colSpan={6} className="px-4 py-10 text-center text-sm text-status-neutral">No speed events recorded yet.</td></tr>}
             </tbody>
           </table>
         </div>
