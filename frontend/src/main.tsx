@@ -5,7 +5,12 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import App from './App'
 import { AuthProvider } from '@/auth/AuthContext'
 import ErrorBoundary from '@/components/ErrorBoundary'
+import { bootAppearance } from '@/lib/prefs/store'
 import './index.css'
+
+// Apply the last-known theme/accent BEFORE first paint — no flash of the wrong
+// theme for dark-mode users on reload.
+bootAppearance()
 
 const qc = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 30_000 } },

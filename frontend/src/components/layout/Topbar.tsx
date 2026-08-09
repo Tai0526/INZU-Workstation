@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { Menu, LogOut, MapPin, PanelLeftClose, PanelLeft, Bell, MessageSquare } from 'lucide-react'
+import { Menu, LogOut, MapPin, PanelLeftClose, PanelLeft, Bell, MessageSquare, Palette } from 'lucide-react'
 import { useAuth } from '@/auth/AuthContext'
 import { ROLES, BRANCHES } from '@/lib/roles'
 import { NAV } from '@/lib/nav'
 import NotificationPanel from '@/components/notifications/NotificationPanel'
+import AppearanceModal from '@/components/layout/AppearanceModal'
 import { useNotifications } from '@/lib/notifications/store'
 import { useMessaging, totalUnread } from '@/lib/messaging/store'
 
@@ -33,6 +34,7 @@ export default function Topbar({
   const navigate = useNavigate()
   const location = useLocation()
   const [notifOpen, setNotifOpen] = useState(false)
+  const [appearOpen, setAppearOpen] = useState(false)
 
   const title = pageTitle(location.pathname)
 
@@ -111,6 +113,15 @@ export default function Topbar({
           )}
         </button>
 
+        {/* Appearance — personal theme & accent (per account) */}
+        <button
+          onClick={() => setAppearOpen(true)}
+          className="rounded-md p-2 text-navy hover:bg-canvas"
+          title="Appearance — theme & accent colour"
+        >
+          <Palette size={18} />
+        </button>
+
         {/* User */}
         <div className="ml-1 flex items-center gap-2">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-navy font-display text-xs font-bold text-white">
@@ -132,6 +143,7 @@ export default function Topbar({
       </div>
 
       <NotificationPanel open={notifOpen} onClose={() => setNotifOpen(false)} />
+      <AppearanceModal open={appearOpen} onClose={() => setAppearOpen(false)} />
     </header>
   )
 }

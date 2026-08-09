@@ -2,6 +2,48 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Theme variables ──────────────────────────────────────────────────────────
+   tailwind.config.js points every palette colour at these. Light is the
+   default; adding .dark to <html> flips them. The per-user accent (Appearance
+   settings) writes --accent-* inline on <html>, which --brand-* follows. */
+:root {
+  --navy-rgb: 15 27 51; /* #0F1B33 — headings & body text */
+  --navy2-rgb: 27 42 74; /* #1B2A4A */
+  --good-rgb: 46 125 79; /* #2E7D4F */
+  --warn-rgb: 201 162 39; /* #C9A227 */
+  --crit-rgb: 179 38 30; /* #B3261E */
+  --neutral-rgb: 107 114 128; /* #6B7280 */
+  --surface-rgb: 255 255 255;
+  --canvas-rgb: 242 242 242; /* #F2F2F2 page background */
+  --black-rgb: 0 0 0; /* borders / dividers / hover tints */
+
+  /* Accent — set per user from Appearance settings; INZU orange by default */
+  --accent-rgb: 209 107 33; /* #D16B21 */
+  --accent-tint-light-rgb: 248 231 215; /* #F8E7D7 chip/callout bg (light) */
+  --accent-tint-dark-rgb: 74 46 22; /* deep warm equivalent (dark) */
+  --brand-rgb: var(--accent-rgb);
+  --brand-tint-rgb: var(--accent-tint-light-rgb);
+}
+
+/* Dark theme: mostly a re-mapping of what each palette role MEANS.
+   navy = text → light; black = borders → white-ish; surfaces darken.
+   Status text brightens for contrast on dark cards; the few solid-colour
+   surfaces (sidebar, table headers, badges) are pinned to their real colours
+   further down. */
+.dark {
+  color-scheme: dark; /* native controls (date pickers, selects) go dark */
+  --navy-rgb: 230 236 246;
+  --navy2-rgb: 205 216 234;
+  --good-rgb: 92 190 134;
+  --warn-rgb: 226 193 75;
+  --crit-rgb: 240 123 114;
+  --neutral-rgb: 148 163 184;
+  --surface-rgb: 22 30 46; /* #161E2E cards */
+  --canvas-rgb: 11 18 32; /* #0B1220 page */
+  --black-rgb: 255 255 255;
+  --brand-tint-rgb: var(--accent-tint-dark-rgb);
+}
+
 @layer base {
   html,
   body,
@@ -23,6 +65,40 @@
     @apply p-5 md:p-7 max-w-[1400px] mx-auto w-full;
   }
 }
+
+/* ── Dark-mode pinned exceptions ─────────────────────────────────────────────
+   With `navy` flipped to light text, anything that uses navy as a SOLID
+   SURFACE (sidebar, primary buttons, table headers — all paired with
+   text-white) must be pinned back to real navy. Same idea for solid status
+   badges (white text needs the deeper hue) and the white card surfaces. */
+.dark .bg-navy { background-color: #0f1b33; }
+.dark .bg-navy-secondary { background-color: #1b2a4a; }
+.dark .hover\:bg-navy:hover { background-color: #0f1b33; }
+.dark .hover\:bg-navy-secondary:hover { background-color: #24365c; }
+/* Full-screen scrims (modal / mobile drawer) — a dark veil, not a light haze */
+.dark .bg-navy\/50 { background-color: rgb(2 6 16 / 0.72); }
+.dark .bg-navy\/40 { background-color: rgb(2 6 16 / 0.6); }
+/* Cards & inputs: "white" backgrounds become the dark surface (text-white is
+   untouched — it lives on navy/status solids, which stay dark). */
+.dark .bg-white { background-color: rgb(var(--surface-rgb)); }
+.dark .hover\:bg-white:hover { background-color: rgb(var(--surface-rgb)); }
+/* Solid status chips/buttons keep their real hue under white text */
+.dark .bg-status-good { background-color: #2e7d4f; }
+.dark .bg-status-warning { background-color: #b08d1d; }
+.dark .bg-status-critical { background-color: #b3261e; }
+.dark .bg-status-neutral { background-color: #6b7280; }
+.dark .hover\:bg-status-good:hover { background-color: #2e7d4f; }
+.dark .hover\:bg-status-warning:hover { background-color: #b08d1d; }
+.dark .hover\:bg-status-critical:hover { background-color: #b3261e; }
+/* Hard-coded hex one-offs (deep text on pastel chips) → dark equivalents */
+.dark .text-\[\#8a6d10\] { color: #e2c14b; }
+.dark .text-\[\#8a4513\] { color: #eda26b; }
+.dark .text-\[\#283a66\] { color: #b8c7e8; }
+.dark .text-\[\#5b4a86\] { color: #c9bceb; }
+.dark .bg-\[\#FCEAD3\] { background-color: #3a2a16; }
+.dark .bg-\[\#DDE4F3\] { background-color: #1d2a45; }
+.dark .bg-\[\#E7E0F5\] { background-color: #2a2342; }
+.dark .bg-\[\#E9ECEF\] { background-color: #222b3d; }
 
 /* Stop mobile browsers (esp. iOS Safari) auto-zooming into a form control on
    focus — that happens whenever the control's font-size is under 16px, and it
@@ -48,4 +124,10 @@
 *::-webkit-scrollbar-thumb {
   background: rgba(15, 27, 51, 0.18);
   border-radius: 8px;
+}
+.dark * {
+  scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+}
+.dark *::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
 }

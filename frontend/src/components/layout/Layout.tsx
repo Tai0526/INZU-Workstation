@@ -1,6 +1,7 @@
 import { Suspense, useEffect, useState } from 'react'
 import { Outlet, Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from '@/auth/AuthContext'
+import { useAppearanceSync } from '@/lib/prefs/store'
 import { reconcileVehicleDocBranches } from '@/lib/fleet/store'
 import ErrorBoundary from '@/components/ErrorBoundary'
 import SyncStatus from '@/components/SyncStatus'
@@ -23,6 +24,9 @@ export default function Layout() {
   const { pathname } = useLocation()
   const [mobileOpen, setMobileOpen] = useState(false)
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(LS_COLLAPSED) === '1')
+
+  // Apply this account's saved theme/accent (and react when it syncs in).
+  useAppearanceSync(user?.id)
 
   // Keep vehicle documents on the same branch as their vehicle (heals transfers).
   useEffect(() => { reconcileVehicleDocBranches() }, [])

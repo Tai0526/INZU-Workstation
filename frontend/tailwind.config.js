@@ -3,27 +3,35 @@ export default {
   content: ['./index.html', './src/**/*.{ts,tsx}'],
   theme: {
     extend: {
+      // ── INZU / Ventura palette (spec §3.1), routed through CSS variables ──
+      // The actual values live in src/index.css (:root = light, .dark = dark).
+      // `rgb(var(...) / <alpha-value>)` keeps every opacity step working
+      // (border-black/10, bg-status-critical/5, …) in BOTH themes, and lets the
+      // per-user accent colour swap --accent-rgb without touching components.
       colors: {
-        // ── INZU / Ventura brand palette (spec §3.1) ──
         navy: {
-          DEFAULT: '#0F1B33', // primary: sidebar, headings, primary buttons, table headers
-          secondary: '#1B2A4A', // section headers, active nav highlight, links
+          DEFAULT: 'rgb(var(--navy-rgb) / <alpha-value>)', // headings/body text; solid navy surfaces are pinned dark in index.css
+          secondary: 'rgb(var(--navy2-rgb) / <alpha-value>)',
         },
-        // Brand accent — orange taken from the INZU logo (#D16B21)
+        // Brand accent — user-selectable, defaults to INZU logo orange (#D16B21)
         brand: {
-          DEFAULT: '#D16B21', // active nav, callouts, badges, KPI highlights, buttons
-          tint: '#F8E7D7', // callout/chip backgrounds
+          DEFAULT: 'rgb(var(--brand-rgb) / <alpha-value>)',
+          tint: 'rgb(var(--brand-tint-rgb) / <alpha-value>)', // callout/chip backgrounds
         },
         // ── Status colour language (spec §3.2) — semantic, kept distinct from brand ──
         status: {
-          good: '#2E7D4F', // compliant / good
-          warning: '#C9A227', // warning / due soon (amber)
-          critical: '#B3261E', // critical / overdue
-          neutral: '#6B7280', // neutral / not started
+          good: 'rgb(var(--good-rgb) / <alpha-value>)',
+          warning: 'rgb(var(--warn-rgb) / <alpha-value>)',
+          critical: 'rgb(var(--crit-rgb) / <alpha-value>)',
+          neutral: 'rgb(var(--neutral-rgb) / <alpha-value>)',
         },
         // neutral surfaces
-        surface: '#FFFFFF',
-        canvas: '#F2F2F2',
+        surface: 'rgb(var(--surface-rgb) / <alpha-value>)',
+        canvas: 'rgb(var(--canvas-rgb) / <alpha-value>)',
+        // "black" here means borders/dividers/hover tints — flips to white-ish
+        // in dark mode so border-black/10 etc. stay visible. `white` stays
+        // literal white: it is TEXT on navy surfaces, which remain dark.
+        black: 'rgb(var(--black-rgb) / <alpha-value>)',
       },
       fontFamily: {
         sans: ['"DM Sans"', 'system-ui', '-apple-system', 'Segoe UI', 'Roboto', 'sans-serif'],
