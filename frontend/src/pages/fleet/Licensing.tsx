@@ -244,7 +244,7 @@ function ExportModal({ open, onClose, vehicles, docs, branchLabel }: {
 
   function doExport() {
     if (chosen.length === 0) return
-    exportLicensingXlsx({ vehicles, docs, cats: chosen, branchLabel })
+    void exportLicensingXlsx({ vehicles, docs, cats: chosen, branchLabel })
     onClose()
   }
 
