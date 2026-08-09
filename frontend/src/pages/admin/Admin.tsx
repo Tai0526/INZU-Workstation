@@ -699,8 +699,9 @@ function BackupPanel() {
           </p>
         ) : (
           <p className="text-sm text-status-neutral">
-            Downloads every record from all {BACKUP_TABLES.length} tables as one JSON file you keep — independent of Supabase and of this browser.
+            Downloads every record from all {BACKUP_TABLES.length} tables — including every setting, since app settings are one of those tables — as one JSON file you keep, independent of Supabase and of this browser.
             Your data already lives in the database and Supabase backs that up itself; this is your own off-site copy. Take one before anything risky, and keep a monthly one.
+            <span className="mt-1 block text-[11px]">Uploaded files (document scans, delivery notes, job-card photos) are not inside this JSON — they live in the database's own <b>documents</b> storage bucket, which Supabase replicates and backs up separately.</span>
           </p>
         )}
 
