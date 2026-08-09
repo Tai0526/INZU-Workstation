@@ -1,5 +1,8 @@
 import { useMemo, useState } from 'react'
-import { Search, Eye, Wrench, Download, Settings, Plus, Trash2, FileSpreadsheet, ArrowUpDown, AlertTriangle } from 'lucide-react'
+import {
+  Search, Eye, Wrench, Download, Settings, Plus, Trash2, FileSpreadsheet, ArrowUpDown,
+  AlertOctagon, Clock, FileWarning, CalendarCheck, CalendarPlus, ShieldCheck, X, Check,
+} from 'lucide-react'
 import clsx from 'clsx'
 import { useAuth } from '@/auth/AuthContext'
 import { ROLES, BRANCHES } from '@/lib/roles'
@@ -18,25 +21,41 @@ import {
   rowFlags, matchesFilter, normaliseFilter, daysChip, buildLicensingRows,
   EXPIRING_WINDOW_DAYS, type CellTone, type LicCell, type LicFilter, type LicFlags,
 } from '@/lib/fleet/licensingStatus'
+import {
+  useBookings, bookingsStore, bookingKey, bookingState,
+  type Booking, type BookingStatus, type BookingState,
+} from '@/lib/fleet/inspectionBookings'
 
 const inputCls = 'w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand'
+const todayIso = () => new Date().toISOString().slice(0, 10)
 
 /** Days-left chip styling — the same colour language as the exported sheet. */
 const TONE: Record<CellTone, { chip: string; bar: string }> = {
-  valid: { chip: 'bg-status-good/10 text-status-good', bar: 'border-status-good' },
-  expiring: { chip: 'bg-status-warning/20 text-[#8a6d10] font-semibold', bar: 'border-status-warning' },
-  today: { chip: 'bg-status-critical/15 text-status-critical font-bold', bar: 'border-status-critical' },
-  expired: { chip: 'bg-status-critical/15 text-status-critical font-bold', bar: 'border-status-critical' },
-  missing: { chip: 'bg-[#7f1d1d]/10 text-[#7f1d1d] font-semibold', bar: 'border-[#7f1d1d]' },
-  quiet: { chip: 'bg-navy/5 text-status-neutral', bar: 'border-black/10' },
-  nodate: { chip: 'bg-navy/5 text-status-neutral', bar: 'border-black/10' },
+  valid: { chip: 'bg-status-good/10 text-status-good ring-status-good/20', bar: 'border-status-good' },
+  expiring: { chip: 'bg-status-warning/20 text-[#8a6d10] font-semibold ring-status-warning/30', bar: 'border-status-warning' },
+  today: { chip: 'bg-status-critical/15 text-status-critical font-bold ring-status-critical/30', bar: 'border-status-critical' },
+  expired: { chip: 'bg-status-critical/15 text-status-critical font-bold ring-status-critical/30', bar: 'border-status-critical' },
+  missing: { chip: 'bg-[#7f1d1d]/10 text-[#7f1d1d] font-semibold ring-[#7f1d1d]/20', bar: 'border-[#7f1d1d]' },
+  quiet: { chip: 'bg-navy/5 text-status-neutral ring-black/5', bar: 'border-black/10' },
+  nodate: { chip: 'bg-navy/5 text-status-neutral ring-black/5', bar: 'border-black/10' },
 }
 
-/** Short date for the grid — "15 Aug 26". */
+const BOOKING_CHIP: Record<Exclude<BookingState, 'none'>, string> = {
+  proposed: 'bg-brand/10 text-brand ring-brand/20',
+  confirmed: 'bg-status-good/10 text-status-good ring-status-good/20',
+  overdue: 'bg-status-critical/10 text-status-critical ring-status-critical/25',
+  done: 'bg-navy/5 text-status-neutral ring-black/5',
+}
+
 function shortDate(iso: string): string {
   const d = new Date(`${iso}T00:00:00`)
   if (Number.isNaN(d.getTime())) return iso
-  return d.toLocaleDateString('en', { day: '2-digit', month: 'short', year: '2-digit' })
+  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' })
+}
+function dayMonth(iso: string): string {
+  const d = new Date(`${iso}T00:00:00`)
+  if (Number.isNaN(d.getTime())) return iso
+  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
 }
 
 /** The worst state on a row — drives its left accent bar. */
@@ -58,6 +77,7 @@ export default function Licensing() {
   const vehicles = useVehicles()
   const docs = useDocuments()
   const cats = useLicensingCats()
+  const bookings = useBookings()
   const [q, setQ] = useState('')
   const [filter, setFilter] = useState<LicFilter>('all')
   useDeepLink(['filter'], (p) => setFilter(normaliseFilter(p.get('filter'))))
@@ -65,8 +85,10 @@ export default function Licensing() {
   const [picked, setPicked] = useState<Vehicle | null>(null)
   const [manageOpen, setManageOpen] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
+  const [bookOpen, setBookOpen] = useState(false)
 
   const branchVehicles = useMemo(() => vehicles.filter((v) => v.branch === branch), [vehicles, branch])
+  const today = todayIso()
 
   // One pass, shared with the exported sheet (lib/fleet/licensingStatus).
   const fleet = useMemo(() => {
@@ -88,16 +110,25 @@ export default function Licensing() {
     missing: fleet.filter((f) => f.flags.missing).length,
   }), [fleet])
 
-  // Document-level totals — "how many renewals", not "how many buses".
-  const docCounts = useMemo(() => {
-    let expired = 0, expiring = 0, missing = 0
-    for (const f of fleet) for (const c of f.row.cells) {
-      if (c.tone === 'expired') expired++
-      else if (c.tone === 'expiring' || c.tone === 'today') expiring++
-      else if (c.tone === 'missing') missing++
+  // Document-level totals — "how many renewals", not "how many buses" — plus a
+  // headline score: the share of required paperwork that is actually in order.
+  const health = useMemo(() => {
+    let expired = 0, expiring = 0, missing = 0, requiredSlots = 0, ok = 0, booked = 0
+    for (const f of fleet) f.row.cells.forEach((c, i) => {
+      const isRequired = cats[i]?.required
+      if (isRequired) requiredSlots++
+      if (c.tone === 'expired') { expired++; return }
+      if (c.tone === 'missing') { missing++; return }
+      if (c.tone === 'expiring' || c.tone === 'today') expiring++
+      if (isRequired) ok++
+    })
+    for (const f of fleet) for (const c of cats) {
+      const b = bookings[bookingKey(f.v.id, c.key)]
+      const cellIdx = cats.indexOf(c)
+      if (bookingState(b, f.row.cells[cellIdx]?.expiry || undefined, today) !== 'none') booked++
     }
-    return { expired, expiring, missing }
-  }, [fleet])
+    return { expired, expiring, missing, booked, score: requiredSlots > 0 ? Math.round((ok / requiredSlots) * 100) : 100 }
+  }, [fleet, cats, bookings, today])
 
   const rows = useMemo(() => {
     const term = q.trim().toLowerCase()
@@ -110,6 +141,7 @@ export default function Licensing() {
   }, [fleet, q, filter, sort])
 
   const requiredShorts = cats.filter((c) => c.required).map((c) => c.short).join(', ')
+  const scoreTone = health.score >= 95 ? 'good' : health.score >= 80 ? 'warning' : 'critical'
 
   return (
     <div className="page space-y-5">
@@ -122,22 +154,36 @@ export default function Licensing() {
             <Wrench size={13} className="text-brand" /> Maintained by Workshop · Operations is alerted to any gaps.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {!editable && <span className="inline-flex items-center gap-1.5 rounded-full bg-navy/5 px-3 py-1 text-xs font-medium text-navy"><Eye size={13} /> View only</span>}
+          {editable && <Button onClick={() => setBookOpen(true)}><CalendarPlus size={15} /> Book inspections</Button>}
           <Button variant="secondary" onClick={() => setExportOpen(true)}><Download size={15} /> Export</Button>
           {editable && <Button variant="secondary" onClick={() => setManageOpen(true)}><Settings size={15} /> Manage</Button>}
         </div>
       </div>
 
-      {/* What needs doing, in documents rather than vehicles */}
-      {(docCounts.expired > 0 || docCounts.expiring > 0 || docCounts.missing > 0) && (
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-xl border border-status-warning/40 bg-status-warning/10 px-4 py-2.5 text-sm text-navy">
-          <AlertTriangle size={16} className="shrink-0 text-[#8a6d10]" />
-          {docCounts.expired > 0 && <span><b className="text-status-critical">{docCounts.expired}</b> document{docCounts.expired === 1 ? '' : 's'} expired</span>}
-          {docCounts.expiring > 0 && <span><b className="text-[#8a6d10]">{docCounts.expiring}</b> expiring within {EXPIRING_WINDOW_DAYS} days</span>}
-          {docCounts.missing > 0 && <span><b className="text-[#7f1d1d]">{docCounts.missing}</b> required document{docCounts.missing === 1 ? '' : 's'} not on file</span>}
+      {/* Health strip: one score, then what needs doing — each tile filters */}
+      <div className="card grid gap-px overflow-hidden bg-black/5 sm:grid-cols-2 lg:grid-cols-5">
+        <div className="bg-surface p-4 sm:col-span-2">
+          <div className="flex items-baseline gap-2">
+            <ShieldCheck size={16} className={clsx(scoreTone === 'good' ? 'text-status-good' : scoreTone === 'warning' ? 'text-status-warning' : 'text-status-critical')} />
+            <span className="text-xs font-semibold uppercase tracking-wide text-status-neutral">Fleet compliance</span>
+          </div>
+          <div className="mt-1 flex items-end gap-2">
+            <span className={clsx('font-display text-3xl font-bold leading-none', scoreTone === 'good' ? 'text-status-good' : scoreTone === 'warning' ? 'text-[#8a6d10]' : 'text-status-critical')}>{health.score}%</span>
+            <span className="pb-0.5 text-[11px] text-status-neutral">of required documents valid</span>
+          </div>
+          <div className="mt-2.5 h-2 overflow-hidden rounded-full bg-canvas ring-1 ring-inset ring-black/5">
+            <div className={clsx('h-full rounded-full transition-[width] duration-500', scoreTone === 'good' ? 'bg-status-good' : scoreTone === 'warning' ? 'bg-status-warning' : 'bg-status-critical')}
+              style={{ width: `${health.score}%` }} />
+          </div>
+          <p className="mt-1.5 text-[11px] text-status-neutral">{counts.compliant} of {counts.all} vehicles fully in order</p>
         </div>
-      )}
+
+        <HealthTile icon={AlertOctagon} tone="critical" value={health.expired} label="Expired" hint="already out of date" onClick={() => setFilter('expired')} />
+        <HealthTile icon={Clock} tone="warning" value={health.expiring} label={`Due in ${EXPIRING_WINDOW_DAYS} days`} hint="renew before they lapse" onClick={() => setFilter('expiring')} />
+        <HealthTile icon={FileWarning} tone="critical" value={health.missing} label="Not on file" hint="required, never uploaded" onClick={() => setFilter('missing')} />
+      </div>
 
       {/* Filters — a vehicle can appear under more than one */}
       <StatChips
@@ -164,19 +210,24 @@ export default function Licensing() {
           <ArrowUpDown size={14} className="text-status-neutral" /> {sort === 'urgency' ? 'Most urgent first' : 'Fleet order'}
         </button>
         <span className="text-xs text-status-neutral">Showing {rows.length} of {fleet.length}</span>
+        {health.booked > 0 && (
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-brand-tint/50 px-2.5 py-1 text-[11px] font-medium text-navy">
+            <CalendarCheck size={12} className="text-brand" /> {health.booked} inspection{health.booked === 1 ? '' : 's'} booked
+          </span>
+        )}
       </div>
 
       {/* The grid — the same shape as the exported sheet */}
       <div className="card overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
-            <thead className="bg-navy text-white">
-              <tr>
-                <th className="sticky left-0 z-10 bg-navy px-4 py-2.5 font-medium">Vehicle</th>
-                {cats.map((c) => (
-                  <th key={c.key} className="whitespace-nowrap px-4 py-2.5 text-center font-medium">
-                    {c.label}
-                    {!c.required && <span className="ml-1 text-[10px] font-normal text-white/55">optional</span>}
+            <thead>
+              <tr className="bg-navy text-white">
+                <th className="sticky left-0 z-10 bg-navy px-4 py-3 font-medium">Vehicle</th>
+                {cats.map((c, i) => (
+                  <th key={c.key} className={clsx('whitespace-nowrap px-4 py-3 text-center font-medium', i > 0 && 'border-l border-white/10')}>
+                    <div>{c.label}</div>
+                    <div className="text-[10px] font-normal text-white/50">{c.required ? 'required' : 'optional'}</div>
                   </th>
                 ))}
               </tr>
@@ -184,19 +235,23 @@ export default function Licensing() {
             <tbody>
               {rows.map(({ row, v, flags }) => (
                 <tr key={v.id} onClick={() => setPicked(v)}
-                  className="group cursor-pointer border-t border-black/5 hover:bg-canvas">
+                  className="group cursor-pointer border-t border-black/5 transition-colors hover:bg-brand-tint/20">
                   {/* Solid background: this column stays put while the rest scrolls under it. */}
-                  <td className={clsx('sticky left-0 z-10 border-l-4 bg-surface px-4 py-2 group-hover:bg-canvas', TONE[worstTone(flags)].bar)}>
+                  <td className={clsx('sticky left-0 z-10 border-l-4 bg-surface px-4 py-2.5 group-hover:bg-brand-tint/20', TONE[worstTone(flags)].bar)}>
                     <div className="font-semibold text-navy">{row.fleet}</div>
                     <div className="text-[11px] text-status-neutral">{row.reg}</div>
-                    {flags.noneOnFile && <div className="text-[10px] font-medium text-[#7f1d1d]">nothing on file</div>}
+                    {flags.noneOnFile && <div className="mt-0.5 text-[10px] font-medium text-[#7f1d1d]">nothing on file</div>}
                   </td>
-                  {row.cells.map((cell, ci) => <DocCell key={cats[ci].key} cell={cell} />)}
+                  {row.cells.map((cell, ci) => (
+                    <DocCell key={cats[ci].key} cell={cell} first={ci === 0}
+                      booking={bookings[bookingKey(v.id, cats[ci].key)]} today={today} />
+                  ))}
                 </tr>
               ))}
               {rows.length === 0 && (
-                <tr><td colSpan={cats.length + 1} className="px-4 py-12 text-center text-sm text-status-neutral">
-                  {filter === 'all' ? 'No vehicles match.' : 'Nothing in this group — good news.'}
+                <tr><td colSpan={cats.length + 1} className="px-4 py-14 text-center">
+                  <ShieldCheck size={26} className="mx-auto mb-2 text-status-neutral/50" />
+                  <p className="text-sm text-status-neutral">{filter === 'all' ? 'No vehicles match.' : 'Nothing in this group — good news.'}</p>
                 </td></tr>
               )}
             </tbody>
@@ -210,20 +265,47 @@ export default function Licensing() {
       <ManageCatsModal open={manageOpen} onClose={() => setManageOpen(false)} />
       <ExportModal open={exportOpen} onClose={() => setExportOpen(false)} vehicles={branchVehicles} docs={docs}
         branchLabel={branchLabel} pageFilter={filter} />
+      <BookingModal open={bookOpen} onClose={() => setBookOpen(false)} vehicles={branchVehicles} docs={docs}
+        cats={cats} branchLabel={branchLabel} preparedBy={user!.fullName} />
     </div>
   )
 }
 
-/** One document's expiry date + days-left chip. */
-function DocCell({ cell }: { cell: LicCell }) {
-  const tone = TONE[cell.tone]
+function HealthTile({ icon: Icon, tone, value, label, hint, onClick }: {
+  icon: typeof AlertOctagon; tone: 'critical' | 'warning'; value: number; label: string; hint: string; onClick: () => void
+}) {
+  const quiet = value === 0
   return (
-    <td className="px-4 py-2 text-center" title={cell.status}>
-      <div className="flex items-center justify-center gap-1.5">
-        <span className={clsx('text-xs', cell.expiry ? 'text-navy' : 'text-status-neutral')}>{cell.expiry ? shortDate(cell.expiry) : '—'}</span>
-        <span className={clsx('rounded-full px-1.5 py-0.5 text-[10px] leading-none', tone.chip)}>
+    <button onClick={onClick} className="bg-surface p-4 text-left transition-colors hover:bg-canvas">
+      <div className="flex items-center gap-1.5">
+        <Icon size={14} className={clsx(quiet ? 'text-status-neutral/50' : tone === 'critical' ? 'text-status-critical' : 'text-status-warning')} />
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-status-neutral">{label}</span>
+      </div>
+      <div className={clsx('mt-1 font-display text-2xl font-bold leading-none', quiet ? 'text-status-neutral/60' : tone === 'critical' ? 'text-status-critical' : 'text-[#8a6d10]')}>{value}</div>
+      <div className="mt-0.5 text-[11px] text-status-neutral">{quiet ? 'nothing outstanding' : hint}</div>
+    </button>
+  )
+}
+
+/** One document's days-left chip, its expiry date, and any booking. */
+function DocCell({ cell, booking, today, first }: { cell: LicCell; booking?: Booking; today: string; first: boolean }) {
+  const tone = TONE[cell.tone]
+  const state = bookingState(booking, cell.expiry || undefined, today)
+  return (
+    <td className={clsx('px-4 py-2.5 text-center align-middle', !first && 'border-l border-black/5')} title={cell.status}>
+      <div className="flex flex-col items-center gap-1">
+        <span className={clsx('rounded-full px-2 py-0.5 text-[11px] leading-none ring-1 ring-inset', tone.chip)}>
           {cell.tone === 'missing' ? 'missing' : daysChip(cell)}
         </span>
+        <span className={clsx('text-[10px]', cell.expiry ? 'text-status-neutral' : 'text-status-neutral/60')}>
+          {cell.expiry ? shortDate(cell.expiry) : 'no document'}
+        </span>
+        {state !== 'none' && (
+          <span className={clsx('inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] leading-none ring-1 ring-inset', BOOKING_CHIP[state])}
+            title={`${state === 'done' ? 'Inspected — renewed since' : state === 'overdue' ? 'Booked date has passed' : state === 'confirmed' ? 'Confirmed with FQM' : 'Proposed'} · ${booking!.date}${booking!.note ? ` · ${booking!.note}` : ''}`}>
+            <CalendarCheck size={10} /> {dayMonth(booking!.date)}
+          </span>
+        )}
       </div>
     </td>
   )
@@ -279,6 +361,227 @@ function ManageCatsModal({ open, onClose }: { open: boolean; onClose: () => void
           <Button onClick={add} disabled={!label.trim()}><Plus size={15} /> Add</Button>
         </div>
         <p className="mt-2 text-[11px] text-status-neutral">New categories start as required and appear on every vehicle. Removing one hides the column — documents already uploaded are kept.</p>
+      </div>
+    </Modal>
+  )
+}
+
+// ── Booking ────────────────────────────────────────────────────────────────
+interface Edit { date: string; status: BookingStatus; note: string }
+
+/**
+ * Book vehicles in for an inspection and hand the result to the other party.
+ * Everything for the arrangement in one place: who is due, the date we propose,
+ * whether they have confirmed it, and the sheet to email them.
+ */
+function BookingModal({ open, onClose, vehicles, docs, cats, branchLabel, preparedBy }: {
+  open: boolean; onClose: () => void; vehicles: Vehicle[]; docs: DocumentRecord[]; cats: LicCat[]; branchLabel: string; preparedBy: string
+}) {
+  const bookings = useBookings()
+  const fqm = cats.find((c) => c.key === 'fqm_inspection') ?? cats[0]
+  const [catKey, setCatKey] = useState(fqm?.key ?? '')
+  const [edits, setEdits] = useState<Record<string, Edit>>({})
+  const [showAll, setShowAll] = useState(false)
+  const [bulkDate, setBulkDate] = useState('')
+  const [perDay, setPerDay] = useState(4)
+  const [busy, setBusy] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [seen, setSeen] = useState(false)
+  const today = todayIso()
+
+  if (open && !seen) { setSeen(true); setCatKey(fqm?.key ?? ''); setEdits({}); setShowAll(false); setBulkDate(''); setSaved(false) }
+  if (!open && seen) setSeen(false)
+
+  const cat = cats.find((c) => c.key === catKey) ?? cats[0]
+
+  // Everyone due for this document, plus anyone already booked, most urgent first.
+  const candidates = useMemo(() => {
+    if (!cat) return []
+    const rows = buildLicensingRows(vehicles, docs, [cat])
+    const byFleet = new Map(vehicles.map((v) => [v.fleet_no, v]))
+    return rows
+      .map((r) => {
+        const v = byFleet.get(r.fleet)!
+        const cell = r.cells[0]
+        const b = bookings[bookingKey(v.id, cat.key)]
+        const due = cell.tone === 'expired' || cell.tone === 'today' || cell.tone === 'expiring' || cell.tone === 'missing'
+        return { v, cell, booking: b, due, state: bookingState(b, cell.expiry || undefined, today) }
+      })
+      .filter((x) => showAll || x.due || x.booking)
+      .sort((a, b) => (a.cell.days ?? 9999) - (b.cell.days ?? 9999) || a.v.fleet_no.localeCompare(b.v.fleet_no, undefined, { numeric: true }))
+  }, [vehicles, docs, cat, bookings, showAll, today])
+
+  const valueFor = (vid: string): Edit => {
+    const e = edits[vid]
+    if (e) return e
+    const b = bookings[bookingKey(vid, cat?.key ?? '')]
+    return { date: b?.date ?? '', status: b?.status ?? 'proposed', note: b?.note ?? '' }
+  }
+  const patch = (vid: string, p: Partial<Edit>) => setEdits((s) => ({ ...s, [vid]: { ...valueFor(vid), ...p } }))
+
+  /** Fill dates down the list, N vehicles a day, skipping weekends. */
+  function spread() {
+    if (!bulkDate) return
+    const next: Record<string, Edit> = { ...edits }
+    let d = new Date(`${bulkDate}T00:00:00Z`)
+    let onDay = 0
+    for (const c of candidates) {
+      while (d.getUTCDay() === 0 || d.getUTCDay() === 6) d = new Date(d.getTime() + 86_400_000)
+      next[c.v.id] = { ...valueFor(c.v.id), date: d.toISOString().slice(0, 10) }
+      if (++onDay >= Math.max(1, perDay)) { onDay = 0; d = new Date(d.getTime() + 86_400_000) }
+    }
+    setEdits(next)
+  }
+  function setAll() {
+    if (!bulkDate) return
+    const next: Record<string, Edit> = { ...edits }
+    for (const c of candidates) next[c.v.id] = { ...valueFor(c.v.id), date: bulkDate }
+    setEdits(next)
+  }
+
+  const dirty = Object.keys(edits).length > 0
+  const bookedCount = candidates.filter((c) => valueFor(c.v.id).date).length
+
+  function save() {
+    if (!cat) return
+    bookingsStore.setMany(Object.entries(edits).map(([vehicleId, e]) => ({ vehicleId, cat: cat.key, date: e.date, status: e.status, note: e.note })))
+    setEdits({})
+    setSaved(true)
+  }
+
+  async function exportSheet(mode: 'with-expiry' | 'schedule-only') {
+    if (!cat || busy) return
+    setBusy(true)
+    try {
+      const { exportBookingXlsx } = await import('@/lib/fleet/licensingExport')
+      await exportBookingXlsx({ vehicles, docs, cat, bookings, branchLabel, mode, includeUnbooked: true, preparedBy })
+    } finally { setBusy(false) }
+  }
+
+  if (!cat) return null
+
+  return (
+    <Modal open={open} onClose={onClose} size="xl" title="Book inspections"
+      subtitle="Set the dates you intend to present each vehicle, then export the sheet to send to the inspecting department so both sides work to the same plan."
+      footer={<>
+        <span className="mr-auto text-xs text-status-neutral">
+          {bookedCount} of {candidates.length} listed vehicle{candidates.length === 1 ? '' : 's'} have a date{dirty ? ' · unsaved changes' : ''}
+        </span>
+        <Button variant="secondary" onClick={onClose}>Close</Button>
+        <Button onClick={save} disabled={!dirty}><Check size={15} /> Save dates</Button>
+      </>}>
+      <div className="space-y-4">
+        {/* Which document */}
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-semibold uppercase tracking-wide text-status-neutral">Document</span>
+          {cats.map((c) => (
+            <button key={c.key} onClick={() => { setCatKey(c.key); setEdits({}) }}
+              className={clsx('rounded-full border px-3 py-1 text-xs font-medium transition-colors',
+                c.key === cat.key ? 'border-brand bg-brand-tint/50 text-navy' : 'border-black/10 bg-white text-status-neutral hover:bg-canvas')}>
+              {c.short}
+            </button>
+          ))}
+          <label className="ml-auto flex cursor-pointer items-center gap-1.5 text-xs text-status-neutral">
+            <input type="checkbox" className="h-3.5 w-3.5 accent-[#0F1B33]" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} />
+            Show every vehicle
+          </label>
+        </div>
+
+        {/* Bulk fill */}
+        <div className="flex flex-wrap items-end gap-2 rounded-xl border border-dashed border-navy/20 bg-canvas/40 p-3">
+          <label className="block">
+            <span className="mb-1 block text-[11px] font-medium text-navy">Start date</span>
+            <input type="date" className="rounded-lg border border-black/15 bg-white px-2.5 py-1.5 text-sm text-navy outline-none focus:border-brand" value={bulkDate} onChange={(e) => setBulkDate(e.target.value)} />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-[11px] font-medium text-navy">Per day</span>
+            <input type="number" min={1} className="w-20 rounded-lg border border-black/15 bg-white px-2.5 py-1.5 text-sm text-navy outline-none focus:border-brand" value={perDay} onChange={(e) => setPerDay(Number(e.target.value) || 1)} />
+          </label>
+          <Button variant="secondary" onClick={spread} disabled={!bulkDate}>Spread over weekdays</Button>
+          <Button variant="secondary" onClick={setAll} disabled={!bulkDate}>Set all to this date</Button>
+          <p className="w-full text-[11px] text-status-neutral">Spreading fills the list at {perDay} a day from the start date, skipping weekends — then adjust any row by hand.</p>
+        </div>
+
+        {/* The list */}
+        <div className="max-h-[46vh] overflow-y-auto rounded-xl border border-black/10">
+          <table className="w-full text-left text-sm">
+            <thead className="sticky top-0 z-10 bg-canvas text-status-neutral">
+              <tr>
+                <th className="px-3 py-2 font-medium">Vehicle</th>
+                <th className="px-3 py-2 font-medium">Current {cat.short}</th>
+                <th className="px-3 py-2 font-medium">Inspect on</th>
+                <th className="px-3 py-2 font-medium">Status</th>
+                <th className="px-3 py-2 font-medium">Note</th>
+                <th className="px-2 py-2" />
+              </tr>
+            </thead>
+            <tbody>
+              {candidates.map(({ v, cell, state }) => {
+                const e = valueFor(v.id)
+                return (
+                  <tr key={v.id} className="border-t border-black/5">
+                    <td className="px-3 py-1.5">
+                      <div className="font-medium text-navy">{v.fleet_no}</div>
+                      <div className="text-[10px] text-status-neutral">{v.reg_plate}</div>
+                    </td>
+                    <td className="px-3 py-1.5">
+                      <span className={clsx('rounded-full px-2 py-0.5 text-[11px] ring-1 ring-inset', TONE[cell.tone].chip)}>
+                        {cell.tone === 'missing' ? 'missing' : daysChip(cell)}
+                      </span>
+                      <span className="ml-1.5 text-[10px] text-status-neutral">{cell.expiry ? shortDate(cell.expiry) : ''}</span>
+                    </td>
+                    <td className="px-3 py-1.5">
+                      <input type="date" value={e.date} onChange={(ev) => patch(v.id, { date: ev.target.value })}
+                        className={clsx('rounded-md border px-2 py-1 text-xs outline-none focus:border-brand', e.date ? 'border-brand/40 bg-brand-tint/20 font-medium text-navy' : 'border-black/15 bg-white text-status-neutral')} />
+                    </td>
+                    <td className="px-3 py-1.5">
+                      <select value={e.status} onChange={(ev) => patch(v.id, { status: ev.target.value as BookingStatus })} disabled={!e.date}
+                        className="rounded-md border border-black/15 bg-white px-2 py-1 text-xs text-navy outline-none focus:border-brand disabled:opacity-50">
+                        <option value="proposed">Proposed</option>
+                        <option value="confirmed">Confirmed</option>
+                      </select>
+                      {state === 'done' && <span className="ml-1 text-[10px] text-status-good">renewed</span>}
+                      {state === 'overdue' && <span className="ml-1 text-[10px] text-status-critical">date passed</span>}
+                    </td>
+                    <td className="px-3 py-1.5">
+                      <input value={e.note} onChange={(ev) => patch(v.id, { note: ev.target.value })} placeholder="optional"
+                        className="w-full min-w-[120px] rounded-md border border-black/15 bg-white px-2 py-1 text-xs text-navy outline-none focus:border-brand" />
+                    </td>
+                    <td className="px-2 py-1.5">
+                      {e.date && (
+                        <button onClick={() => patch(v.id, { date: '', note: '' })} title="Clear this booking"
+                          className="rounded-md p-1 text-status-neutral hover:bg-status-critical/10 hover:text-status-critical"><X size={13} /></button>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
+              {candidates.length === 0 && (
+                <tr><td colSpan={6} className="px-4 py-10 text-center text-sm text-status-neutral">
+                  Nothing due for {cat.label} — tick “Show every vehicle” to book ahead anyway.
+                </td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Send it */}
+        <div className="rounded-xl border border-black/10 bg-canvas/50 p-3">
+          <div className="mb-1 text-xs font-semibold text-navy">Send to the inspecting department</div>
+          <p className="mb-2.5 text-[11px] leading-relaxed text-status-neutral">
+            {dirty && <span className="font-medium text-[#8a6d10]">Save your dates first — the sheet exports what is saved. </span>}
+            The full sheet shows each vehicle's current expiry beside the date we propose, so both sides can align. The schedule-only sheet lists just the dates.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" onClick={() => exportSheet('with-expiry')} disabled={busy}>
+              <FileSpreadsheet size={15} /> {busy ? 'Building…' : 'Export with expiry dates'}
+            </Button>
+            <Button variant="secondary" onClick={() => exportSheet('schedule-only')} disabled={busy}>
+              <FileSpreadsheet size={15} /> Export schedule only
+            </Button>
+          </div>
+          {saved && <p className="mt-2 text-[11px] text-status-good">Dates saved — they now show on the licensing grid and in the export.</p>}
+        </div>
       </div>
     </Modal>
   )
