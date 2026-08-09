@@ -1,5 +1,5 @@
 import {
-  LayoutDashboard, Truck, Users, Gauge, Route as RouteIcon,
+  LayoutDashboard, Truck, Users, Gauge, Route as RouteIcon, Milestone, Fuel,
   ShieldCheck, Wrench, Wallet, UserCog, ReceiptText, FolderOpen, Settings,
   type LucideIcon,
 } from 'lucide-react'
@@ -64,12 +64,30 @@ export const NAV: NavNode[] = [
   {
     module: 'operations', label: 'Operations', icon: RouteIcon,
     pages: [
-      { label: 'Overview', path: '/operations', blurb: 'Reconciles plan vs paid km (Mileage) vs driven km (Fuel odometer): paid-to-unpaid ratio, fuel economy and fuel-vs-revenue per bus to steer efficiency.' },
+      { label: 'Overview', path: '/operations', blurb: 'Bussing insight from what is being entered: trips per day, which weekdays need more buses, utilisation and pressure days — so the plan keeps improving.' },
       { label: 'Daily Plan', path: '/operations/daily-plan', blurb: 'The day’s intended movements — driver, bus, from → to (default Main Mine Gate), departure time. Mobile-friendly entry; exportable; total trips at a glance.' },
       { label: 'Weekly Plan', path: '/operations/weekly-plan', blurb: 'Assign drivers to vehicles for the week. Drag (or tap) on-shift drivers onto a bus; pull in off-duty drivers to cover a shortage and it logs overtime automatically.' },
       { label: 'Bus Allocation', path: '/operations/allocation', blurb: 'The actuals report of how buses moved — driver, bus, route, time and passengers carried. Routes are pulled from the Mileage catalogue.' },
-      { label: 'Mileage', path: '/operations/mileage', blurb: 'Daily bus movements split internal/external, rolled into a costed monthly FQM billing reconciliation. Excel workbook + PDF export.' },
-      { label: 'Fuel', path: '/operations/fuel', blurb: 'Fuel issued, driver, vehicle, locations visited, next-refuel odometer — the second independent distance figure.' },
+    ],
+  },
+  {
+    module: 'operations', label: 'Mileage', icon: Milestone,
+    pages: [
+      { label: 'Overview', path: '/mileage', blurb: 'What is profitable and what isn’t: revenue vs fuel per section (Enterprise / Sentinel) and per bus, paid vs driven km, and the buses to steer.' },
+      { label: 'Daily Log', path: '/mileage/log', blurb: 'Daily bus movements split internal/external per project, entered per shift.' },
+      { label: 'Vehicle Movements', path: '/mileage/vehicles', blurb: 'The per-bus movement sheet — every day’s routes and kilometres for one vehicle.' },
+      { label: 'Billing Summary', path: '/mileage/billing', blurb: 'The costed monthly FQM reconciliation per project, with VAT — Excel workbook + PDF export.' },
+      { label: 'Rates & Setup', path: '/mileage/setup', blurb: 'Contract rates per seat class, set for a month and tracked over time, plus routes and signatories.' },
+    ],
+  },
+  {
+    module: 'operations', label: 'Fuel', icon: Fuel,
+    pages: [
+      { label: 'Overview', path: '/fuel', blurb: 'Who the fuel goes to, monthly: Enterprise vs Sentinel buses, the workshop generator and authorised vehicles — litres, cost and km/L, with last-month deltas.' },
+      { label: 'Issuances', path: '/fuel/issuances', blurb: 'Fuel issued per refuel — driver, vehicle, route, odometer — plus generator and authorised-vehicle draws.' },
+      { label: 'Stock', path: '/fuel/stock', blurb: 'Depot tank level, days-left estimate and the month-by-month stock ledger.' },
+      { label: 'Deliveries', path: '/fuel/deliveries', blurb: 'Fuel received into the depot — supplier, litres, unit cost and the delivery note.' },
+      { label: 'Summary', path: '/fuel/summary', blurb: 'The costed monthly fuel picture — consumption by vehicle, economy, rates, and the exportable report.' },
     ],
   },
   {

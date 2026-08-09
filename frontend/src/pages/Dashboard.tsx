@@ -327,16 +327,16 @@ export default function Dashboard() {
 
     // Operations (real)
     if (r.mileagePending > 0)
-      push({ id: 'mil', severity: 'action', icon: RouteIcon, title: `${r.mileagePending} mileage ${plural(r.mileagePending, 'entry', 'entries')} to approve`, detail: 'Daily mileage submitted by the Tracker.', link: '/operations/mileage', actors: OPS })
+      push({ id: 'mil', severity: 'action', icon: RouteIcon, title: `${r.mileagePending} mileage ${plural(r.mileagePending, 'entry', 'entries')} to approve`, detail: 'Daily mileage submitted by the Tracker.', link: '/mileage/log', actors: OPS })
     if (r.drawsPending > 0)
-      push({ id: 'fuel-auth', severity: 'action', icon: Fuel, title: `${r.drawsPending} fuel ${plural(r.drawsPending, 'authorisation')} pending`, detail: 'Authorised-vehicle draws awaiting your sign-off.', link: '/operations/fuel?draw=pending', actors: [...OPS, 'fuel_supervisor'] })
+      push({ id: 'fuel-auth', severity: 'action', icon: Fuel, title: `${r.drawsPending} fuel ${plural(r.drawsPending, 'authorisation')} pending`, detail: 'Authorised-vehicle draws awaiting your sign-off.', link: '/fuel/issuances?draw=pending', actors: [...OPS, 'fuel_supervisor'] })
 
     // Data-entry recurring tasks — shown only while still outstanding for today,
     // so they clear once the entry is made (and the exec oversight stays honest).
     if (!mileageToday)
-      push({ id: 'mil-entry', severity: 'action', icon: RouteIcon, title: "Log today's mileage", detail: 'Capture actual distance covered per bus.', link: '/operations/mileage', actors: ['tracker'] })
+      push({ id: 'mil-entry', severity: 'action', icon: RouteIcon, title: "Log today's mileage", detail: 'Capture actual distance covered per bus.', link: '/mileage/log', actors: ['tracker'] })
     if (!fuelToday)
-      push({ id: 'fuel-entry', severity: 'action', icon: Fuel, title: "Record today's fuel", detail: 'Fuel issued, driver, vehicle, locations visited.', link: '/operations/fuel', actors: ['fuel_controller', 'fuel_supervisor'] })
+      push({ id: 'fuel-entry', severity: 'action', icon: Fuel, title: "Record today's fuel", detail: 'Fuel issued, driver, vehicle, locations visited.', link: '/fuel/issuances', actors: ['fuel_controller', 'fuel_supervisor'] })
     if (!allocToday)
       push({ id: 'alloc-entry', severity: 'action', icon: RouteIcon, title: "Set today's bus allocation", detail: 'Assign bus, route and driver for the day.', link: '/operations/allocation', actors: ['bus_controller'] })
 

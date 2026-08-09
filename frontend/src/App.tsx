@@ -1,5 +1,5 @@
 import { lazy } from 'react'
-import { Routes, Route, Navigate } from 'react-router-dom'
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import Layout from '@/components/layout/Layout'
 import LoginPage from '@/pages/auth/LoginPage'
 import ChangePassword from '@/pages/auth/ChangePassword'
@@ -37,6 +37,24 @@ const WeeklyPlan = lazy(() => import('@/pages/operations/WeeklyPlan'))
 const BusAllocation = lazy(() => import('@/pages/operations/BusAllocation'))
 const Mileage = lazy(() => import('@/pages/operations/Mileage'))
 const Fuel = lazy(() => import('@/pages/operations/Fuel'))
+const MileageOverview = lazy(() => import('@/pages/mileage/MileageOverview'))
+const FuelOverview = lazy(() => import('@/pages/fuel/FuelOverview'))
+// Subpages of Mileage / Fuel share one component per section (and one chunk):
+// the route bakes in which tab it shows.
+const MileageLog = () => <Mileage tab="log" />
+const MileageVehicles = () => <Mileage tab="vehicle" />
+const MileageBilling = () => <Mileage tab="summary" />
+const MileageSetup = () => <Mileage tab="setup" />
+const FuelIssuances = () => <Fuel tab="issuances" />
+const FuelStock = () => <Fuel tab="stock" />
+const FuelDeliveries = () => <Fuel tab="deliveries" />
+const FuelSummary = () => <Fuel tab="summary" />
+
+/** Old bookmark/notification paths → the new home, keeping any query string. */
+function RedirectTo({ path }: { path: string }) {
+  const { search } = useLocation()
+  return <Navigate to={path + search} replace />
+}
 const SafetyOverview = lazy(() => import('@/pages/safety/SafetyOverview'))
 const Incidents = lazy(() => import('@/pages/safety/Incidents'))
 const DriverCompliance = lazy(() => import('@/pages/safety/DriverCompliance'))
@@ -84,8 +102,16 @@ const REAL_PAGES: Record<string, React.ComponentType> = {
   '/operations/daily-plan': DailyPlan,
   '/operations/weekly-plan': WeeklyPlan,
   '/operations/allocation': BusAllocation,
-  '/operations/mileage': Mileage,
-  '/operations/fuel': Fuel,
+  '/mileage': MileageOverview,
+  '/mileage/log': MileageLog,
+  '/mileage/vehicles': MileageVehicles,
+  '/mileage/billing': MileageBilling,
+  '/mileage/setup': MileageSetup,
+  '/fuel': FuelOverview,
+  '/fuel/issuances': FuelIssuances,
+  '/fuel/stock': FuelStock,
+  '/fuel/deliveries': FuelDeliveries,
+  '/fuel/summary': FuelSummary,
   '/safety': SafetyOverview,
   '/safety/incidents': Incidents,
   '/safety/compliance': DriverCompliance,
@@ -141,6 +167,10 @@ export default function App() {
 
         {/* Top-nav destinations available to any signed-in user */}
         <Route path="messages" element={<Messages />} />
+
+        {/* Old paths from before Mileage & Fuel became their own sections */}
+        <Route path="operations/mileage" element={<RedirectTo path="/mileage/log" />} />
+        <Route path="operations/fuel" element={<RedirectTo path="/fuel/issuances" />} />
 
         {/* Non-dashboard pages: a real component if built, else a placeholder. */}
         {ALL_PAGES.filter((p) => p.path !== '/').map((p) => {

@@ -73,7 +73,12 @@ const monthLabel = (k: string) => { const [y, m] = k.split('-').map(Number); ret
 
 type Tab = 'issuances' | 'stock' | 'deliveries' | 'summary'
 
-export default function Fuel() {
+/**
+ * Fuel subpages share this component: each route passes its tab, and the
+ * sidebar (Fuel → Issuances / Stock / Deliveries / Summary) does the switching
+ * — everything stays in one chunk with its shared helpers and modals.
+ */
+export default function Fuel({ tab = 'issuances' }: { tab?: Tab }) {
   const { user } = useAuth()
   const role = user!.role
   const branch = user!.branch
@@ -107,22 +112,16 @@ export default function Fuel() {
   // fuel controller is an attendant). Shown read-only on the refuel forms.
   const me = user!.fullName
 
-  const [tab, setTab] = useState<Tab>('issuances')
+  const BLURB: Record<Tab, string> = {
+    issuances: `Fuel issued per refuel — driver, vehicle, route and odometer — plus generator and authorised-vehicle draws for ${branchLabel}.`,
+    stock: `Depot tank level with a days-left estimate, and the month-by-month stock ledger for ${branchLabel}.`,
+    deliveries: `Fuel received into the ${branchLabel} depot — supplier, litres, unit cost and the delivery note.`,
+    summary: `The costed monthly fuel picture for ${branchLabel} — consumption, economy, rates and the exportable report.`,
+  }
 
   return (
     <div className="page space-y-5">
-      <p className="max-w-2xl text-sm text-status-neutral">
-        Fuel issued per trip, depot stock with a days-left estimate, and a costed monthly summary for {branchLabel}.
-      </p>
-
-      <div className="flex gap-1 border-b border-black/10">
-        {([['issuances', 'Issuances'], ['stock', 'Stock'], ['deliveries', 'Deliveries'], ['summary', 'Summary']] as [Tab, string][]).map(([k, label]) => (
-          <button key={k} onClick={() => setTab(k)}
-            className={clsx('-mb-px border-b-2 px-4 py-2 text-sm font-medium', tab === k ? 'border-brand text-navy' : 'border-transparent text-status-neutral hover:text-navy')}>
-            {label}
-          </button>
-        ))}
-      </div>
+      <p className="max-w-2xl text-sm text-status-neutral">{BLURB[tab]}</p>
 
       {tab === 'issuances' && <IssuancesTab issuances={issuances} genFuel={genFuel} branch={branch} branchLabel={branchLabel} vehicles={vehicles} drivers={drivers} routes={routes} attendants={attendants} me={me} canManage={canManage} canAuthorize={canAuthorize} />}
       {tab === 'stock' && <StockTab issuances={issuances} receipts={receipts} genFuel={genFuel} cfg={cfg} branch={branch} canManage={canManage} />}

@@ -57,10 +57,10 @@ export default function Sidebar({
   const activeNode = nodes.find((n) =>
     pagesOf(n).some((p) => (p.path === '/' ? location.pathname === '/' : location.pathname.startsWith(p.path))),
   )
-  const [openModule, setOpenModule] = useState<string | null>(activeNode?.module ?? null)
+  const [openModule, setOpenModule] = useState<string | null>(activeNode?.label ?? null)
 
   useEffect(() => {
-    if (activeNode && !activeNode.standalone) setOpenModule(activeNode.module)
+    if (activeNode && !activeNode.standalone) setOpenModule(activeNode.label)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.pathname])
 
@@ -80,7 +80,7 @@ export default function Sidebar({
           if (collapsed) {
             return (
               <NavLink
-                key={node.module}
+                key={node.label}
                 to={pages[0].path}
                 end={pages[0].path === '/'}
                 onClick={onNavigate}
@@ -100,7 +100,7 @@ export default function Sidebar({
             const page = pages[0]
             return (
               <NavLink
-                key={node.module}
+                key={node.label}
                 to={page.path}
                 end={page.path === '/'}
                 onClick={onNavigate}
@@ -125,11 +125,11 @@ export default function Sidebar({
           }
 
           // ── Expandable segment ──
-          const isOpen = openModule === node.module
+          const isOpen = openModule === node.label
           return (
-            <div key={node.module}>
+            <div key={node.label}>
               <button
-                onClick={() => setOpenModule(isOpen ? null : node.module)}
+                onClick={() => setOpenModule(isOpen ? null : node.label)}
                 className={clsx(
                   'flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors',
                   segActive ? 'text-white' : 'text-white/60 hover:bg-white/5 hover:text-white',

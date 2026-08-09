@@ -11,8 +11,8 @@ import { useVehicles } from '@/lib/fleet/store'
 import { useFuelRate } from '@/lib/fuel/store'
 import { type Currency, money as fmtMoney } from '@/lib/fuel/types'
 import {
-  useMileageTrips, useMileageRoutes, useMileageRates, useSignatories,
-  tripsStore, mileageRoutesStore, editTrip, setMileageRates, setSignatories,
+  useMileageTrips, useMileageRoutes, useMileageRatesFor, useMileageRateHistory, useSignatories,
+  tripsStore, mileageRoutesStore, editTrip, setMonthlyRates, setSignatories,
 } from '@/lib/mileage/store'
 import {
   type MileageTrip, type SeatClass, type Shift, type MileageRates, type Signatories,
@@ -30,7 +30,12 @@ const dayShort = (d: string) => new Date(d + 'T00:00:00').toLocaleDateString('en
 
 type Tab = 'log' | 'vehicle' | 'summary' | 'setup'
 
-export default function Mileage() {
+/**
+ * Mileage subpages share this component: each route passes its tab and the
+ * sidebar (Mileage → Daily Log / Vehicle Movements / Billing / Rates & Setup)
+ * does the switching. The project toggle (Enterprise / Sentinel) stays here.
+ */
+export default function Mileage({ tab = 'log' }: { tab?: Tab }) {
   const { user } = useAuth()
   const role = user!.role
   const branch = user!.branch
@@ -39,11 +44,9 @@ export default function Mileage() {
 
   const projects = PROJECTS_BY_BRANCH[branch]
   const [project, setProject] = useState(projects[0])
-  const [tab, setTab] = useState<Tab>('log')
 
   const allTrips = useMileageTrips()
   const routes = useMileageRoutes().filter((r) => r.branch === branch && r.project === project)
-  const rates = useMileageRates(branch)
   const vehicles = useVehicles().filter((v) => v.branch === branch)
 
   const trips = useMemo(
@@ -77,19 +80,12 @@ export default function Mileage() {
         )}
       </div>
 
-      <div className="flex gap-1 border-b border-black/10">
-        {([['log', 'Daily log'], ['vehicle', 'Vehicle movements'], ['summary', 'Billing summary'], ...(canManage ? [['setup', 'Setup'] as [Tab, string]] : [])] as [Tab, string][]).map(([k, label]) => (
-          <button key={k} onClick={() => setTab(k)}
-            className={clsx('-mb-px border-b-2 px-4 py-2 text-sm font-medium', tab === k ? 'border-brand text-navy' : 'border-transparent text-status-neutral hover:text-navy')}>
-            {label}
-          </button>
-        ))}
-      </div>
-
       {tab === 'log' && <LogTab trips={trips} branch={branch} project={project} routes={routes} vehicles={vehicles} canManage={canManage} />}
       {tab === 'vehicle' && <VehicleTab trips={trips} project={project} />}
-      {tab === 'summary' && <SummaryTab trips={trips} rates={rates} branch={branch} branchShort={branchShort} project={project} />}
-      {tab === 'setup' && canManage && <SetupTab branch={branch} project={project} rates={rates} routes={routes} />}
+      {tab === 'summary' && <SummaryTab trips={trips} branch={branch} branchShort={branchShort} project={project} />}
+      {tab === 'setup' && (canManage
+        ? <SetupTab branch={branch} project={project} routes={routes} />
+        : <div className="card flex flex-col items-center gap-2 px-6 py-16 text-center text-status-neutral"><Lock size={26} /><p className="text-sm">Rates &amp; setup are managed by Operations.</p></div>)}
 
       {!ROLES[role].canToggleBranch && <p className="text-xs text-status-neutral">Showing {branchShort} · {project}.</p>}
     </div>
@@ -417,7 +413,7 @@ function VehicleTab({ trips, project }: { trips: MileageTrip[]; project: string 
 }
 
 // ── Billing summary tab ────────────────────────────────────────────────
-function SummaryTab({ trips, rates, branch, branchShort, project }: { trips: MileageTrip[]; rates: MileageRates; branch: BranchCode; branchShort: string; project: string }) {
+function SummaryTab({ trips, branch, branchShort, project }: { trips: MileageTrip[]; branch: BranchCode; branchShort: string; project: string }) {
   const curMonth = new Date().toISOString().slice(0, 7)
   const dataMonths = useMemo(() => [...new Set(trips.map((t) => monthKey(t.date)))].sort().reverse(), [trips])
   const months = useMemo(() => [...new Set([curMonth, ...dataMonths])].sort().reverse(), [curMonth, dataMonths])
@@ -426,6 +422,9 @@ function SummaryTab({ trips, rates, branch, branchShort, project }: { trips: Mil
   // month-end), not the calendar month — otherwise last month's billing looks empty on the 1st.
   const effMonth = months.includes(month) ? month : (dataMonths[0] ?? curMonth)
   const [cur, setCur] = useState<Currency>('USD')
+  // The rates in force FOR the viewed month (Rates & Setup) — a past month
+  // keeps billing at its own contract rates after a later change.
+  const rates = useMileageRatesFor(branch, effMonth)
   const fuelRate = useFuelRate(branch, effMonth)
   const sig = useSignatories(branch, project)
 
@@ -656,24 +655,37 @@ function SignBlock({ title, rows }: { title: string; rows: [string, string][] })
 }
 
 // ── Setup tab (rates, routes, signatories) ─────────────────────────────
-function SetupTab({ branch, project, rates, routes }: { branch: BranchCode; project: string; rates: MileageRates; routes: any[] }) {
+function SetupTab({ branch, project, routes }: { branch: BranchCode; project: string; routes: any[] }) {
   return (
     <div className="space-y-5">
-      <RatesCard branch={branch} rates={rates} />
+      <RatesCard branch={branch} />
       <RoutesCard branch={branch} project={project} routes={routes} />
       <SignatoriesCard branch={branch} project={project} />
     </div>
   )
 }
 
-function RatesCard({ branch, rates }: { branch: BranchCode; rates: MileageRates }) {
-  const [f, setF] = useState<MileageRates>(rates)
+function RatesCard({ branch }: { branch: BranchCode }) {
+  // Rates are set FOR a month and carry forward until the next change, so a
+  // past month keeps the rates it was billed at. Editing loads what that
+  // month currently resolves to.
+  const [month, setMonth] = useState(new Date().toISOString().slice(0, 7))
+  const current = useMileageRatesFor(branch, month)
+  const history = useMileageRateHistory(branch)
+  const [f, setF] = useState<MileageRates>(current)
+  const [loadedFor, setLoadedFor] = useState(month)
+  if (loadedFor !== month) { setLoadedFor(month); setF(current) }
   const [savedAt, setSavedAt] = useState(0)
   const set = (k: keyof MileageRates, v: number) => setF((p) => ({ ...p, [k]: v }))
-  function save() { setMileageRates(branch, { rate60: +f.rate60 || 0, rate40: +f.rate40 || 0, rate28: +f.rate28 || 0, vat_pct: +f.vat_pct || 0 }); setSavedAt(Date.now()) }
+  function save() { setMonthlyRates(branch, month, { rate60: +f.rate60 || 0, rate40: +f.rate40 || 0, rate28: +f.rate28 || 0, vat_pct: +f.vat_pct || 0 }); setSavedAt(Date.now()) }
   return (
     <div className="card p-5">
-      <div className="mb-3 flex items-center gap-2"><Settings size={16} className="text-brand" /><h3 className="font-display text-sm font-bold text-navy">Contract rates (USD/km) &amp; VAT</h3></div>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <Settings size={16} className="text-brand" /><h3 className="font-display text-sm font-bold text-navy">Contract rates (USD/km) &amp; VAT</h3>
+        <label className="ml-auto flex items-center gap-1.5 text-xs text-status-neutral">For month
+          <input type="month" value={month} onChange={(e) => e.target.value && setMonth(e.target.value)} className={selCls} />
+        </label>
+      </div>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">60 Seater</span><input type="number" step="0.01" className={inputCls} value={f.rate60} onChange={(e) => set('rate60', Number(e.target.value))} /></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">40 Seater</span><input type="number" step="0.01" className={inputCls} value={f.rate40} onChange={(e) => set('rate40', Number(e.target.value))} /></label>
@@ -681,9 +693,35 @@ function RatesCard({ branch, rates }: { branch: BranchCode; rates: MileageRates 
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">VAT %</span><input type="number" step="0.5" className={inputCls} value={f.vat_pct} onChange={(e) => set('vat_pct', Number(e.target.value))} /></label>
       </div>
       <div className="mt-3 flex items-center gap-3">
-        <Button onClick={save}>Save rates</Button>
-        {savedAt > 0 && <span className="text-xs text-status-good">Saved.</span>}
+        <Button onClick={save}>Save for {monthLabel(month)}</Button>
+        {savedAt > 0 && <span className="text-xs text-status-good">Saved — applies from {monthLabel(month)} until the next change.</span>}
       </div>
+
+      {/* Rate history — every explicit change, newest first */}
+      {history.length > 0 && (
+        <div className="mt-4 overflow-x-auto rounded-lg border border-black/10">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-canvas text-status-neutral"><tr>
+              <th className="px-4 py-2 font-medium">From month</th><th className="px-3 py-2 text-right font-medium">60</th>
+              <th className="px-3 py-2 text-right font-medium">40</th><th className="px-3 py-2 text-right font-medium">15–28</th>
+              <th className="px-3 py-2 text-right font-medium">VAT</th><th className="px-4 py-2 font-medium">Set by</th>
+            </tr></thead>
+            <tbody>
+              {history.map((h) => (
+                <tr key={h.month} className="border-t border-black/5">
+                  <td className="px-4 py-1.5 font-medium text-navy">{monthLabel(h.month)}</td>
+                  <td className="px-3 py-1.5 text-right text-status-neutral">${h.rates.rate60.toFixed(2)}</td>
+                  <td className="px-3 py-1.5 text-right text-status-neutral">${h.rates.rate40.toFixed(2)}</td>
+                  <td className="px-3 py-1.5 text-right text-status-neutral">${h.rates.rate28.toFixed(2)}</td>
+                  <td className="px-3 py-1.5 text-right text-status-neutral">{h.rates.vat_pct}%</td>
+                  <td className="px-4 py-1.5 text-status-neutral">{h.rates.set_by} · {h.rates.set_at.slice(0, 10)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <p className="mt-2 text-[11px] text-status-neutral">Each month bills at the rates in force for that month — set a new month when the contract changes and history stays intact.</p>
     </div>
   )
 }

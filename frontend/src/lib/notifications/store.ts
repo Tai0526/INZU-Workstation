@@ -191,7 +191,7 @@ export function useNotifications(branch: BranchCode, role?: RoleKey, userName?: 
       id: `fueldraw:${g.id}:pending`, severity: 'warning', audience: [...OPS_DECIDERS, 'fuel_supervisor'],
       title: `Fuel authorisation needed: ${g.recipient}`,
       detail: `${DRAW_LABEL[g.kind]}${g.vehicle_reg ? ` (${g.vehicle_reg})` : ''} — ${g.litres} L awaiting your approval.`,
-      date: g.date, link: '/operations/fuel?draw=pending',
+      date: g.date, link: '/fuel/issuances?draw=pending',
     })
   }
 
@@ -203,7 +203,7 @@ export function useNotifications(branch: BranchCode, role?: RoleKey, userName?: 
       id: `mileage:pending:${pendingMileage.length}`, severity: 'warning', audience: OPS_DECIDERS,
       title: `${pendingMileage.length} mileage entr${pendingMileage.length === 1 ? 'y' : 'ies'} to approve`,
       detail: 'Daily mileage is awaiting your approval.',
-      date: latest.date, link: '/operations/mileage',
+      date: latest.date, link: '/mileage/log',
     })
   }
 

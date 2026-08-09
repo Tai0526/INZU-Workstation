@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react'
+import { useMemo, useSyncExternalStore } from 'react'
 import { getActor } from '@/lib/audit/actor'
 import type { BranchCode } from '@/lib/roles'
 import type { Audited } from '@/lib/operations/types'
@@ -110,6 +110,60 @@ export function setMileageRates(branch: BranchCode, rates: MileageRates) {
 }
 export function useMileageRates(branch: BranchCode): MileageRates {
   return useSyncExternalStore(ratesCfg.subscribe, () => getMileageRates(branch), () => getMileageRates(branch))
+}
+
+// ── Monthly billing rates (per branch, per month, tracked) ─────────────
+// Rates are set FOR a month and carry forward until changed, so the billing
+// summary for March always uses March's contract rates even after an April
+// adjustment — and the history shows who changed what, when.
+export interface MonthlyRates extends MileageRates { set_by: string; set_at: string }
+const monthlyRatesCfg = createSyncConfig<Record<string, MonthlyRates>>({
+  key: 'mileage_rates_monthly', lsKey: 'inzu_mileage_rates_monthly', default: {},
+})
+const rKey = (branch: string, month: string) => `${branch}:${month}`
+
+/** Pure resolver (unit-tested): the month's own rates, else the latest earlier
+ *  month's (carry-forward), else the legacy per-branch rates, else defaults. */
+export function resolveRates(
+  monthly: Record<string, MonthlyRates>,
+  legacy: Record<string, MileageRates>,
+  branch: BranchCode,
+  month: string,
+): MileageRates {
+  const exact = monthly[rKey(branch, month)]
+  if (exact) return exact
+  const prior = Object.keys(monthly)
+    .filter((k) => k.startsWith(branch + ':') && k.slice(branch.length + 1) < month)
+    .sort()
+    .pop()
+  if (prior) return monthly[prior]
+  return legacy[branch] ?? DEFAULT_RATES
+}
+
+export function mileageRatesFor(branch: BranchCode, month: string): MileageRates {
+  return resolveRates(monthlyRatesCfg.get(), ratesCfg.get(), branch, month)
+}
+export function setMonthlyRates(branch: BranchCode, month: string, rates: MileageRates) {
+  monthlyRatesCfg.set({
+    ...monthlyRatesCfg.get(),
+    [rKey(branch, month)]: { rate60: rates.rate60, rate40: rates.rate40, rate28: rates.rate28, vat_pct: rates.vat_pct, set_by: getActor().name, set_at: new Date().toISOString() },
+  })
+}
+export function useMileageRatesFor(branch: BranchCode, month: string): MileageRates {
+  const monthly = useSyncExternalStore(monthlyRatesCfg.subscribe, monthlyRatesCfg.get, monthlyRatesCfg.get)
+  const legacy = useSyncExternalStore(ratesCfg.subscribe, ratesCfg.get, ratesCfg.get)
+  return useMemo(() => resolveRates(monthly, legacy, branch, month), [monthly, legacy, branch, month])
+}
+/** Every explicit rate change for a branch, newest first — the audit trail. */
+export function useMileageRateHistory(branch: BranchCode): { month: string; rates: MonthlyRates }[] {
+  const monthly = useSyncExternalStore(monthlyRatesCfg.subscribe, monthlyRatesCfg.get, monthlyRatesCfg.get)
+  return useMemo(
+    () => Object.entries(monthly)
+      .filter(([k]) => k.startsWith(branch + ':'))
+      .map(([k, rates]) => ({ month: k.slice(branch.length + 1), rates }))
+      .sort((a, b) => b.month.localeCompare(a.month)),
+    [monthly, branch],
+  )
 }
 
 // ── Signatories (per branch:project) ───────────────────────────────────
