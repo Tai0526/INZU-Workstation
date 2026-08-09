@@ -627,7 +627,25 @@ function StockTab({ issuances, receipts, genFuel, cfg, branch, canManage }: { is
     return withBal.reverse() // newest first
   }, [issuances, receipts, genFuel, cfg])
 
-  // Search drills straight to individual fills (by fleet, attendant or date).
+  // Ledger is viewed one month at a time (like the Mileage billing summary).
+  // Balances are computed over the FULL history above, then filtered here — an
+  // opening balance can't be derived from one month's rows alone.
+  const curMonth = new Date().toISOString().slice(0, 7)
+  const dataMonths = useMemo(() => [...new Set(days.map((d) => monthKey(d.date)))].sort().reverse(), [days])
+  const months = useMemo(() => [...new Set([curMonth, ...dataMonths])].sort().reverse(), [curMonth, dataMonths])
+  const [month, setMonth] = useState('')
+  // Default to the newest month that actually has data (e.g. last month right
+  // after month-end), not the calendar month — otherwise the ledger looks empty on the 1st.
+  const effMonth = months.includes(month) ? month : (dataMonths[0] ?? curMonth)
+  const monthDays = useMemo(() => days.filter((d) => monthKey(d.date) === effMonth), [days, effMonth])
+  const monthTotals = useMemo(() => ({
+    fills: monthDays.reduce((s, d) => s + d.fills.length, 0),
+    received: monthDays.reduce((s, d) => s + d.received, 0),
+    issued: monthDays.reduce((s, d) => s + d.issued, 0),
+  }), [monthDays])
+
+  // Search drills straight to individual fills (by fleet, attendant or date) —
+  // deliberately across ALL months, so a reg number finds every fill ever.
   const matches = useMemo(() => {
     const term = q.trim().toLowerCase()
     if (!term) return []
@@ -691,7 +709,13 @@ function StockTab({ issuances, receipts, genFuel, cfg, branch, canManage }: { is
       <div className="card overflow-hidden">
         <div className="flex flex-wrap items-center gap-2 border-b border-black/5 px-5 py-3.5">
           <h3 className="font-display text-sm font-bold text-navy">Stock ledger</h3>
-          <span className="text-xs text-status-neutral">{q ? `${matches.length} fill(s) matching` : 'by day — click a day to see its fills'}</span>
+          {!q && (
+            <select value={effMonth} onChange={(e) => setMonth(e.target.value)}
+              className="rounded-lg border border-black/15 bg-white px-2.5 py-1.5 text-sm font-medium text-navy outline-none focus:border-brand">
+              {months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+            </select>
+          )}
+          <span className="text-xs text-status-neutral">{q ? `${matches.length} fill(s) matching — searches all months` : 'by day — click a day to see its fills'}</span>
           <div className="relative ml-auto">
             <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-status-neutral" />
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search fleet, attendant or date…" className="w-64 rounded-lg border border-black/15 bg-white py-1.5 pl-8 pr-3 text-sm text-navy outline-none focus:border-brand" />
@@ -725,7 +749,7 @@ function StockTab({ issuances, receipts, genFuel, cfg, branch, canManage }: { is
                 <th className="px-4 py-2 text-right font-medium">Opening</th><th className="px-4 py-2 text-right font-medium">Closing</th>
               </tr></thead>
               <tbody>
-                {days.map((d) => {
+                {monthDays.map((d) => {
                   const open = expanded.has(d.date)
                   return (
                     <Fragment key={d.date}>
@@ -759,8 +783,20 @@ function StockTab({ issuances, receipts, genFuel, cfg, branch, canManage }: { is
                     </Fragment>
                   )
                 })}
-                {days.length === 0 && <tr><td colSpan={6} className="px-4 py-10 text-center text-sm text-status-neutral">No stock movements yet.</td></tr>}
+                {monthDays.length === 0 && <tr><td colSpan={6} className="px-4 py-10 text-center text-sm text-status-neutral">{days.length === 0 ? 'No stock movements yet.' : `No stock movements in ${monthLabel(effMonth)}.`}</td></tr>}
               </tbody>
+              {monthDays.length > 0 && (
+                <tfoot>
+                  <tr className="border-t-2 border-navy/20 bg-canvas font-medium text-navy">
+                    <td className="px-5 py-2">{monthLabel(effMonth)} total</td>
+                    <td className="px-4 py-2 text-right text-status-neutral">{monthTotals.fills || '—'}</td>
+                    <td className={clsx('px-4 py-2 text-right', monthTotals.received ? 'text-status-good' : 'text-status-neutral')}>{monthTotals.received ? `+${Math.round(monthTotals.received).toLocaleString()}` : '—'}</td>
+                    <td className="px-4 py-2 text-right">{monthTotals.issued ? `-${Math.round(monthTotals.issued).toLocaleString()}` : '—'}</td>
+                    <td className="px-4 py-2 text-right text-status-neutral">{Math.round(monthDays[monthDays.length - 1].opening).toLocaleString()}</td>
+                    <td className="px-4 py-2 text-right">{Math.round(monthDays[0].closing).toLocaleString()}</td>
+                  </tr>
+                </tfoot>
+              )}
             </table>
           )}
         </div>
