@@ -40,7 +40,7 @@ export default function Mileage({ tab = 'log' }: { tab?: Tab }) {
   const role = user!.role
   const branch = user!.branch
   const branchShort = BRANCHES.find((b) => b.code === branch)!.short
-  const canManage = canEdit(role, 'operations')
+  const canManage = canEdit(role, 'mileage')
 
   const projects = PROJECTS_BY_BRANCH[branch]
   const [project, setProject] = useState(projects[0])

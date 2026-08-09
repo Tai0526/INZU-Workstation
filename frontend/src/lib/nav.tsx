@@ -71,7 +71,7 @@ export const NAV: NavNode[] = [
     ],
   },
   {
-    module: 'operations', label: 'Mileage', icon: Milestone,
+    module: 'mileage', label: 'Mileage', icon: Milestone,
     pages: [
       { label: 'Overview', path: '/mileage', blurb: 'What is profitable and what isn’t: revenue vs fuel per section (Enterprise / Sentinel) and per bus, paid vs driven km, and the buses to steer.' },
       { label: 'Daily Log', path: '/mileage/log', blurb: 'Daily bus movements split internal/external per project, entered per shift.' },

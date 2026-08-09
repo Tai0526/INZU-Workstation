@@ -9,6 +9,7 @@ export type ModuleKey =
   | 'drivers'
   | 'speed'
   | 'operations'
+  | 'mileage'
   | 'fuel'
   | 'safety'
   | 'workshop'
@@ -23,7 +24,7 @@ export type PermMap = Partial<Record<ModuleKey, Permission>>
 
 export const MODULE_LABEL: Record<ModuleKey, string> = {
   dashboard: 'Dashboard', fleet: 'Fleet', drivers: 'Drivers', speed: 'Speed Management',
-  operations: 'Operations', fuel: 'Fuel', safety: 'Safety', workshop: 'Workshop', payroll: 'Payroll',
+  operations: 'Operations', mileage: 'Mileage', fuel: 'Fuel', safety: 'Safety', workshop: 'Workshop', payroll: 'Payroll',
   hr: 'HR', petty_cash: 'Petty Cash', documents: 'Documents', admin: 'Admin',
 }
 export const MODULE_KEYS = Object.keys(MODULE_LABEL) as ModuleKey[]
@@ -39,20 +40,21 @@ const BASE: PermMap = {
 }
 
 // Built-in starting permissions per role — the admin can change these at runtime.
-// `fuel` gates the Fuel section (its own module since Fuel left Operations);
-// `operations` now covers planning (Daily/Weekly Plan, Allocation) + Mileage.
+// Every sidebar section is its own module, so access is controlled per section:
+// `operations` = planning (Daily/Weekly Plan, Allocation); `mileage` = billing;
+// `fuel` = the fuel section.
 export const DEFAULT_OVERRIDES: Record<RoleKey, PermMap> = {
-  administrator: { fleet: 'edit', drivers: 'edit', speed: 'edit', operations: 'edit', fuel: 'edit', safety: 'edit', workshop: 'edit', payroll: 'edit', hr: 'edit', documents: 'edit', admin: 'edit' },
-  board_chairman: { fleet: 'view', drivers: 'view', speed: 'view', operations: 'view', fuel: 'view', safety: 'view', workshop: 'view', payroll: 'view', hr: 'view' },
-  board_member: { fleet: 'view', drivers: 'view', speed: 'view', operations: 'view', fuel: 'view', safety: 'view', workshop: 'view', payroll: 'view', hr: 'view' },
-  finance_director: { fleet: 'view', drivers: 'view', speed: 'view', operations: 'view', fuel: 'view', safety: 'view', workshop: 'view', payroll: 'view', hr: 'view' },
+  administrator: { fleet: 'edit', drivers: 'edit', speed: 'edit', operations: 'edit', mileage: 'edit', fuel: 'edit', safety: 'edit', workshop: 'edit', payroll: 'edit', hr: 'edit', documents: 'edit', admin: 'edit' },
+  board_chairman: { fleet: 'view', drivers: 'view', speed: 'view', operations: 'view', mileage: 'view', fuel: 'view', safety: 'view', workshop: 'view', payroll: 'view', hr: 'view' },
+  board_member: { fleet: 'view', drivers: 'view', speed: 'view', operations: 'view', mileage: 'view', fuel: 'view', safety: 'view', workshop: 'view', payroll: 'view', hr: 'view' },
+  finance_director: { fleet: 'view', drivers: 'view', speed: 'view', operations: 'view', mileage: 'view', fuel: 'view', safety: 'view', workshop: 'view', payroll: 'view', hr: 'view' },
   // Only the Administrator role manages the system by default. The MD and Ops
   // Manager keep full operational reach but NOT the Admin page — an admin can
   // still grant it per-user via a permission override if they want a deputy.
-  managing_director: { fleet: 'view', drivers: 'view', speed: 'view', operations: 'view', fuel: 'view', safety: 'view', workshop: 'view', payroll: 'edit', hr: 'view', documents: 'edit' },
+  managing_director: { fleet: 'view', drivers: 'view', speed: 'view', operations: 'view', mileage: 'view', fuel: 'view', safety: 'view', workshop: 'view', payroll: 'edit', hr: 'view', documents: 'edit' },
 
-  operations_manager: { fleet: 'edit', drivers: 'edit', speed: 'edit', operations: 'edit', fuel: 'edit', safety: 'edit', workshop: 'view', payroll: 'edit', hr: 'view', documents: 'edit' },
-  asst_operations_manager: { fleet: 'edit', drivers: 'edit', speed: 'edit', operations: 'edit', fuel: 'edit', safety: 'view', workshop: 'view', payroll: 'view', hr: 'view', documents: 'edit' },
+  operations_manager: { fleet: 'edit', drivers: 'edit', speed: 'edit', operations: 'edit', mileage: 'edit', fuel: 'edit', safety: 'edit', workshop: 'view', payroll: 'edit', hr: 'view', documents: 'edit' },
+  asst_operations_manager: { fleet: 'edit', drivers: 'edit', speed: 'edit', operations: 'edit', mileage: 'edit', fuel: 'edit', safety: 'view', workshop: 'view', payroll: 'view', hr: 'view', documents: 'edit' },
 
   // HR Manager can view Safety to conclude disciplinary / speeding cases alongside Ops.
   hr_manager: { hr: 'edit', drivers: 'edit', safety: 'view', documents: 'edit' },
@@ -62,17 +64,18 @@ export const DEFAULT_OVERRIDES: Record<RoleKey, PermMap> = {
 
   safety_officer: { safety: 'edit', drivers: 'edit', hr: 'view', documents: 'edit' },
   workshop_supervisor: { workshop: 'edit', fleet: 'edit', hr: 'view', documents: 'edit' },
+  // Route Supervisors are explicitly kept away from mileage totals (spec §4.3.3).
   route_supervisor: { drivers: 'edit', operations: 'view', fuel: 'view' },
 
-  bus_controller: { operations: 'edit', fuel: 'view' },
-  tracker: { speed: 'edit', operations: 'edit', fuel: 'view' },
-  // Fuel staff OWN the Fuel section; they see the day's plans but no longer
-  // edit planning/mileage (their old operations:edit only existed because
-  // Fuel used to live inside Operations).
+  bus_controller: { operations: 'edit', mileage: 'view', fuel: 'view' },
+  // The Tracker enters the daily mileage — mileage:edit is their core job.
+  tracker: { speed: 'edit', operations: 'edit', mileage: 'edit', fuel: 'view' },
+  // Fuel staff OWN the Fuel section; they see the day's plans but stay out of
+  // billing (their old operations:edit only existed because Fuel lived there).
   fuel_controller: { fuel: 'edit', operations: 'view' },
   fuel_supervisor: { fuel: 'edit', operations: 'view' },
 
-  viewer: { fleet: 'view', drivers: 'view', operations: 'view', fuel: 'view', safety: 'view', workshop: 'view' },
+  viewer: { fleet: 'view', drivers: 'view', operations: 'view', mileage: 'view', fuel: 'view', safety: 'view', workshop: 'view' },
 }
 
 // ── Editable role-default store (persisted) ─────────────────────────────
