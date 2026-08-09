@@ -90,6 +90,18 @@
 .dark .hover\:bg-status-good:hover { background-color: #2e7d4f; }
 .dark .hover\:bg-status-warning:hover { background-color: #b08d1d; }
 .dark .hover\:bg-status-critical:hover { background-color: #b3261e; }
+/* Lighter scrims/pills that the /40 & /50 pins don't catch */
+.dark .bg-navy\/20 { background-color: rgb(2 6 16 / 0.45); } /* notification backdrop */
+.dark .bg-white\/70 { background-color: rgb(9 14 26 / 0.55); } /* date-divider / count pills */
+/* Charts (recharts SVG): navy series bars, pie slices and axis-tick text are
+   near-invisible on dark cards — lift them to a legible steel blue. Attribute
+   selectors so no chart component needs touching; !important beats any inline
+   style recharts emits. */
+.dark [fill='#0F1B33'] { fill: #9db1d9 !important; }
+.dark [stroke='#0F1B33'] { stroke: #9db1d9 !important; }
+.dark [fill='#1B2A4A'] { fill: #7d90ba !important; }
+.dark [stroke='rgba(15,27,51,0.06)'] { stroke: rgba(255, 255, 255, 0.08) !important; } /* chart gridlines */
+.dark .accent-\[\#0F1B33\] { accent-color: #9db1d9; } /* navy checkboxes */
 /* Hard-coded hex one-offs (deep text on pastel chips) → dark equivalents */
 .dark .text-\[\#8a6d10\] { color: #e2c14b; }
 .dark .text-\[\#8a4513\] { color: #eda26b; }
