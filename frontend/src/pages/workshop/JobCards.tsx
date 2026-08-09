@@ -8,6 +8,7 @@ import { canEdit } from '@/lib/permissions'
 import { useDeepLink } from '@/lib/ui/deeplink'
 import Modal from '@/components/ui/Modal'
 import Button from '@/components/ui/Button'
+import MoneyInput from '@/components/ui/MoneyInput'
 import StatusBadge from '@/components/ui/StatusBadge'
 import SearchableSelect, { SearchableMultiSelect } from '@/components/ui/SearchableSelect'
 import { useVehicles } from '@/lib/fleet/store'
@@ -18,6 +19,7 @@ import {
   useJobCards, raiseJobCard, submitForSignoff, decideJob, reopenJob, removeJob, tyresStore, addJobFile, removeJobFile,
 } from '@/lib/workshop/store'
 import { putFile, viewFile, deleteFile } from '@/lib/storage/fileStore'
+import { useFuelRate } from '@/lib/fuel/store'
 import {
   type JobCard, type JobCardInput, type JobSeverity, type JobCategory,
   JOB_STATUS_META, SEVERITY_META, JOB_CATEGORY_LABEL, TYRE_POSITIONS,
@@ -234,13 +236,15 @@ function RaiseModal({ open, onClose, branch, vehicles, drivers, mechanics }: { o
   )
 }
 
-const emptyTyre = () => ({ position: TYRE_POSITIONS[0], brand: '', serial: '', odometer: '', cost: '' })
+const emptyTyre = () => ({ position: TYRE_POSITIONS[0], brand: '', serial: '', odometer: '', costUsd: null as number | null })
 function SignoffModal({ job, onClose }: { job: JobCard | null; onClose: () => void }) {
   const liveJobs = useJobCards()
   const [work, setWork] = useState('')
   const [tyre, setTyre] = useState(emptyTyre())
   const [key, setKey] = useState('')
   const jc = job ? (liveJobs.find((j) => j.id === job.id) ?? job) : null
+  // Kwacha invoices convert at this month's BoZ rate (set in Fuel → Summary).
+  const rate = useFuelRate(jc?.branch ?? 'kansanshi', new Date().toISOString().slice(0, 7))
   if (job && key !== job.id) { setKey(job.id); setWork(job.work_done || ''); setTyre(emptyTyre()) }
   if (!jc) return null
   const isTyre = jc.category === 'tyre'
@@ -253,7 +257,7 @@ function SignoffModal({ job, onClose }: { job: JobCard | null; onClose: () => vo
       tyresStore.add({
         branch: jc!.branch, fleet_no: jc!.fleet_no, reg_no: jc!.reg_no, position: tyre.position,
         brand: tyre.brand.trim(), serial: tyre.serial.trim(), fitted_date: new Date().toISOString().slice(0, 10),
-        odometer: Number(tyre.odometer) || 0, cost_usd: tyre.cost ? Number(tyre.cost) : null,
+        odometer: Number(tyre.odometer) || 0, cost_usd: tyre.costUsd,
         reason: 'Replaced via job card', job_id: jc!.id, notes: '',
       })
     }
@@ -299,7 +303,7 @@ function SignoffModal({ job, onClose }: { job: JobCard | null; onClose: () => vo
             <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">Brand</span><input className={inputCls} placeholder="e.g. Bridgestone" value={tyre.brand} onChange={(e) => setT({ brand: e.target.value })} /></label>
             <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">Serial / DOT</span><input className={inputCls} value={tyre.serial} onChange={(e) => setT({ serial: e.target.value })} /></label>
             <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">Odometer</span><input type="number" className={inputCls} value={tyre.odometer} onChange={(e) => setT({ odometer: e.target.value })} /></label>
-            <label className="block"><span className="mb-1 block text-[11px] font-medium text-navy">Cost (USD)</span><input type="number" step="0.01" className={inputCls} value={tyre.cost} onChange={(e) => setT({ cost: e.target.value })} /></label>
+            <MoneyInput key={key} small label="Cost (optional)" valueUsd={tyre.costUsd} onChange={(v) => setT({ costUsd: v })} fx={rate.fx_zmw_per_usd} />
           </div>
           <p className="mt-1.5 text-[11px] text-status-neutral">Fill the brand to record a tyre fitting. Add the other tyres in Tyre Management.</p>
         </div>

@@ -5,8 +5,10 @@ import { ROLES, BRANCHES, type BranchCode } from '@/lib/roles'
 import { canEdit } from '@/lib/permissions'
 import Modal from '@/components/ui/Modal'
 import Button from '@/components/ui/Button'
+import MoneyInput from '@/components/ui/MoneyInput'
 import SearchableSelect from '@/components/ui/SearchableSelect'
 import { useVehicles } from '@/lib/fleet/store'
+import { useFuelRate } from '@/lib/fuel/store'
 import { useTyres, tyresStore } from '@/lib/workshop/store'
 import { type TyreRecord, type TyreInput, TYRE_POSITIONS } from '@/lib/workshop/types'
 
@@ -115,6 +117,8 @@ function TyreModal({ state, onClose, branch, vehicles }: { state: { open: boolea
     setF(e ? { branch: e.branch, fleet_no: e.fleet_no, reg_no: e.reg_no, position: e.position, brand: e.brand, serial: e.serial, fitted_date: e.fitted_date, odometer: e.odometer, cost_usd: e.cost_usd, reason: e.reason, job_id: e.job_id, notes: e.notes } : blank())
   }
   function set<K extends keyof TyreInput>(kk: K, v: TyreInput[K]) { setF((p) => ({ ...p, [kk]: v })) }
+  // Kwacha invoices convert at this month's BoZ rate (set in Fuel → Summary).
+  const rate = useFuelRate(branch, new Date().toISOString().slice(0, 7))
   function onVehicle(fleet: string) { const v = vehicles.find((x) => x.fleet_no === fleet); setF((p) => ({ ...p, fleet_no: fleet, reg_no: v ? v.reg_plate : '' })) }
   const ready = !!f.fleet_no.trim() && !!f.brand.trim()
   function save() { if (!ready) return; const data = { ...f, brand: f.brand.trim(), serial: f.serial.trim() }; if (e) tyresStore.update(e.id, data); else tyresStore.add(data); onClose() }
@@ -130,7 +134,7 @@ function TyreModal({ state, onClose, branch, vehicles }: { state: { open: boolea
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Serial / DOT</span><input className={inputCls} value={f.serial} onChange={(ev) => set('serial', ev.target.value)} /></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Fitted date</span><input type="date" className={inputCls} value={f.fitted_date} onChange={(ev) => set('fitted_date', ev.target.value)} /></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Odometer</span><input type="number" className={inputCls} value={f.odometer || ''} onChange={(ev) => set('odometer', Number(ev.target.value))} /></label>
-        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Cost (USD)</span><input type="number" step="0.01" className={inputCls} value={f.cost_usd ?? ''} onChange={(ev) => set('cost_usd', ev.target.value ? Number(ev.target.value) : null)} /></label>
+        <MoneyInput key={key} label="Cost (optional)" valueUsd={f.cost_usd} onChange={(v) => set('cost_usd', v)} fx={rate.fx_zmw_per_usd} />
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Reason</span><input className={inputCls} placeholder="e.g. Worn / puncture / burst" value={f.reason} onChange={(ev) => set('reason', ev.target.value)} /></label>
       </div>
     </Modal>

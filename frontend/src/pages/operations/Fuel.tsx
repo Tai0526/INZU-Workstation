@@ -7,6 +7,7 @@ import { canEdit } from '@/lib/permissions'
 import { useDeepLink } from '@/lib/ui/deeplink'
 import Modal from '@/components/ui/Modal'
 import Button from '@/components/ui/Button'
+import MoneyInput from '@/components/ui/MoneyInput'
 import KpiCard from '@/components/ui/KpiCard'
 import StatusBadge from '@/components/ui/StatusBadge'
 import SearchableSelect, { SearchableMultiSelect } from '@/components/ui/SearchableSelect'
@@ -945,15 +946,17 @@ function DeliveriesTab({ receipts, branch, branchLabel, canManage }: { receipts:
 
 function DeliveryModal({ state, onClose, branch }: { state: { open: boolean; editing: FuelReceipt | null }; onClose: () => void; branch: BranchCode }) {
   const e = state.editing
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10)); const [litres, setLitres] = useState(0); const [supplier, setSupplier] = useState(''); const [cost, setCost] = useState(''); const [notes, setNotes] = useState('')
+  const [date, setDate] = useState(new Date().toISOString().slice(0, 10)); const [litres, setLitres] = useState(0); const [supplier, setSupplier] = useState(''); const [costUsd, setCostUsd] = useState<number | null>(null); const [notes, setNotes] = useState('')
   const [noteFile, setNoteFile] = useState<string | undefined>(undefined); const [noteName, setNoteName] = useState('')
   const [key, setKey] = useState('')
   const k = (e?.id ?? 'new') + String(state.open)
   if (state.open && k !== key) {
     setKey(k)
-    setDate(e?.date ?? '2026-06-01'); setLitres(e?.litres ?? 0); setSupplier(e?.supplier ?? ''); setCost(e?.unit_cost_usd != null ? String(e.unit_cost_usd) : ''); setNotes(e?.notes ?? '')
+    setDate(e?.date ?? new Date().toISOString().slice(0, 10)); setLitres(e?.litres ?? 0); setSupplier(e?.supplier ?? ''); setCostUsd(e?.unit_cost_usd ?? null); setNotes(e?.notes ?? '')
     setNoteFile(e?.delivery_note_file); setNoteName(e?.delivery_note_file ? 'Attached document' : '')
   }
+  // Kwacha entries convert at the delivery month's BoZ rate (Summary tab).
+  const rate = useFuelRate(branch, date.slice(0, 7))
   async function onFile(ev: React.ChangeEvent<HTMLInputElement>) {
     const file = ev.target.files?.[0]; if (!file) return
     const id = noteFile || `dn_${Date.now()}_${Math.round(Math.random() * 1e6)}`
@@ -963,7 +966,7 @@ function DeliveryModal({ state, onClose, branch }: { state: { open: boolean; edi
   }
   function save() {
     if (!litres) return
-    const data = { branch, date, litres: Number(litres), supplier: supplier.trim(), unit_cost_usd: cost ? Number(cost) : null, notes: notes.trim(), delivery_note_file: noteFile }
+    const data = { branch, date, litres: Number(litres), supplier: supplier.trim(), unit_cost_usd: costUsd, notes: notes.trim(), delivery_note_file: noteFile }
     if (e) receiptsStore.update(e.id, data); else receiptsStore.add(data)
     onClose()
   }
@@ -973,7 +976,7 @@ function DeliveryModal({ state, onClose, branch }: { state: { open: boolean; edi
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Date</span><input type="date" className={inputCls} value={date} onChange={(ev) => setDate(ev.target.value)} /></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Litres received</span><input type="number" className={inputCls} value={litres || ''} onChange={(ev) => setLitres(Number(ev.target.value))} /></label>
         <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Supplier / company</span><input className={inputCls} placeholder="Puma Energy" value={supplier} onChange={(ev) => setSupplier(ev.target.value)} /></label>
-        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Unit cost (USD/L, optional)</span><input type="number" step="0.01" className={inputCls} value={cost} onChange={(ev) => setCost(ev.target.value)} /></label>
+        <MoneyInput key={key} label="Unit cost per litre (optional)" valueUsd={costUsd} onChange={setCostUsd} fx={rate.fx_zmw_per_usd} placeholder="as on the invoice" />
         <label className="col-span-2 block"><span className="mb-1 block text-xs font-medium text-navy">Notes (optional)</span><input className={inputCls} placeholder="Order ref / remarks" value={notes} onChange={(ev) => setNotes(ev.target.value)} /></label>
       </div>
 
@@ -994,7 +997,12 @@ function DeliveryModal({ state, onClose, branch }: { state: { open: boolean; edi
         )}
       </div>
 
-      {cost && litres ? <p className="mt-3 rounded-lg bg-canvas px-3 py-2 text-xs text-status-neutral">Total cost: <b className="text-navy">{money(Number(litres) * Number(cost), 'USD')}</b></p> : null}
+      {costUsd != null && costUsd > 0 && litres ? (
+        <p className="mt-3 rounded-lg bg-canvas px-3 py-2 text-xs text-status-neutral">
+          Total cost: <b className="text-navy">{money(Number(litres) * costUsd, 'USD')}</b>
+          <span className="ml-1">≈ K{(Number(litres) * costUsd * (rate.fx_zmw_per_usd || 27)).toLocaleString('en', { maximumFractionDigits: 0 })}</span>
+        </p>
+      ) : null}
     </Modal>
   )
 }
