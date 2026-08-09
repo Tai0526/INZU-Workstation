@@ -154,6 +154,16 @@ export function useMileageRatesFor(branch: BranchCode, month: string): MileageRa
   const legacy = useSyncExternalStore(ratesCfg.subscribe, ratesCfg.get, ratesCfg.get)
   return useMemo(() => resolveRates(monthly, legacy, branch, month), [monthly, legacy, branch, month])
 }
+/**
+ * Both rate maps, reactive — for month-by-month tables that need to resolve a
+ * run of months in one pass (pair with the pure `resolveRates`).
+ */
+export function useMileageRateMaps(): { monthly: Record<string, MonthlyRates>; legacy: Record<string, MileageRates> } {
+  const monthly = useSyncExternalStore(monthlyRatesCfg.subscribe, monthlyRatesCfg.get, monthlyRatesCfg.get)
+  const legacy = useSyncExternalStore(ratesCfg.subscribe, ratesCfg.get, ratesCfg.get)
+  return useMemo(() => ({ monthly, legacy }), [monthly, legacy])
+}
+
 /** Every explicit rate change for a branch, newest first — the audit trail. */
 export function useMileageRateHistory(branch: BranchCode): { month: string; rates: MonthlyRates }[] {
   const monthly = useSyncExternalStore(monthlyRatesCfg.subscribe, monthlyRatesCfg.get, monthlyRatesCfg.get)

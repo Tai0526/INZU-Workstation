@@ -5,7 +5,7 @@ import clsx from 'clsx'
 import { useAuth } from '@/auth/AuthContext'
 import { BRANCHES } from '@/lib/roles'
 import KpiCard from '@/components/ui/KpiCard'
-import { useIssuances, useGenFuel, useFuelRate, getFuelRate } from '@/lib/fuel/store'
+import { useIssuances, useGenFuel, useFuelRate, useFuelRates, resolveFuelRate } from '@/lib/fuel/store'
 import { type Currency, DRAW_LABEL, isApprovedDraw, isOpen, kmMoved, pricePerLitre, money } from '@/lib/fuel/types'
 import { useMileageTrips } from '@/lib/mileage/store'
 import { PROJECTS_BY_BRANCH, type MileageTrip } from '@/lib/mileage/types'
@@ -114,6 +114,7 @@ export default function FuelOverview() {
 
   const rate = useFuelRate(branch, effMonth)
   const price = pricePerLitre(rate, cur)
+  const fuelRates = useFuelRates()
 
   // Fallback for a bus with NO trips in the viewed month: its most recent
   // attribution, whole — so a bus that fuelled without logging mileage still
@@ -189,15 +190,20 @@ export default function FuelOverview() {
   const history = useMemo(() => {
     const asc = [...dataMonths].sort()
     let prev: number | null = null
+    let prevPrice: number | null = null
     return asc.map((m) => {
-      const g = aggregate(m, issuances, draws, trips, fallbackOf, sections, pricePerLitre(getFuelRate(branch, m), cur))
+      const fr = resolveFuelRate(fuelRates, branch, m)
+      const price = pricePerLitre(fr, cur)
+      const g = aggregate(m, issuances, draws, trips, fallbackOf, sections, price)
       const all = [...g.values()]
       const litres = all.reduce((s, x) => s + x.litres, 0)
       const cost = all.reduce((s, x) => s + x.cost, 0)
       const km = all.reduce((s, x) => s + x.km, 0)
       const litresClosed = all.reduce((s, x) => s + x.litresClosed, 0)
       const row = {
-        month: m, label: monthLabel(m), litres, cost, km,
+        month: m, label: monthLabel(m), litres, cost, km, price,
+        dieselZmw: fr.diesel_zmw, fx: fr.fx_zmw_per_usd,
+        priceChanged: prevPrice != null && prevPrice !== price,
         econ: litresClosed > 0 ? km / litresClosed : null,
         delta: prev != null && prev > 0 ? (litres - prev) / prev : null,
         perSection: Object.fromEntries(sections.map((s) => [s, Math.round(g.get(s)?.litres ?? 0)])) as Record<string, number>,
@@ -205,9 +211,10 @@ export default function FuelOverview() {
         drawsL: Math.round((g.get('__generator')?.litres ?? 0) + (g.get('__visitor')?.litres ?? 0)),
       }
       prev = litres
+      prevPrice = price
       return row
     })
-  }, [dataMonths, issuances, draws, trips, fallbackOf, sections, branch, cur])
+  }, [dataMonths, issuances, draws, trips, fallbackOf, sections, branch, cur, fuelRates])
 
   if (role === 'route_supervisor') {
     return (
@@ -381,6 +388,7 @@ export default function FuelOverview() {
                 {sections.map((s) => <th key={s} className="px-3 py-2 font-medium">{s} (L)</th>)}
                 <th className="px-3 py-2 font-medium">Gen + auth (L)</th>
                 <th className="px-3 py-2 font-medium">Total (L)</th>
+                <th className="px-3 py-2 font-medium" title="The month's diesel pump price (ERB)">Price/L</th>
                 <th className="px-3 py-2 font-medium">Cost</th>
                 <th className="px-3 py-2 font-medium">km</th>
                 <th className="px-3 py-2 font-medium">km/L</th>
@@ -395,6 +403,10 @@ export default function FuelOverview() {
                     {sections.map((s) => <td key={s} className="px-3 py-2 text-status-neutral">{h.perSection[s].toLocaleString()}</td>)}
                     <td className="px-3 py-2 text-status-neutral">{h.drawsL.toLocaleString()}</td>
                     <td className="px-3 py-2 font-medium text-navy">{Math.round(h.litres).toLocaleString()}</td>
+                    <td className={clsx('px-3 py-2', h.priceChanged ? 'font-semibold text-brand' : 'text-status-neutral')}
+                      title={`ERB diesel K${h.dieselZmw.toFixed(2)}/L · Bank of Zambia K${h.fx.toFixed(2)} per USD`}>
+                      {money(h.price, cur)}
+                    </td>
                     <td className="px-3 py-2 text-status-neutral">{money(h.cost, cur)}</td>
                     <td className="px-3 py-2 text-status-neutral">{Math.round(h.km).toLocaleString()}</td>
                     <td className="px-3 py-2 text-status-neutral">{h.econ != null ? h.econ.toFixed(1) : '—'}</td>

@@ -198,13 +198,20 @@ const ratesCfg = createSyncConfig<Record<string, FuelRate>>({ key: 'fuel_rates',
  * earlier month for that branch (so a new month starts from the last known figures
  * until they're updated). Falls back to the built-in default if there's nothing.
  */
-export function getFuelRate(branch: string, ym: string): FuelRate {
-  const all = ratesCfg.get()
+/** Pure resolver (carry-forward), so a whole run of months can be costed from one snapshot. */
+export function resolveFuelRate(all: Record<string, FuelRate>, branch: string, ym: string): FuelRate {
   const exact = all[rateKey(branch, ym)]
   if (exact) return exact
   const prefix = `${branch}:`
   const prior = Object.keys(all).filter((k) => k.startsWith(prefix) && k.slice(prefix.length) <= ym).sort()
   return prior.length ? all[prior[prior.length - 1]] : DEFAULT_FUEL_RATE
+}
+export function getFuelRate(branch: string, ym: string): FuelRate {
+  return resolveFuelRate(ratesCfg.get(), branch, ym)
+}
+/** Every branch:month rate, reactive — for month-by-month tables that cost each month at its own price. */
+export function useFuelRates(): Record<string, FuelRate> {
+  return useSyncExternalStore(ratesCfg.subscribe, ratesCfg.get, ratesCfg.get)
 }
 export function setFuelRate(branch: string, ym: string, rate: FuelRate) {
   ratesCfg.set({ ...ratesCfg.get(), [rateKey(branch, ym)]: rate })

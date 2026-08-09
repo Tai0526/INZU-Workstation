@@ -1,14 +1,14 @@
 import { useMemo, useState } from 'react'
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
-import { Lock, Gauge, Scale } from 'lucide-react'
+import { BarChart, Bar, ComposedChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
+import { Lock, Scale, TrendingUp, TrendingDown } from 'lucide-react'
 import clsx from 'clsx'
 import { useAuth } from '@/auth/AuthContext'
 import { ROLES, BRANCHES } from '@/lib/roles'
 import KpiCard from '@/components/ui/KpiCard'
 import StatusBadge from '@/components/ui/StatusBadge'
-import { useIssuances, useFuelRate } from '@/lib/fuel/store'
+import { useIssuances, useFuelRate, useFuelRates, resolveFuelRate } from '@/lib/fuel/store'
 import { kmMoved, isOpen, pricePerLitre } from '@/lib/fuel/types'
-import { useMileageTrips, useMileageRatesFor } from '@/lib/mileage/store'
+import { useMileageTrips, useMileageRatesFor, useMileageRateMaps, resolveRates } from '@/lib/mileage/store'
 import { tripKm, rateFor, PROJECTS_BY_BRANCH } from '@/lib/mileage/types'
 import { sectionBreakdown, busProjectKm, busSectionLabel } from '@/lib/mileage/profit'
 
@@ -150,8 +150,44 @@ export default function MileageOverview() {
   )
   const tableRows = useMemo(() => [...perBus].sort((a, b) => (a.paidRatio ?? 2) - (b.paidRatio ?? 2)), [perBus])
   const chartPaid = useMemo(() => [...perBus].sort((a, b) => (b.paidKm + b.unpaidKm) - (a.paidKm + a.unpaidKm)).map((b) => ({ bus: b.bus, paid: b.paidKm, unpaid: b.unpaidKm })), [perBus])
-  const worst = tableRows.filter((b) => b.paidRatio != null && b.paidRatio < 0.85)
   const paidChartH = Math.max(200, chartPaid.length * 30 + 12)
+
+  // ── Month by month: every month costed at ITS OWN contract rates and diesel
+  // price, so the trend is honest and a rate change is visible beside its effect.
+  const rateMaps = useMileageRateMaps()
+  const fuelRates = useFuelRates()
+  const history = useMemo(() => {
+    let prevNet: number | null = null
+    let prevRates: ReturnType<typeof resolveRates> | null = null
+    let prevDiesel: number | null = null
+    let prevFx: number | null = null
+    return [...dataMonths].sort().map((m) => {
+      const r = resolveRates(rateMaps.monthly, rateMaps.legacy, branch, m)
+      const fr = resolveFuelRate(fuelRates, branch, m)
+      const price = pricePerLitre(fr, 'USD')
+      let paidKm = 0, revenue = 0, litres = 0
+      for (const t of trips) {
+        if (monthKey(t.date) !== m) continue
+        const km = tripKm(t)
+        paidKm += km
+        revenue += km * rateFor(r, t.seat_class)
+      }
+      for (const i of issuances) if (monthKey(i.date) === m) litres += i.liters_given
+      const fuelCost = litres * price
+      const net = revenue - fuelCost
+      const row = {
+        month: m, label: monthLabel(m), paidKm, revenue, litres, fuelCost, net,
+        netDelta: prevNet != null && prevNet !== 0 ? (net - prevNet) / Math.abs(prevNet) : null,
+        rates: r, dieselZmw: fr.diesel_zmw, fx: fr.fx_zmw_per_usd,
+        // Flag a rate that moved from the previous month — it usually explains the swing.
+        rateChanged: prevRates != null && (prevRates.rate60 !== r.rate60 || prevRates.rate40 !== r.rate40 || prevRates.rate28 !== r.rate28),
+        fuelPriceChanged: prevDiesel != null && prevDiesel !== fr.diesel_zmw,
+        fxChanged: prevFx != null && prevFx !== fr.fx_zmw_per_usd,
+      }
+      prevNet = net; prevRates = r; prevDiesel = fr.diesel_zmw; prevFx = fr.fx_zmw_per_usd
+      return row
+    })
+  }, [dataMonths, trips, issuances, rateMaps, fuelRates, branch])
 
   if (role === 'route_supervisor') {
     return (
@@ -289,21 +325,89 @@ export default function MileageOverview() {
         </div>
       </div>
 
-      {/* Buses to steer */}
-      <div className="card overflow-hidden">
-        <div className="flex items-center gap-2 border-b border-black/5 px-5 py-3.5"><Gauge size={16} className="text-status-critical" /><h3 className="font-display text-sm font-bold text-navy">Buses to steer</h3><span className="text-xs text-status-neutral">billing well under what they drive</span></div>
-        {worst.length === 0 ? <p className="px-5 py-8 text-center text-sm text-status-neutral">Every bus is billing most of what it drives. Nothing to flag.</p> : (
-          <div className="max-h-64 divide-y divide-black/5 overflow-y-auto">
-            {worst.map((b) => (
-              <div key={b.bus} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-2.5">
-                <span className="flex-1 text-sm font-medium text-navy">{b.bus} <span className="ml-1 rounded-full bg-navy/5 px-2 py-0.5 text-[11px] font-medium text-navy">{b.section}</span></span>
-                <StatusBadge tone={ratioTone(b.paidRatio)}>{Math.round((b.paidRatio ?? 0) * 100)}% paid</StatusBadge>
-                <span className="text-[11px] text-status-neutral">{b.unpaidKm.toLocaleString()} km unbilled · {b.economy != null ? `${b.economy.toFixed(1)} km/L` : '—'}</span>
-              </div>
-            ))}
+      {/* Month by month — the tracking view: how each month performed, and the
+          rates it performed under (a rate change explains a lot of movement). */}
+      {history.length > 1 && (
+        <div className="card overflow-hidden">
+          <div className="flex flex-wrap items-center gap-2 border-b border-black/5 px-5 py-3.5">
+            <TrendingUp size={16} className="text-brand" />
+            <h3 className="font-display text-sm font-bold text-navy">Month by month</h3>
+            <span className="text-xs text-status-neutral">performance and the rates in force — click a month to open it</span>
           </div>
-        )}
-      </div>
+          <div className="px-5 pt-4">
+            <div className="h-[230px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={history} margin={{ top: 4, right: 8, bottom: 0, left: 0 }} barCategoryGap={20}>
+                  <CartesianGrid stroke={GRID} vertical={false} />
+                  <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#6B7280' }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fontSize: 11, fill: '#6B7280' }} axisLine={false} tickLine={false} tickFormatter={(v) => `$${compact(v)}`} />
+                  <Tooltip contentStyle={tip} formatter={(v: number, n) => [usd0(v), n]} />
+                  <Bar dataKey="revenue" name="Revenue" fill={GOOD} maxBarSize={30} radius={[3, 3, 0, 0]} />
+                  <Bar dataKey="fuelCost" name="Fuel cost" fill={CRIT} maxBarSize={30} radius={[3, 3, 0, 0]} />
+                  <Line dataKey="net" name="Net after fuel" stroke={NAVY} strokeWidth={2.5} dot={{ r: 3 }} />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-right text-sm">
+              <thead>
+                <tr className="bg-navy/[0.04] text-[10px] uppercase tracking-wide text-status-neutral">
+                  <th className="px-5 py-1.5 text-left font-semibold">Month</th>
+                  <th className="border-l border-black/5 px-3 py-1.5 text-center font-semibold" colSpan={6}>Performance</th>
+                  <th className="border-l border-black/5 px-3 py-1.5 text-center font-semibold" colSpan={6}>Rates in force that month</th>
+                </tr>
+                <tr className="bg-canvas text-status-neutral">
+                  <th className="px-5 py-2 text-left font-medium" />
+                  <th className="border-l border-black/5 px-3 py-2 font-medium">Billed km</th>
+                  <th className="px-3 py-2 font-medium">Revenue</th>
+                  <th className="px-3 py-2 font-medium">Litres</th>
+                  <th className="px-3 py-2 font-medium">Fuel cost</th>
+                  <th className="px-3 py-2 font-medium">Net</th>
+                  <th className="px-3 py-2 font-medium">vs prior</th>
+                  <th className="border-l border-black/5 px-3 py-2 font-medium" title="60-seater contract rate">60</th>
+                  <th className="px-3 py-2 font-medium" title="40-seater contract rate">40</th>
+                  <th className="px-3 py-2 font-medium" title="15–28-seater contract rate">15–28</th>
+                  <th className="px-3 py-2 font-medium">VAT</th>
+                  <th className="px-3 py-2 font-medium" title="ERB diesel pump price">Diesel K/L</th>
+                  <th className="px-4 py-2 font-medium" title="Bank of Zambia mid rate">K/$</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...history].reverse().map((h) => (
+                  <tr key={h.month} className={clsx('border-t border-black/5', h.month === effMonth && 'bg-brand-tint/25')}>
+                    <td className="px-5 py-2 text-left font-medium text-navy">
+                      <button onClick={() => setMonth(h.month)} className="hover:underline" title="View this month above">{h.label}</button>
+                    </td>
+                    <td className="border-l border-black/5 px-3 py-2 text-status-neutral">{Math.round(h.paidKm).toLocaleString()}</td>
+                    <td className="px-3 py-2 text-status-neutral">{usd0(h.revenue)}</td>
+                    <td className="px-3 py-2 text-status-neutral">{Math.round(h.litres).toLocaleString()}</td>
+                    <td className="px-3 py-2 text-status-neutral">{usd0(h.fuelCost)}</td>
+                    <td className={clsx('px-3 py-2 font-medium', h.net >= 0 ? 'text-status-good' : 'text-status-critical')}>{usd0(h.net)}</td>
+                    <td className="px-3 py-2">
+                      {h.netDelta == null ? <span className="text-status-neutral">—</span> : (
+                        <span className={clsx('inline-flex items-center gap-0.5 font-medium', h.netDelta > 0.02 ? 'text-status-good' : h.netDelta < -0.02 ? 'text-status-critical' : 'text-status-neutral')}>
+                          {h.netDelta > 0.02 ? <TrendingUp size={12} /> : h.netDelta < -0.02 ? <TrendingDown size={12} /> : null}
+                          {h.netDelta >= 0 ? '+' : ''}{Math.round(h.netDelta * 100)}%
+                        </span>
+                      )}
+                    </td>
+                    <td className={clsx('border-l border-black/5 px-3 py-2', h.rateChanged ? 'font-semibold text-brand' : 'text-status-neutral')}>${h.rates.rate60.toFixed(2)}</td>
+                    <td className={clsx('px-3 py-2', h.rateChanged ? 'font-semibold text-brand' : 'text-status-neutral')}>${h.rates.rate40.toFixed(2)}</td>
+                    <td className={clsx('px-3 py-2', h.rateChanged ? 'font-semibold text-brand' : 'text-status-neutral')}>${h.rates.rate28.toFixed(2)}</td>
+                    <td className="px-3 py-2 text-status-neutral">{h.rates.vat_pct}%</td>
+                    <td className={clsx('px-3 py-2', h.fuelPriceChanged ? 'font-semibold text-brand' : 'text-status-neutral')}>K{h.dieselZmw.toFixed(2)}</td>
+                    <td className={clsx('px-4 py-2', h.fxChanged ? 'font-semibold text-brand' : 'text-status-neutral')}>{h.fx.toFixed(2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="border-t border-black/5 px-5 py-2.5 text-[11px] text-status-neutral">
+            Each month is billed at its own contract rates and costed at its own diesel price — <span className="font-semibold text-brand">highlighted</span> where a rate changed from the month before, so a jump in the numbers can be read against the rate that caused it.
+          </p>
+        </div>
+      )}
 
       {!ROLES[role].canToggleBranch && <p className="text-xs text-status-neutral">Showing {branchLabel} only.</p>}
     </div>
