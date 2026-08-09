@@ -69,7 +69,8 @@ export default function DriverDocuments({ driver, canEdit }: { driver: Driver; c
   }
 
   function docLabel(d: (typeof docs)[number]) {
-    const base = CATEGORY_META[d.category].label
+    // Driver docs only ever use built-in categories; guard anyway.
+    const base = CATEGORY_META[d.category as DocCategory]?.label ?? 'Document'
     return d.title ? `${base}: ${d.title}` : base
   }
 
@@ -96,7 +97,7 @@ export default function DriverDocuments({ driver, canEdit }: { driver: Driver; c
           <table className="w-full text-left text-sm">
             <tbody>
               {docs.map((d) => {
-                const cmeta = CATEGORY_META[d.category]
+                const cmeta = CATEGORY_META[d.category as DocCategory]
                 const st = docStatus(d)
                 return (
                   <tr key={d.id} className="border-b border-black/5 last:border-0">

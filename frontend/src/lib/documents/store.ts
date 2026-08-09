@@ -92,7 +92,7 @@ function pushEvent(id: string, action: AuditAction, patch: Partial<DocumentRecor
 }
 
 export interface NewDocInput {
-  category: DocCategory
+  category: DocumentRecord['category']
   title?: string
   entity_type: DocumentRecord['entity_type']
   entity_id: string
@@ -194,7 +194,7 @@ export const documentsStore = {
   },
 
   /** Remove every version of a document family (used for an explicit delete). */
-  removeFamily(entityId: string, category: DocCategory) {
+  removeFamily(entityId: string, category: DocumentRecord['category']) {
     commit(load().filter((d) => !(d.entity_id === entityId && d.category === category)))
   },
 

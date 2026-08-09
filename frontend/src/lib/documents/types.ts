@@ -42,9 +42,16 @@ export const LICENSING_CATEGORIES = (Object.keys(CATEGORY_META) as DocCategory[]
 // driver profile's document upload options.
 export const DRIVER_DOC_CATEGORIES = (Object.keys(CATEGORY_META) as DocCategory[]).filter((c) => CATEGORY_META[c].scope === 'driver' && c !== 'medical')
 
+// Custom licensing categories (Fleet → Licensing → Manage) register their
+// labels here — lib/documents/licensingConfig keeps it in sync — so documents
+// with a custom category show their real name app-wide.
+export const EXTRA_CATEGORY_LABELS: Record<string, { label: string; short: string }> = {}
+
 export interface DocumentRecord {
   id: string
-  category: DocCategory
+  // Built-in categories, plus any custom licensing category key (see
+  // licensingConfig) — the `string & {}` keeps autocomplete on the union.
+  category: DocCategory | (string & {})
   title?: string // optional name, e.g. a specific training course
   entity_type: 'vehicle' | 'driver' | 'general'
   entity_id: string // vehicle id, etc.
@@ -220,7 +227,7 @@ export function approvalOf(d: DocumentRecord): ApprovalStatus {
 /** Human label for a document's kind — doc_type for library docs, category otherwise. */
 export function typeLabelOf(d: DocumentRecord): string {
   if (d.entity_type === 'general') return DOC_TYPE_META[d.doc_type ?? 'other'].label
-  return CATEGORY_META[d.category]?.label ?? 'Document'
+  return CATEGORY_META[d.category as DocCategory]?.label ?? EXTRA_CATEGORY_LABELS[d.category]?.label ?? 'Document'
 }
 
 /** The name to show for a document — its title if it has one, else its kind. */

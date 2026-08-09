@@ -6,7 +6,8 @@ import StatusBadge from '@/components/ui/StatusBadge'
 import { useAuth } from '@/auth/AuthContext'
 import { putFile, viewFile } from '@/lib/storage/fileStore'
 import { useDocuments, documentsStore } from '@/lib/documents/store'
-import { CATEGORY_META, LICENSING_CATEGORIES, DOC_STATUS_META, docStatus, type DocCategory } from '@/lib/documents/types'
+import { DOC_STATUS_META, docStatus } from '@/lib/documents/types'
+import { useLicensingCats } from '@/lib/documents/licensingConfig'
 import type { Vehicle } from '@/lib/fleet/types'
 
 const inputCls = 'w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand'
@@ -15,7 +16,8 @@ const inputCls = 'w-full rounded-lg border border-black/15 bg-white px-3 py-2 te
 export default function VehicleDocsModal({ vehicle, open, onClose, canEdit }: { vehicle: Vehicle | null; open: boolean; onClose: () => void; canEdit: boolean }) {
   const { user } = useAuth()
   const docs = useDocuments()
-  const [formCat, setFormCat] = useState<DocCategory | null>(null)
+  const cats = useLicensingCats() // configured in Fleet → Licensing → Manage
+  const [formCat, setFormCat] = useState<string | null>(null)
   const [file, setFile] = useState<File | null>(null)
   const [issue, setIssue] = useState('')
   const [expiry, setExpiry] = useState('')
@@ -29,9 +31,9 @@ export default function VehicleDocsModal({ vehicle, open, onClose, canEdit }: { 
   if (!open && seen) setSeen('')
   if (!vehicle) return null
 
-  const currentFor = (cat: DocCategory) => docs.find((d) => d.entity_id === vehicle.id && d.category === cat && !d.superseded)
+  const currentFor = (cat: string) => docs.find((d) => d.entity_id === vehicle.id && d.category === cat && !d.superseded)
 
-  function openForm(cat: DocCategory) {
+  function openForm(cat: string) {
     setFormCat(cat); setFile(null); setIssue(''); setExpiry(''); setRef(''); setIssuer(''); setError('')
   }
   async function save() {
@@ -56,16 +58,19 @@ export default function VehicleDocsModal({ vehicle, open, onClose, canEdit }: { 
   return (
     <Modal open={open} onClose={onClose} size="lg" title={`Documents — ${vehicle.fleet_no}`} subtitle={`${vehicle.reg_plate} · ${vehicle.make} ${vehicle.model}`}>
       <div className="space-y-2">
-        {LICENSING_CATEGORIES.map((cat) => {
+        {cats.map(({ key: cat, label, required }) => {
           const cur = currentFor(cat)
           const st = cur ? docStatus(cur) : null
-          const meta = CATEGORY_META[cat]
           return (
             <div key={cat} className="rounded-xl border border-black/10 bg-white p-3">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="flex-1 text-sm font-semibold text-navy">{meta.label}</span>
+                <span className="flex-1 text-sm font-semibold text-navy">
+                  {label}
+                  {!required && <span className="ml-2 rounded-full bg-navy/5 px-2 py-0.5 text-[10px] font-normal text-status-neutral">optional</span>}
+                </span>
                 {cur && st ? <StatusBadge tone={DOC_STATUS_META[st].tone}>{DOC_STATUS_META[st].label}</StatusBadge>
-                  : <span className="inline-flex items-center gap-1 rounded-full border border-dashed border-status-critical/50 bg-status-critical/5 px-2 py-0.5 text-xs font-medium text-status-critical"><AlertTriangle size={12} /> Missing</span>}
+                  : required ? <span className="inline-flex items-center gap-1 rounded-full border border-dashed border-status-critical/50 bg-status-critical/5 px-2 py-0.5 text-xs font-medium text-status-critical"><AlertTriangle size={12} /> Missing</span>
+                    : <span className="rounded-full border border-dashed border-black/20 px-2 py-0.5 text-xs text-status-neutral">Not on file</span>}
                 {cur && cur.file_id && <button onClick={() => view(cur.file_id, cur.file_name)} className="inline-flex items-center gap-1 text-sm text-brand hover:underline"><FileText size={14} /> View <ExternalLink size={11} /></button>}
                 {canEdit && formCat !== cat && (
                   <Button variant="secondary" onClick={() => openForm(cat)}><UploadCloud size={14} /> {cur ? 'Renew' : 'Upload'}</Button>

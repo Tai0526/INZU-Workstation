@@ -19,7 +19,8 @@ import { useDriverLeave } from '@/lib/drivers/leave'
 import { useHrPeople } from '@/lib/hr/directory'
 import { useAllocations, useWeeklyAssign } from '@/lib/operations/store'
 import { useDocuments } from '@/lib/documents/store'
-import { docStatus, LICENSING_CATEGORIES } from '@/lib/documents/types'
+import { docStatus } from '@/lib/documents/types'
+import { useLicensingCats } from '@/lib/documents/licensingConfig'
 import { SECTIONS } from '@/lib/org/sections'
 import { useSpeedEvents } from '@/lib/speed/store'
 import { isGlitch, countsAgainstDriver } from '@/lib/speed/types'
@@ -166,6 +167,7 @@ export default function Dashboard() {
   }, [allocations, today])
   // HR headcount is the consolidated directory (employees + drivers + staff accounts).
   const hr = { headcount: useHrPeople(branch).length }
+  const licCats = useLicensingCats()
 
   const real = useMemo(() => {
     const activeV = fleet.filter((v) => v.status === 'active')
@@ -177,9 +179,10 @@ export default function Dashboard() {
     const seats = activeV.reduce((s, v) => s + (v.capacity || 0), 0) // seating capacity on the road
     const licExpired = branchDocs.filter((d) => docStatus(d) === 'expired').length
     const licExpiring = branchDocs.filter((d) => docStatus(d) === 'expiring').length
-    const missingDocs = fleet.filter((v) => LICENSING_CATEGORIES.some((cat) => !branchDocs.some((d) => d.entity_id === v.id && d.category === cat))).length
+    const requiredCats = licCats.filter((c) => c.required).map((c) => c.key)
+    const missingDocs = fleet.filter((v) => requiredCats.some((cat) => !branchDocs.some((d) => d.entity_id === v.id && d.category === cat))).length
     return { active, grounded, repair, total, inService, seats, avail: inService ? Math.round((active / inService) * 100) : 0, licExpired, licExpiring, missingDocs }
-  }, [fleet, branchDocs])
+  }, [fleet, branchDocs, licCats])
 
   // Fuel & fleet overview (live depot stock + this month's movements) — for the
   // execs / ops managers who oversee the whole branch.

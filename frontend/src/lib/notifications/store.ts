@@ -3,9 +3,10 @@ import { ROLES, type BranchCode, type RoleKey } from '@/lib/roles'
 import { useDocuments } from '@/lib/documents/store'
 import { useVehicles } from '@/lib/fleet/store'
 import {
-  CATEGORY_META, docStatus, daysUntil, LICENSING_CATEGORIES,
-  approvalOf, reviewStatus, typeLabelOf, displayNameOf,
+  CATEGORY_META, docStatus, daysUntil,
+  approvalOf, reviewStatus, typeLabelOf, displayNameOf, type DocCategory,
 } from '@/lib/documents/types'
+import { licCatsOf, licensingConfigStore } from '@/lib/documents/licensingConfig'
 import { useCases, CASE_STAGE_META, INCIDENT_TYPE_META } from '@/lib/safety/cases'
 import { useSpeedEvents } from '@/lib/speed/store'
 import { overBy, isGlitch } from '@/lib/speed/types'
@@ -117,7 +118,14 @@ export function useNotifications(branch: BranchCode, role?: RoleKey, userName?: 
   const pettyLedger = usePettyLedger()
   const pettyActing = useActingApprover()
   const read = useSyncExternalStore(subscribe, snapshot, snapshot)
+  const licCfg = useSyncExternalStore(licensingConfigStore.subscribe, licensingConfigStore.get, licensingConfigStore.get)
   const today = new Date().toISOString().slice(0, 10)
+
+  // Vehicle-licensing categories as configured (Fleet → Licensing → Manage):
+  // only REQUIRED ones raise "missing documents"; customs still track expiry.
+  const licCats = licCatsOf(licCfg)
+  const requiredCats = licCats.filter((c) => c.required).map((c) => c.key)
+  const customLicensing = new Set(licCats.filter((c) => !c.builtin).map((c) => c.key))
 
   const items: AppNotification[] = []
 
@@ -201,7 +209,7 @@ export function useNotifications(branch: BranchCode, role?: RoleKey, userName?: 
 
   // ── Vehicles missing required documents (Workshop acts, Ops aware) ──
   const missingDocs = vehicles.filter(
-    (v) => v.branch === branch && LICENSING_CATEGORIES.some((cat) => !docs.some((d) => d.entity_id === v.id && d.category === cat && !d.superseded)),
+    (v) => v.branch === branch && requiredCats.some((cat) => !docs.some((d) => d.entity_id === v.id && d.category === cat && !d.superseded)),
   ).length
   if (missingDocs > 0) {
     items.push({
@@ -216,7 +224,10 @@ export function useNotifications(branch: BranchCode, role?: RoleKey, userName?: 
   for (const d of docs) {
     // Company-wide documents surface in both branches.
     if (d.superseded || (d.branch !== branch && !d.all_branches)) continue
-    const meta = CATEGORY_META[d.category]
+    // Custom licensing categories aren't in CATEGORY_META — treat them as
+    // licensing docs so their expiries alert too; truly unknown ones skip.
+    const meta = CATEGORY_META[d.category as DocCategory]
+      ?? (customLicensing.has(d.category) ? { licensing: true } : null)
     if (!meta) continue // unknown/legacy category — skip rather than crash
     const kind = typeLabelOf(d)
     const subject = d.entity_type === 'general' ? displayNameOf(d) : d.entity_label

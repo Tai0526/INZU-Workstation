@@ -9,7 +9,8 @@ import KpiCard from '@/components/ui/KpiCard'
 import StatusBadge from '@/components/ui/StatusBadge'
 import { useVehicles } from '@/lib/fleet/store'
 import { useDocuments } from '@/lib/documents/store'
-import { CATEGORY_META, LICENSING_CATEGORIES, DOC_STATUS_META, docStatus } from '@/lib/documents/types'
+import { DOC_STATUS_META, docStatus, typeLabelOf } from '@/lib/documents/types'
+import { useLicensingCats } from '@/lib/documents/licensingConfig'
 
 function rel(iso: string): string {
   try {
@@ -50,12 +51,15 @@ export default function FleetOverview() {
   const expired = attention.filter((a) => a.st === 'expired').length
   const expiring = attention.filter((a) => a.st === 'expiring').length
 
+  const licCats = useLicensingCats()
   const incomplete = useMemo(
-    () =>
-      fleet.filter((v) =>
-        LICENSING_CATEGORIES.some((cat) => !branchDocs.some((d) => d.entity_id === v.id && d.category === cat)),
-      ).length,
-    [fleet, branchDocs],
+    () => {
+      const requiredCats = licCats.filter((c) => c.required).map((c) => c.key)
+      return fleet.filter((v) =>
+        requiredCats.some((cat) => !branchDocs.some((d) => d.entity_id === v.id && d.category === cat)),
+      ).length
+    },
+    [fleet, branchDocs, licCats],
   )
 
   // ── Seats available by seating capacity (active vehicles only) ──
@@ -82,7 +86,7 @@ export default function FleetOverview() {
       evs.push({ at: v.updated_at, who: created ? v.created_by : v.updated_by, text: created ? `added vehicle ${v.fleet_no}` : `updated vehicle ${v.fleet_no}` })
     }
     for (const d of branchDocs) {
-      evs.push({ at: d.uploaded_at, who: d.uploaded_by, text: `uploaded ${CATEGORY_META[d.category].label} for ${d.entity_label}` })
+      evs.push({ at: d.uploaded_at, who: d.uploaded_by, text: `uploaded ${typeLabelOf(d)} for ${d.entity_label}` })
     }
     return evs.sort((a, b) => b.at.localeCompare(a.at)).slice(0, 5)
   }, [fleet, branchDocs])
@@ -134,7 +138,7 @@ export default function FleetOverview() {
                 <Link to="/fleet/licensing" key={d.id} className="flex items-center gap-3 px-5 py-3 hover:bg-canvas">
                   <StatusBadge tone={DOC_STATUS_META[st].tone}>{DOC_STATUS_META[st].label}</StatusBadge>
                   <div className="min-w-0 flex-1">
-                    <div className="text-sm font-medium text-navy">{CATEGORY_META[d.category].label} — {d.entity_label}</div>
+                    <div className="text-sm font-medium text-navy">{typeLabelOf(d)} — {d.entity_label}</div>
                     <div className="text-xs text-status-neutral">Expiry {d.expiry_date || '—'}</div>
                   </div>
                   <ArrowRight size={15} className="text-status-neutral" />
