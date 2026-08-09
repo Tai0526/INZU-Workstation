@@ -13,9 +13,26 @@ import { createSyncConfig } from '@/lib/supabase/syncTable'
 
 export type ThemeMode = 'light' | 'dark' | 'system'
 export type AccentKey = 'inzu' | 'blue' | 'teal' | 'emerald' | 'purple' | 'magenta'
-export interface Appearance { mode: ThemeMode; accent: AccentKey }
+export type ThemeKey = 'navy' | 'ocean' | 'teal' | 'forest' | 'plum' | 'pink'
+export interface Appearance { mode: ThemeMode; accent: AccentKey; theme: ThemeKey }
 
-export const DEFAULT_APPEARANCE: Appearance = { mode: 'light', accent: 'inzu' }
+export const DEFAULT_APPEARANCE: Appearance = { mode: 'light', accent: 'inzu', theme: 'navy' }
+
+/**
+ * Colour themes recolour the app's CHROME — sidebar, table headers, primary
+ * buttons — while the canvas stays light (or dark, per the mode). The CSS
+ * lives in index.css as `.theme-<key>` overrides of the solid navy surfaces,
+ * the same technique dark mode uses. Each theme suggests a matching accent
+ * (applied on pick; the user can still change the accent afterwards).
+ */
+export const THEMES: { key: ThemeKey; label: string; chrome: string; chrome2: string; accent: AccentKey }[] = [
+  { key: 'navy', label: 'INZU Navy', chrome: '#0F1B33', chrome2: '#1B2A4A', accent: 'inzu' },
+  { key: 'ocean', label: 'Ocean & White', chrome: '#1E3A8A', chrome2: '#1E40AF', accent: 'blue' },
+  { key: 'teal', label: 'Teal & White', chrome: '#134E4A', chrome2: '#115E59', accent: 'teal' },
+  { key: 'forest', label: 'Forest & White', chrome: '#14532D', chrome2: '#166534', accent: 'emerald' },
+  { key: 'plum', label: 'Plum & White', chrome: '#4C1D95', chrome2: '#5B21B6', accent: 'purple' },
+  { key: 'pink', label: 'Pink & White', chrome: '#831843', chrome2: '#9D174D', accent: 'magenta' },
+]
 
 /** Curated accents — each needs a light chip tint and a deep dark-mode tint. */
 export const ACCENTS: { key: AccentKey; label: string; hex: string; rgb: string; tintLight: string; tintDark: string }[] = [
@@ -35,6 +52,7 @@ function sane(a: Partial<Appearance> | null | undefined): Appearance {
   return {
     mode: MODES.includes(a?.mode as ThemeMode) ? (a!.mode as ThemeMode) : DEFAULT_APPEARANCE.mode,
     accent: ACCENTS.some((x) => x.key === a?.accent) ? (a!.accent as AccentKey) : DEFAULT_APPEARANCE.accent,
+    theme: THEMES.some((x) => x.key === a?.theme) ? (a!.theme as ThemeKey) : DEFAULT_APPEARANCE.theme,
   }
 }
 
@@ -50,6 +68,11 @@ export function useAppearance(userId: string): Appearance {
 
 export function setAppearance(userId: string, patch: Partial<Appearance>) {
   const map = cfg.get()
+  // Picking a theme brings its matching accent along (still changeable after).
+  if (patch.theme && patch.accent === undefined) {
+    const t = THEMES.find((x) => x.key === patch.theme)
+    if (t) patch = { ...patch, accent: t.accent }
+  }
   const next = sane({ ...sane(map[userId]), ...patch })
   cfg.set({ ...map, [userId]: next })
   applyAppearance(next) // instant — don't wait for the sync round-trip
@@ -64,6 +87,7 @@ export function applyAppearance(a: Appearance) {
   const root = document.documentElement
   const dark = current.mode === 'dark' || (current.mode === 'system' && !!media?.matches)
   root.classList.toggle('dark', dark)
+  for (const t of THEMES) root.classList.toggle(`theme-${t.key}`, t.key !== 'navy' && t.key === current.theme)
   const acc = ACCENTS.find((x) => x.key === current.accent) ?? ACCENTS[0]
   root.style.setProperty('--accent-rgb', acc.rgb)
   root.style.setProperty('--accent-tint-light-rgb', acc.tintLight)
@@ -94,5 +118,5 @@ export function useAppearanceSync(userId: string | undefined) {
   const a = useAppearance(userId ?? '')
   // Only while actually signed in — a signed-out frame must not reset the
   // login page to defaults (the mirror keeps the last user's look there).
-  useEffect(() => { if (userId) applyAppearance(a) }, [userId, a.mode, a.accent])
+  useEffect(() => { if (userId) applyAppearance(a) }, [userId, a.mode, a.accent, a.theme])
 }

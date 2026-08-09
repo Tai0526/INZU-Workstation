@@ -112,6 +112,31 @@
 .dark .bg-\[\#E7E0F5\] { background-color: #2a2342; }
 .dark .bg-\[\#E9ECEF\] { background-color: #222b3d; }
 
+/* ── Colour themes (Appearance → Colour theme) ───────────────────────────────
+   Recolour the solid chrome — sidebar, table headers, primary buttons — while
+   the canvas stays white (or dark, per mode). Same pinning technique as dark
+   mode; these come AFTER the .dark pins so a coloured chrome wins there too.
+   Keep in sync with THEMES in lib/prefs/store.ts. */
+.theme-ocean .bg-navy, .theme-ocean .hover\:bg-navy:hover { background-color: #1e3a8a; }
+.theme-ocean .bg-navy-secondary { background-color: #1e40af; }
+.theme-ocean .hover\:bg-navy-secondary:hover { background-color: #2b4fc2; }
+
+.theme-teal .bg-navy, .theme-teal .hover\:bg-navy:hover { background-color: #134e4a; }
+.theme-teal .bg-navy-secondary { background-color: #115e59; }
+.theme-teal .hover\:bg-navy-secondary:hover { background-color: #147a72; }
+
+.theme-forest .bg-navy, .theme-forest .hover\:bg-navy:hover { background-color: #14532d; }
+.theme-forest .bg-navy-secondary { background-color: #166534; }
+.theme-forest .hover\:bg-navy-secondary:hover { background-color: #1b7a3f; }
+
+.theme-plum .bg-navy, .theme-plum .hover\:bg-navy:hover { background-color: #4c1d95; }
+.theme-plum .bg-navy-secondary { background-color: #5b21b6; }
+.theme-plum .hover\:bg-navy-secondary:hover { background-color: #6d28d9; }
+
+.theme-pink .bg-navy, .theme-pink .hover\:bg-navy:hover { background-color: #831843; }
+.theme-pink .bg-navy-secondary { background-color: #9d174d; }
+.theme-pink .hover\:bg-navy-secondary:hover { background-color: #be185d; }
+
 /* Stop mobile browsers (esp. iOS Safari) auto-zooming into a form control on
    focus — that happens whenever the control's font-size is under 16px, and it
    leaves the page zoomed-in so you have to pinch back out. Bumping form controls

@@ -3,7 +3,7 @@ import clsx from 'clsx'
 import Modal from '@/components/ui/Modal'
 import Button from '@/components/ui/Button'
 import { useAuth } from '@/auth/AuthContext'
-import { ACCENTS, useAppearance, setAppearance, type ThemeMode } from '@/lib/prefs/store'
+import { ACCENTS, THEMES, useAppearance, setAppearance, type ThemeMode } from '@/lib/prefs/store'
 
 /**
  * Personal appearance settings — theme and accent colour. Applies instantly
@@ -62,6 +62,34 @@ export default function AppearanceModal({ open, onClose }: { open: boolean; onCl
                   {a.mode === key && <Check size={14} className="ml-auto text-brand" />}
                 </div>
                 <div className="px-0.5 text-[11px] text-status-neutral">{hint}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Colour theme — recolours sidebar, table headers and buttons */}
+        <div>
+          <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-status-neutral">Colour theme</h4>
+          <p className="mb-2.5 text-[11px] text-status-neutral">The sidebar, table headers and buttons take this colour — the background stays clean.</p>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            {THEMES.map((t) => (
+              <button key={t.key} onClick={() => setAppearance(user!.id, { theme: t.key })}
+                className={clsx(
+                  'rounded-xl border-2 p-1.5 text-left transition-colors',
+                  a.theme === t.key ? 'border-brand bg-brand-tint/30' : 'border-black/10 hover:border-black/25',
+                )}>
+                {/* Mini preview: coloured sidebar + header bar on a white page */}
+                <div className="flex h-11 w-full overflow-hidden rounded-lg ring-1 ring-inset ring-black/10" style={{ background: '#FFFFFF' }}>
+                  <div className="w-3 shrink-0" style={{ background: t.chrome }} />
+                  <div className="flex flex-1 flex-col gap-1 p-1.5">
+                    <div className="h-2 rounded-sm" style={{ background: t.chrome }} />
+                    <div className="h-1.5 w-2/3 rounded-sm" style={{ background: 'rgba(0,0,0,0.08)' }} />
+                  </div>
+                </div>
+                <div className="mt-1.5 flex items-center gap-1.5 px-0.5 pb-0.5">
+                  <span className="text-xs font-medium text-navy">{t.label}</span>
+                  {a.theme === t.key && <Check size={13} className="ml-auto text-brand" />}
+                </div>
               </button>
             ))}
           </div>
