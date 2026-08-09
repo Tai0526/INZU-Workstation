@@ -387,9 +387,12 @@ function BookingModal({ open, onClose, vehicles, docs, cats, branchLabel, prepar
   const [busy, setBusy] = useState(false)
   const [saved, setSaved] = useState(false)
   const [seen, setSeen] = useState(false)
+  // Off by default: the sheet is what we are booking. Cancel a vehicle and it
+  // leaves the sheet — it does not quietly return as "not yet booked".
+  const [includeDue, setIncludeDue] = useState(false)
   const today = todayIso()
 
-  if (open && !seen) { setSeen(true); setCatKey(fqm?.key ?? ''); setEdits({}); setShowAll(false); setBulkDate(''); setSaved(false) }
+  if (open && !seen) { setSeen(true); setCatKey(fqm?.key ?? ''); setEdits({}); setShowAll(false); setBulkDate(''); setSaved(false); setIncludeDue(false) }
   if (!open && seen) setSeen(false)
 
   const cat = cats.find((c) => c.key === catKey) ?? cats[0]
@@ -461,9 +464,18 @@ function BookingModal({ open, onClose, vehicles, docs, cats, branchLabel, prepar
     setBusy(true)
     try {
       const { exportBookingXlsx } = await import('@/lib/fleet/licensingExport')
-      await exportBookingXlsx({ vehicles, docs, cat, bookings, branchLabel, mode, includeUnbooked: true, preparedBy })
+      await exportBookingXlsx({ vehicles, docs, cat, bookings, branchLabel, mode, includeUnbooked: includeDue, preparedBy })
     } finally { setBusy(false) }
   }
+
+  // What the sheet will actually contain, from what is SAVED (not the unsaved
+  // edits) — the export reads the store, so this must too.
+  const exportCount = useMemo(() => {
+    if (!cat) return 0
+    const bookedIds = new Set(Object.keys(bookings).filter((k) => k.endsWith(`:${cat.key}`)).map((k) => k.slice(0, -(cat.key.length + 1))))
+    const dueUnbooked = includeDue ? candidates.filter((c) => c.due && !bookedIds.has(c.v.id)).length : 0
+    return candidates.filter((c) => bookedIds.has(c.v.id)).length + dueUnbooked
+  }, [bookings, cat, candidates, includeDue])
 
   if (!cat) return null
 
@@ -559,7 +571,8 @@ function BookingModal({ open, onClose, vehicles, docs, cats, branchLabel, prepar
                     </td>
                     <td className="px-2 py-1.5">
                       {e.date && (
-                        <button onClick={() => patch(v.id, { date: '', note: '' })} title="Clear this booking"
+                        <button onClick={() => patch(v.id, { date: '', note: '' })}
+                          title="Cancel this booking — once saved, the vehicle leaves the sheet"
                           className="rounded-md p-1 text-status-neutral hover:bg-status-critical/10 hover:text-status-critical"><X size={13} /></button>
                       )}
                     </td>
@@ -580,16 +593,31 @@ function BookingModal({ open, onClose, vehicles, docs, cats, branchLabel, prepar
           <div className="mb-1 text-xs font-semibold text-navy">Send to the inspecting department</div>
           <p className="mb-2.5 text-[11px] leading-relaxed text-status-neutral">
             {dirty && <span className="font-medium text-[#8a6d10]">Save your dates first — the sheet exports what is saved. </span>}
-            The full sheet shows each vehicle's current expiry beside the date we propose, so both sides can align. The schedule-only sheet lists just the dates.
+            Only vehicles with a booked date are sent. Clear a date above and that vehicle leaves the sheet.
           </p>
-          <div className="flex flex-wrap gap-2">
-            <Button variant="secondary" onClick={() => exportSheet('with-expiry')} disabled={busy}>
+
+          <label className="mb-2.5 flex cursor-pointer items-start gap-2 rounded-lg border border-black/10 bg-white px-3 py-2">
+            <input type="checkbox" className="mt-0.5 h-4 w-4 accent-[#0F1B33]" checked={includeDue} onChange={(e) => setIncludeDue(e.target.checked)} />
+            <span className="text-[11px] leading-relaxed text-navy">
+              <b>Also list vehicles falling due that aren't booked yet</b>
+              <span className="block text-status-neutral">Marked “Not yet booked”, so they can see what is coming. Leave off to send only what you are committing to.</span>
+            </span>
+          </label>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="secondary" onClick={() => exportSheet('with-expiry')} disabled={busy || exportCount === 0}>
               <FileSpreadsheet size={15} /> {busy ? 'Building…' : 'Export with expiry dates'}
             </Button>
-            <Button variant="secondary" onClick={() => exportSheet('schedule-only')} disabled={busy}>
+            <Button variant="secondary" onClick={() => exportSheet('schedule-only')} disabled={busy || exportCount === 0}>
               <FileSpreadsheet size={15} /> Export schedule only
             </Button>
+            <span className={clsx('text-[11px]', exportCount === 0 ? 'text-status-critical' : 'text-status-neutral')}>
+              {exportCount === 0 ? 'Nothing booked to send yet.' : `${exportCount} vehicle${exportCount === 1 ? '' : 's'} in the sheet`}
+            </span>
           </div>
+          <p className="mt-2 text-[11px] text-status-neutral">
+            <b className="text-navy">With expiry dates</b> shows each vehicle's current expiry beside the date we propose, so both sides align. <b className="text-navy">Schedule only</b> lists just the dates.
+          </p>
           {saved && <p className="mt-2 text-[11px] text-status-good">Dates saved — they now show on the licensing grid and in the export.</p>}
         </div>
       </div>
