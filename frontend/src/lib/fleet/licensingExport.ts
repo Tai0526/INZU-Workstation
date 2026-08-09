@@ -1,18 +1,30 @@
 import ExcelJS from 'exceljs'
 import type { Vehicle } from '@/lib/fleet/types'
-import { daysUntil, type DocumentRecord } from '@/lib/documents/types'
+import type { DocumentRecord } from '@/lib/documents/types'
 import type { LicCat } from '@/lib/documents/licensingConfig'
+import {
+  buildLicensingRows, rowFlags, matchesFilter, FILTER_LABEL,
+  type CellTone, type LicRow, type LicFilter,
+} from './licensingStatus'
 
 /**
  * Licensing expiry spreadsheet — current Road Tax / Insurance / Fitness /
  * FQM Inspection (any mix, incl. custom categories) per vehicle, with the
  * expiry date, days left and a plain-words status. One glance answers
- * "what do we need to renew, and by when".
+ * "what do we need to renew, and by when". The whole fleet, or only the
+ * vehicles matching a scope (expired / expiring soon / missing).
+ *
+ * Status comes from lib/fleet/licensingStatus — the SAME module the on-screen
+ * grid uses, so the sheet and the page can never disagree.
  *
  * Styled with the INZU palette (exceljs — the community `xlsx` can't style):
  * navy title bar, navy category bands, light header row, real Excel dates,
  * status colours, frozen header + fleet columns, and a filter row.
  */
+
+// Re-exported so existing importers (and tests) keep working from one place.
+export { cellStatus, buildLicensingRows } from './licensingStatus'
+export type { CellTone, LicRow } from './licensingStatus'
 
 // ── INZU palette (ARGB) ──────────────────────────────────────────────────────
 const NAVY = 'FF0F1B33'
@@ -27,46 +39,6 @@ const AMBER = 'FF8A6D10'
 const RED = 'FFB3261E'
 const RED_BG = 'FFFBEAE9'
 const AMBER_BG = 'FFFAF3DC'
-
-export type CellTone = 'valid' | 'expiring' | 'today' | 'expired' | 'missing' | 'quiet' | 'nodate'
-
-export interface LicExportRow {
-  fleet: string
-  reg: string
-  make: string
-  cells: { expiry: string; days: number | null; status: string; tone: CellTone }[]
-}
-
-/** Plain-words status for one vehicle × category. Pure — unit-tested. */
-export function cellStatus(expiry: string | undefined, required: boolean, today = new Date()): LicExportRow['cells'][number] {
-  if (!expiry) return { expiry: '', days: null, status: required ? 'MISSING' : 'Not on file', tone: required ? 'missing' : 'quiet' }
-  const days = daysUntil(expiry, today)
-  if (days === null) return { expiry, days: null, status: 'No expiry date', tone: 'nodate' }
-  if (days < 0) return { expiry, days, status: `EXPIRED ${-days} day${days === -1 ? '' : 's'} ago`, tone: 'expired' }
-  if (days === 0) return { expiry, days, status: 'Expires TODAY', tone: 'today' }
-  if (days <= 30) return { expiry, days, status: `Expiring in ${days} day${days === 1 ? '' : 's'}`, tone: 'expiring' }
-  return { expiry, days, status: 'Valid', tone: 'valid' }
-}
-
-/** Rows for the sheet: every branch vehicle × the chosen categories. Pure. */
-export function buildLicensingRows(
-  vehicles: Vehicle[],
-  docs: Pick<DocumentRecord, 'entity_id' | 'category' | 'superseded' | 'expiry_date'>[],
-  cats: LicCat[],
-  today = new Date(),
-): LicExportRow[] {
-  return [...vehicles]
-    .sort((a, b) => a.fleet_no.localeCompare(b.fleet_no, undefined, { numeric: true }))
-    .map((v) => ({
-      fleet: v.fleet_no,
-      reg: v.reg_plate,
-      make: [v.make, v.model].filter(Boolean).join(' '),
-      cells: cats.map((cat) => {
-        const cur = docs.find((d) => d.entity_id === v.id && d.category === cat.key && !d.superseded)
-        return cellStatus(cur?.expiry_date, cat.required, today)
-      }),
-    }))
-}
 
 const STATUS_STYLE: Record<CellTone, { color: string; bg?: string; bold?: boolean }> = {
   valid: { color: GOOD },
@@ -96,12 +68,19 @@ export function buildLicensingWorkbook(opts: {
   today?: Date
   /** Company logo (PNG, base64 without the data: prefix) — sits in the navy title bar. */
   logoBase64?: string
+  /** Limit the sheet to vehicles matching this state (default: the whole fleet). */
+  scope?: LicFilter
 }): { wb: ExcelJS.Workbook; filename: string } {
   const { vehicles, docs, cats, branchLabel, logoBase64 } = opts
+  const scope: LicFilter = opts.scope ?? 'all'
   const today = opts.today ?? new Date()
-  const rows = buildLicensingRows(vehicles, docs, cats, today)
+  // Same status module as the page, so a filtered sheet contains exactly the
+  // vehicles the matching on-screen filter shows.
+  const allRows = buildLicensingRows(vehicles, docs, cats, today)
+  const rows: LicRow[] = scope === 'all' ? allRows : allRows.filter((r) => matchesFilter(rowFlags(r.cells), scope))
   const stamp = today.toISOString().slice(0, 10)
   const lastCol = 3 + cats.length * 3
+  const scopeLabel = scope === 'all' ? '' : FILTER_LABEL[scope]
 
   const wb = new ExcelJS.Workbook()
   wb.creator = 'INZU Workstation'
@@ -120,7 +99,7 @@ export function buildLicensingWorkbook(opts: {
   title.height = logoBase64 ? 42 : 28
   ws.mergeCells(1, 1, 1, lastCol)
   const t = ws.getCell(1, 1)
-  t.value = `Vehicle Licensing — ${branchLabel}`
+  t.value = scopeLabel ? `Vehicle Licensing — ${branchLabel} · ${scopeLabel}` : `Vehicle Licensing — ${branchLabel}`
   t.font = { name: 'Calibri', size: 14, bold: true, color: { argb: WHITE } }
   t.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } }
   t.alignment = { vertical: 'middle', horizontal: logoBase64 ? 'center' : 'left', indent: 1 }
@@ -133,7 +112,7 @@ export function buildLicensingWorkbook(opts: {
   // Row 2 — quiet subtitle.
   ws.mergeCells(2, 1, 2, lastCol)
   const s = ws.getCell(2, 1)
-  s.value = `Generated ${stamp} · ${rows.length} vehicle${rows.length === 1 ? '' : 's'} · ${cats.map((c) => c.short).join(' · ')}`
+  s.value = `Generated ${stamp} · ${rows.length} vehicle${rows.length === 1 ? '' : 's'}${scopeLabel ? ` matching "${scopeLabel}" (of ${allRows.length})` : ''} · ${cats.map((c) => c.short).join(' · ')}`
   s.font = { size: 9, color: { argb: MUTED } }
   s.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 }
   ws.getRow(2).height = 15
@@ -200,7 +179,19 @@ export function buildLicensingWorkbook(opts: {
     })
   })
 
-  return { wb, filename: `Licensing Expiry - ${branchLabel} - ${stamp}.xlsx` }
+  // A filtered export can legitimately match nothing — say so in the sheet
+  // rather than handing over a file that looks broken.
+  if (rows.length === 0) {
+    ws.mergeCells(5, 1, 5, lastCol)
+    const empty = ws.getCell(5, 1)
+    empty.value = scopeLabel ? `No vehicles match "${scopeLabel}" — nothing to action.` : 'No vehicles to list.'
+    empty.font = { size: 11, italic: true, color: { argb: MUTED } }
+    empty.alignment = { vertical: 'middle', horizontal: 'center' }
+    ws.getRow(5).height = 26
+  }
+
+  const scopeFile = scope === 'all' ? '' : ` (${FILTER_LABEL[scope]})`
+  return { wb, filename: `Licensing Expiry - ${branchLabel}${scopeFile} - ${stamp}.xlsx` }
 }
 
 /** Fetch the app logo as base64 for the banner; quietly skip if unavailable. */
@@ -224,6 +215,7 @@ export async function exportLicensingXlsx(opts: {
   docs: DocumentRecord[]
   cats: LicCat[]
   branchLabel: string
+  scope?: LicFilter
 }) {
   const logoBase64 = await fetchLogoBase64()
   const { wb, filename } = buildLicensingWorkbook({ ...opts, logoBase64 })

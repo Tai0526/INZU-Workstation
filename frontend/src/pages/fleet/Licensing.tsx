@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Search, Eye, Wrench, ChevronRight, Download, Settings, Plus, Trash2, FileSpreadsheet } from 'lucide-react'
+import { Search, Eye, Wrench, Download, Settings, Plus, Trash2, FileSpreadsheet, ArrowUpDown, AlertTriangle } from 'lucide-react'
 import clsx from 'clsx'
 import { useAuth } from '@/auth/AuthContext'
 import { ROLES, BRANCHES } from '@/lib/roles'
@@ -12,21 +12,40 @@ import VehicleDocsModal from '@/components/fleet/VehicleDocsModal'
 import { useVehicles } from '@/lib/fleet/store'
 import type { Vehicle } from '@/lib/fleet/types'
 import { useDocuments } from '@/lib/documents/store'
-import { docStatus, type DocumentRecord } from '@/lib/documents/types'
+import type { DocumentRecord } from '@/lib/documents/types'
 import { useLicensingCats, licensingConfigStore, type LicCat } from '@/lib/documents/licensingConfig'
-import { exportLicensingXlsx } from '@/lib/fleet/licensingExport'
-
-type VStatus = 'none' | 'noncompliant' | 'expiring' | 'compliant'
-type FilterKey = 'all' | VStatus
-
-const STATUS_META: Record<VStatus, { label: string; accent: string; chip: string }> = {
-  none: { label: 'No documents', accent: 'border-[#7f1d1d] bg-[#7f1d1d]/[0.07]', chip: 'bg-[#7f1d1d]/15 text-[#7f1d1d]' },
-  noncompliant: { label: 'Action needed', accent: 'border-status-critical bg-status-critical/[0.04]', chip: 'bg-status-critical/10 text-status-critical' },
-  expiring: { label: 'Expiring soon', accent: 'border-status-warning bg-status-warning/[0.05]', chip: 'bg-status-warning/15 text-[#8a6d10]' },
-  compliant: { label: 'Compliant', accent: 'border-status-good bg-status-good/[0.04]', chip: 'bg-status-good/10 text-status-good' },
-}
+import {
+  rowFlags, matchesFilter, normaliseFilter, daysChip, buildLicensingRows,
+  EXPIRING_WINDOW_DAYS, type CellTone, type LicCell, type LicFilter, type LicFlags,
+} from '@/lib/fleet/licensingStatus'
 
 const inputCls = 'w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand'
+
+/** Days-left chip styling — the same colour language as the exported sheet. */
+const TONE: Record<CellTone, { chip: string; bar: string }> = {
+  valid: { chip: 'bg-status-good/10 text-status-good', bar: 'border-status-good' },
+  expiring: { chip: 'bg-status-warning/20 text-[#8a6d10] font-semibold', bar: 'border-status-warning' },
+  today: { chip: 'bg-status-critical/15 text-status-critical font-bold', bar: 'border-status-critical' },
+  expired: { chip: 'bg-status-critical/15 text-status-critical font-bold', bar: 'border-status-critical' },
+  missing: { chip: 'bg-[#7f1d1d]/10 text-[#7f1d1d] font-semibold', bar: 'border-[#7f1d1d]' },
+  quiet: { chip: 'bg-navy/5 text-status-neutral', bar: 'border-black/10' },
+  nodate: { chip: 'bg-navy/5 text-status-neutral', bar: 'border-black/10' },
+}
+
+/** Short date for the grid — "15 Aug 26". */
+function shortDate(iso: string): string {
+  const d = new Date(`${iso}T00:00:00`)
+  if (Number.isNaN(d.getTime())) return iso
+  return d.toLocaleDateString('en', { day: '2-digit', month: 'short', year: '2-digit' })
+}
+
+/** The worst state on a row — drives its left accent bar. */
+function worstTone(f: LicFlags): CellTone {
+  if (f.expired) return 'expired'
+  if (f.missing) return 'missing'
+  if (f.expiring) return 'expiring'
+  return 'valid'
+}
 
 export default function Licensing() {
   const { user } = useAuth()
@@ -40,52 +59,55 @@ export default function Licensing() {
   const docs = useDocuments()
   const cats = useLicensingCats()
   const [q, setQ] = useState('')
-  const [filter, setFilter] = useState<FilterKey>('all')
-  useDeepLink(['filter'], (p) => { const f = p.get('filter'); if (f) setFilter(f as FilterKey) })
+  const [filter, setFilter] = useState<LicFilter>('all')
+  useDeepLink(['filter'], (p) => setFilter(normaliseFilter(p.get('filter'))))
+  const [sort, setSort] = useState<'urgency' | 'fleet'>('urgency')
   const [picked, setPicked] = useState<Vehicle | null>(null)
   const [manageOpen, setManageOpen] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
 
   const branchVehicles = useMemo(() => vehicles.filter((v) => v.branch === branch), [vehicles, branch])
 
+  // One pass, shared with the exported sheet (lib/fleet/licensingStatus).
   const fleet = useMemo(() => {
-    return branchVehicles
-      .map((v) => {
-        const cells = cats.map((cat) => {
-          const cur = docs.find((d) => d.entity_id === v.id && d.category === cat.key && !d.superseded)
-          return { cat, state: (cur ? docStatus(cur) : 'missing') as ReturnType<typeof docStatus> | 'missing' }
-        })
-        const required = cells.filter((c) => c.cat.required)
-        const reqPresent = required.filter((c) => c.state !== 'missing')
-        const anyPresent = cells.some((c) => c.state !== 'missing')
-        // Compliance counts REQUIRED documents; an uploaded optional document
-        // that has expired still needs action (it's on file and out of date).
-        const anyExpired = cells.some((c) => c.state === 'expired')
-        const missingReq = required.some((c) => c.state === 'missing')
-        const status: VStatus =
-          !anyPresent && required.length > 0 ? 'none'
-            : anyExpired || missingReq ? 'noncompliant'
-              : cells.some((c) => c.state === 'expiring') ? 'expiring'
-                : 'compliant'
-        return { v, cells, present: reqPresent.length, reqTotal: required.length, status }
-      })
-      .sort((a, b) => a.v.fleet_no.localeCompare(b.v.fleet_no))
+    const byFleet = new Map(branchVehicles.map((v) => [v.fleet_no, v]))
+    return buildLicensingRows(branchVehicles, docs, cats).map((r) => ({
+      row: r,
+      v: byFleet.get(r.fleet)!,
+      flags: rowFlags(r.cells),
+    }))
   }, [branchVehicles, docs, cats])
 
+  // Counts OVERLAP by design: a bus with an expired licence and a missing
+  // certificate is counted under both, because both need chasing.
   const counts = useMemo(() => ({
     all: fleet.length,
-    compliant: fleet.filter((f) => f.status === 'compliant').length,
-    expiring: fleet.filter((f) => f.status === 'expiring').length,
-    noncompliant: fleet.filter((f) => f.status === 'noncompliant').length,
-    none: fleet.filter((f) => f.status === 'none').length,
+    compliant: fleet.filter((f) => f.flags.compliant).length,
+    expiring: fleet.filter((f) => f.flags.expiring).length,
+    expired: fleet.filter((f) => f.flags.expired).length,
+    missing: fleet.filter((f) => f.flags.missing).length,
   }), [fleet])
+
+  // Document-level totals — "how many renewals", not "how many buses".
+  const docCounts = useMemo(() => {
+    let expired = 0, expiring = 0, missing = 0
+    for (const f of fleet) for (const c of f.row.cells) {
+      if (c.tone === 'expired') expired++
+      else if (c.tone === 'expiring' || c.tone === 'today') expiring++
+      else if (c.tone === 'missing') missing++
+    }
+    return { expired, expiring, missing }
+  }, [fleet])
 
   const rows = useMemo(() => {
     const term = q.trim().toLowerCase()
-    return fleet
-      .filter((f) => !term || [f.v.fleet_no, f.v.reg_plate].some((x) => x.toLowerCase().includes(term)))
-      .filter((f) => filter === 'all' || f.status === filter)
-  }, [fleet, q, filter])
+    const list = fleet
+      .filter((f) => !term || [f.row.fleet, f.row.reg].some((x) => x.toLowerCase().includes(term)))
+      .filter((f) => matchesFilter(f.flags, filter))
+    return sort === 'fleet'
+      ? [...list].sort((a, b) => a.row.fleet.localeCompare(b.row.fleet, undefined, { numeric: true }))
+      : [...list].sort((a, b) => a.flags.urgency - b.flags.urgency || a.row.fleet.localeCompare(b.row.fleet, undefined, { numeric: true }))
+  }, [fleet, q, filter, sort])
 
   const requiredShorts = cats.filter((c) => c.required).map((c) => c.short).join(', ')
 
@@ -94,7 +116,7 @@ export default function Licensing() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="max-w-2xl text-sm text-status-neutral">
-            Pick a vehicle to view or upload its documents{requiredShorts ? ` — ${requiredShorts}` : ''}.
+            Every vehicle's documents with the days left before each one expires{requiredShorts ? ` — ${requiredShorts}` : ''}. Click a row to view or upload.
           </p>
           <p className="mt-1 inline-flex items-center gap-1.5 text-xs text-status-neutral">
             <Wrench size={13} className="text-brand" /> Maintained by Workshop · Operations is alerted to any gaps.
@@ -107,69 +129,103 @@ export default function Licensing() {
         </div>
       </div>
 
-      {/* Summary + filter */}
+      {/* What needs doing, in documents rather than vehicles */}
+      {(docCounts.expired > 0 || docCounts.expiring > 0 || docCounts.missing > 0) && (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-xl border border-status-warning/40 bg-status-warning/10 px-4 py-2.5 text-sm text-navy">
+          <AlertTriangle size={16} className="shrink-0 text-[#8a6d10]" />
+          {docCounts.expired > 0 && <span><b className="text-status-critical">{docCounts.expired}</b> document{docCounts.expired === 1 ? '' : 's'} expired</span>}
+          {docCounts.expiring > 0 && <span><b className="text-[#8a6d10]">{docCounts.expiring}</b> expiring within {EXPIRING_WINDOW_DAYS} days</span>}
+          {docCounts.missing > 0 && <span><b className="text-[#7f1d1d]">{docCounts.missing}</b> required document{docCounts.missing === 1 ? '' : 's'} not on file</span>}
+        </div>
+      )}
+
+      {/* Filters — a vehicle can appear under more than one */}
       <StatChips
         active={filter}
-        onPick={(v) => setFilter(v)}
+        onPick={(v) => setFilter(v as LicFilter)}
         stats={[
           { value: 'all', label: 'All vehicles', count: counts.all, tone: 'neutral' },
           { value: 'compliant', label: 'Compliant', count: counts.compliant, tone: 'good' },
           { value: 'expiring', label: 'Expiring soon', count: counts.expiring, tone: 'warning' },
-          { value: 'noncompliant', label: 'Action needed', count: counts.noncompliant, tone: 'critical' },
-          { value: 'none', label: 'No documents', count: counts.none, tone: 'critical' },
+          { value: 'expired', label: 'Expired', count: counts.expired, tone: 'critical' },
+          { value: 'missing', label: 'Missing documents', count: counts.missing, tone: 'critical' },
         ]}
       />
 
-      <div className="relative max-w-sm">
-        <Search size={15} className="pointer-events-none absolute left-3 top-2.5 text-status-neutral" />
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search fleet no or plate…"
-          className="w-full rounded-lg border border-black/15 bg-white py-2 pl-9 pr-3 text-sm text-navy outline-none focus:border-brand" />
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative max-w-sm flex-1">
+          <Search size={15} className="pointer-events-none absolute left-3 top-2.5 text-status-neutral" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search fleet no or plate…"
+            className="w-full rounded-lg border border-black/15 bg-white py-2 pl-9 pr-3 text-sm text-navy outline-none focus:border-brand" />
+        </div>
+        <button onClick={() => setSort((s) => (s === 'urgency' ? 'fleet' : 'urgency'))}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-black/15 bg-white px-3 py-2 text-sm font-medium text-navy hover:border-brand"
+          title="Switch between most-urgent-first and fleet order">
+          <ArrowUpDown size={14} className="text-status-neutral" /> {sort === 'urgency' ? 'Most urgent first' : 'Fleet order'}
+        </button>
+        <span className="text-xs text-status-neutral">Showing {rows.length} of {fleet.length}</span>
       </div>
 
-      {/* Vehicle cards */}
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-        {rows.map((f) => {
-          const meta = STATUS_META[f.status]
-          const missing = f.cells.filter((c) => c.state === 'missing' && c.cat.required).map((c) => c.cat.short)
-          const expiringList = f.cells.filter((c) => c.state === 'expiring').map((c) => c.cat.short)
-          const expiredList = f.cells.filter((c) => c.state === 'expired').map((c) => c.cat.short)
-          return (
-            <button key={f.v.id} onClick={() => setPicked(f.v)}
-              className={clsx('card group border-l-4 p-4 text-left transition-shadow hover:shadow-cardhover', meta.accent)}>
-              <div className="flex items-center gap-2">
-                <div className="min-w-0 flex-1">
-                  <div className="truncate font-semibold text-navy">{f.v.fleet_no}</div>
-                  <div className="text-xs text-status-neutral">{f.v.reg_plate}</div>
-                </div>
-                <span className={clsx('rounded-full px-2 py-0.5 text-[11px] font-semibold', meta.chip)}>{meta.label}</span>
-              </div>
-              <div className="mt-3 flex items-center justify-between text-xs">
-                <span className="text-status-neutral"><b className="text-navy">{f.present}/{f.reqTotal}</b> required on file</span>
-                <ChevronRight size={15} className="text-status-neutral transition-transform group-hover:translate-x-0.5" />
-              </div>
-              {(missing.length > 0 || expiredList.length > 0 || expiringList.length > 0) && (
-                <div className="mt-1.5 space-y-0.5 text-[11px]">
-                  {missing.length > 0 && <div className="text-[#7f1d1d]">Missing: {missing.join(', ')}</div>}
-                  {expiredList.length > 0 && <div className="text-status-critical">Expired: {expiredList.join(', ')}</div>}
-                  {expiringList.length > 0 && <div className="text-[#8a6d10]">Expiring: {expiringList.join(', ')}</div>}
-                </div>
+      {/* The grid — the same shape as the exported sheet */}
+      <div className="card overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-navy text-white">
+              <tr>
+                <th className="sticky left-0 z-10 bg-navy px-4 py-2.5 font-medium">Vehicle</th>
+                {cats.map((c) => (
+                  <th key={c.key} className="whitespace-nowrap px-4 py-2.5 text-center font-medium">
+                    {c.label}
+                    {!c.required && <span className="ml-1 text-[10px] font-normal text-white/55">optional</span>}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(({ row, v, flags }) => (
+                <tr key={v.id} onClick={() => setPicked(v)}
+                  className="group cursor-pointer border-t border-black/5 hover:bg-canvas">
+                  {/* Solid background: this column stays put while the rest scrolls under it. */}
+                  <td className={clsx('sticky left-0 z-10 border-l-4 bg-surface px-4 py-2 group-hover:bg-canvas', TONE[worstTone(flags)].bar)}>
+                    <div className="font-semibold text-navy">{row.fleet}</div>
+                    <div className="text-[11px] text-status-neutral">{row.reg}</div>
+                    {flags.noneOnFile && <div className="text-[10px] font-medium text-[#7f1d1d]">nothing on file</div>}
+                  </td>
+                  {row.cells.map((cell, ci) => <DocCell key={cats[ci].key} cell={cell} />)}
+                </tr>
+              ))}
+              {rows.length === 0 && (
+                <tr><td colSpan={cats.length + 1} className="px-4 py-12 text-center text-sm text-status-neutral">
+                  {filter === 'all' ? 'No vehicles match.' : 'Nothing in this group — good news.'}
+                </td></tr>
               )}
-            </button>
-          )
-        })}
-        {rows.length === 0 && (
-          <div className="col-span-full rounded-xl border border-dashed border-black/15 px-6 py-12 text-center text-sm text-status-neutral">
-            {filter === 'all' ? 'No vehicles match.' : 'No vehicles in this group.'}
-          </div>
-        )}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       {!canToggle && <p className="text-xs text-status-neutral">Showing {branchLabel} only — your role is locked to this branch.</p>}
 
       <VehicleDocsModal vehicle={picked} open={!!picked} onClose={() => setPicked(null)} canEdit={editable} />
       <ManageCatsModal open={manageOpen} onClose={() => setManageOpen(false)} />
-      <ExportModal open={exportOpen} onClose={() => setExportOpen(false)} vehicles={branchVehicles} docs={docs} branchLabel={branchLabel} />
+      <ExportModal open={exportOpen} onClose={() => setExportOpen(false)} vehicles={branchVehicles} docs={docs}
+        branchLabel={branchLabel} pageFilter={filter} />
     </div>
+  )
+}
+
+/** One document's expiry date + days-left chip. */
+function DocCell({ cell }: { cell: LicCell }) {
+  const tone = TONE[cell.tone]
+  return (
+    <td className="px-4 py-2 text-center" title={cell.status}>
+      <div className="flex items-center justify-center gap-1.5">
+        <span className={clsx('text-xs', cell.expiry ? 'text-navy' : 'text-status-neutral')}>{cell.expiry ? shortDate(cell.expiry) : '—'}</span>
+        <span className={clsx('rounded-full px-1.5 py-0.5 text-[10px] leading-none', tone.chip)}>
+          {cell.tone === 'missing' ? 'missing' : daysChip(cell)}
+        </span>
+      </div>
+    </td>
   )
 }
 
@@ -228,51 +284,102 @@ function ManageCatsModal({ open, onClose }: { open: boolean; onClose: () => void
   )
 }
 
-/** Pick which categories go into the expiry spreadsheet. */
-function ExportModal({ open, onClose, vehicles, docs, branchLabel }: {
-  open: boolean; onClose: () => void; vehicles: Vehicle[]; docs: DocumentRecord[]; branchLabel: string
+const SCOPES: { key: LicFilter; label: string; hint: string }[] = [
+  { key: 'all', label: 'Whole fleet', hint: 'Every vehicle, whatever its state' },
+  { key: 'expired', label: 'Expired only', hint: 'Vehicles with a document already out of date' },
+  { key: 'expiring', label: 'Expiring soon', hint: `Anything due within ${EXPIRING_WINDOW_DAYS} days` },
+  { key: 'missing', label: 'Missing documents', hint: 'A required document never uploaded' },
+]
+
+/** Pick which categories, and how much of the fleet, goes into the sheet. */
+function ExportModal({ open, onClose, vehicles, docs, branchLabel, pageFilter }: {
+  open: boolean; onClose: () => void; vehicles: Vehicle[]; docs: DocumentRecord[]; branchLabel: string; pageFilter: LicFilter
 }) {
   const cats = useLicensingCats()
   const [sel, setSel] = useState<Set<string>>(new Set())
+  const [scope, setScope] = useState<LicFilter>('all')
+  const [busy, setBusy] = useState(false)
   const [seen, setSeen] = useState(false)
-  // Default each time the dialog opens: everything required.
-  if (open && !seen) { setSeen(true); setSel(new Set(cats.filter((c) => c.required).map((c) => c.key))) }
+  // Each time it opens: every required category, and the scope the user is
+  // already looking at (so "filter to Expired, hit Export" does what it says).
+  if (open && !seen) {
+    setSeen(true)
+    setSel(new Set(cats.filter((c) => c.required).map((c) => c.key)))
+    setScope(SCOPES.some((s) => s.key === pageFilter) ? pageFilter : 'all')
+  }
   if (!open && seen) setSeen(false)
 
   const toggle = (k: string) => setSel((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n })
   const chosen: LicCat[] = cats.filter((c) => sel.has(c.key))
 
-  function doExport() {
-    if (chosen.length === 0) return
-    void exportLicensingXlsx({ vehicles, docs, cats: chosen, branchLabel })
-    onClose()
+  // Live count of what the chosen scope will actually list.
+  const willList = useMemo(() => {
+    if (chosen.length === 0) return 0
+    const rows = buildLicensingRows(vehicles, docs, chosen)
+    return scope === 'all' ? rows.length : rows.filter((r) => matchesFilter(rowFlags(r.cells), scope)).length
+  }, [vehicles, docs, chosen, scope])
+
+  async function doExport() {
+    if (chosen.length === 0 || busy) return
+    setBusy(true)
+    try {
+      // Loaded on demand: the spreadsheet engine is large and only needed here.
+      const { exportLicensingXlsx } = await import('@/lib/fleet/licensingExport')
+      await exportLicensingXlsx({ vehicles, docs, cats: chosen, branchLabel, scope })
+      onClose()
+    } finally { setBusy(false) }
   }
 
   return (
     <Modal open={open} onClose={onClose} title="Export licensing expiry"
-      subtitle="A spreadsheet of every vehicle with the expiry date, days left and status for each chosen document — one alone, or all of them side by side."
+      subtitle="A spreadsheet of each chosen document's expiry date, days left and status — the whole fleet, or only what needs action."
       footer={<>
         <Button variant="secondary" onClick={onClose}>Cancel</Button>
-        <Button onClick={doExport} disabled={chosen.length === 0}><FileSpreadsheet size={15} /> Export .xlsx</Button>
+        <Button onClick={doExport} disabled={chosen.length === 0 || willList === 0 || busy}>
+          <FileSpreadsheet size={15} /> {busy ? 'Building…' : 'Export .xlsx'}
+        </Button>
       </>}>
-      <div className="mb-2 flex gap-2 text-xs">
-        <button onClick={() => setSel(new Set(cats.map((c) => c.key)))} className="rounded-md border border-black/15 bg-white px-2 py-1 font-medium text-navy hover:border-brand">Everything</button>
-        <button onClick={() => setSel(new Set(cats.filter((c) => c.required).map((c) => c.key)))} className="rounded-md border border-black/15 bg-white px-2 py-1 font-medium text-navy hover:border-brand">Required only</button>
+      <div className="space-y-4">
+        <div>
+          <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-status-neutral">Which vehicles</h4>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {SCOPES.map((s) => (
+              <button key={s.key} onClick={() => setScope(s.key)}
+                className={clsx('rounded-xl border-2 px-3 py-2 text-left transition-colors', scope === s.key ? 'border-brand bg-brand-tint/30' : 'border-black/10 hover:border-black/25')}>
+                <div className="text-sm font-medium text-navy">{s.label}</div>
+                <div className="text-[11px] leading-snug text-status-neutral">{s.hint}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <div className="mb-2 flex items-center gap-2">
+            <h4 className="text-xs font-semibold uppercase tracking-wide text-status-neutral">Which documents</h4>
+            <div className="ml-auto flex gap-2 text-xs">
+              <button onClick={() => setSel(new Set(cats.map((c) => c.key)))} className="rounded-md border border-black/15 bg-white px-2 py-1 font-medium text-navy hover:border-brand">Everything</button>
+              <button onClick={() => setSel(new Set(cats.filter((c) => c.required).map((c) => c.key)))} className="rounded-md border border-black/15 bg-white px-2 py-1 font-medium text-navy hover:border-brand">Required only</button>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {cats.map((cat) => (
+              <label key={cat.key} className={clsx('flex cursor-pointer items-center gap-2.5 rounded-xl border-2 px-3 py-2.5 text-sm', sel.has(cat.key) ? 'border-brand bg-brand-tint/25' : 'border-black/10 hover:border-black/25')}>
+                <input type="checkbox" className="h-4 w-4 accent-[#0F1B33]" checked={sel.has(cat.key)} onChange={() => toggle(cat.key)} />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium text-navy">{cat.label}</span>
+                  {!cat.required && <span className="text-[10px] text-status-neutral">optional</span>}
+                </span>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        <p className={clsx('rounded-lg px-3 py-2 text-[11px]', willList === 0 ? 'bg-status-critical/5 text-status-critical' : 'bg-canvas text-status-neutral')}>
+          {chosen.length === 0 ? 'Choose at least one document to export.'
+            : willList === 0 ? `No ${branchLabel} vehicle matches “${SCOPES.find((s) => s.key === scope)!.label}” for the chosen documents — nothing to export, which is good news.`
+              : `${willList} of ${vehicles.length} ${branchLabel} vehicle${vehicles.length === 1 ? '' : 's'} will be listed, sorted by fleet number.`}
+        </p>
       </div>
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-        {cats.map((cat) => (
-          <label key={cat.key} className={clsx('flex cursor-pointer items-center gap-2.5 rounded-xl border-2 px-3 py-2.5 text-sm', sel.has(cat.key) ? 'border-brand bg-brand-tint/25' : 'border-black/10 hover:border-black/25')}>
-            <input type="checkbox" className="h-4 w-4 accent-[#0F1B33]" checked={sel.has(cat.key)} onChange={() => toggle(cat.key)} />
-            <span className="min-w-0 flex-1">
-              <span className="block truncate font-medium text-navy">{cat.label}</span>
-              {!cat.required && <span className="text-[10px] text-status-neutral">optional</span>}
-            </span>
-          </label>
-        ))}
-      </div>
-      <p className="mt-3 rounded-lg bg-canvas px-3 py-2 text-[11px] text-status-neutral">
-        {vehicles.length} vehicle{vehicles.length === 1 ? '' : 's'} in {branchLabel} will be listed, sorted by fleet number.
-      </p>
     </Modal>
   )
 }
