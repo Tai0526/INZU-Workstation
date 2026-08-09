@@ -1,223 +1,311 @@
 import { useMemo } from 'react'
 import { Link } from 'react-router-dom'
-import { formatDistanceToNow } from 'date-fns'
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
-import { Truck, ShieldCheck, ArrowRight, FileWarning, Activity, ChevronRight } from 'lucide-react'
+import { Truck, ShieldCheck, ChevronRight, Handshake, CalendarCheck, Archive, AlertOctagon } from 'lucide-react'
+import clsx from 'clsx'
 import { useAuth } from '@/auth/AuthContext'
 import { BRANCHES } from '@/lib/roles'
-import KpiCard from '@/components/ui/KpiCard'
-import StatusBadge from '@/components/ui/StatusBadge'
-import { useVehicles } from '@/lib/fleet/store'
+import { useAllVehicles } from '@/lib/fleet/store'
+import { useDispositions, DISPOSITION_META } from '@/lib/fleet/disposition'
+import { STATUS_META, type VehicleStatus } from '@/lib/fleet/types'
+import { useOperatedVehicles, OPERATED_STATUS_LABEL } from '@/lib/fleet/operated'
 import { useDocuments } from '@/lib/documents/store'
-import { DOC_STATUS_META, docStatus, typeLabelOf } from '@/lib/documents/types'
 import { useLicensingCats } from '@/lib/documents/licensingConfig'
+import { buildLicensingRows, rowFlags, daysChip, EXPIRING_WINDOW_DAYS } from '@/lib/fleet/licensingStatus'
+import { useBookings, bookingKey, bookingState } from '@/lib/fleet/inspectionBookings'
 
-function rel(iso: string): string {
-  try {
-    return formatDistanceToNow(new Date(iso), { addSuffix: true })
-  } catch {
-    return ''
-  }
+/**
+ * Fleet Overview — one card per page in the section, each answering the
+ * question that page exists to answer: what have we got and is it on the road
+ * (Register), is the paperwork in order (Licensing), and what are we running
+ * for someone else (Operated). Every number here is computed with the same
+ * helpers the page itself uses, so the two can never disagree.
+ */
+
+const todayIso = () => new Date().toISOString().slice(0, 10)
+const shortDate = (iso: string) => {
+  const d = new Date(`${iso}T00:00:00`)
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' })
+}
+
+const STATUS_BAR: Record<VehicleStatus, string> = {
+  active: 'bg-status-good', under_repair: 'bg-status-warning', grounded: 'bg-status-critical',
 }
 
 export default function FleetOverview() {
   const { user } = useAuth()
   const branch = user!.branch
   const branchLabel = BRANCHES.find((b) => b.code === branch)!.short
+  const today = todayIso()
 
-  const vehicles = useVehicles()
+  const allVehicles = useAllVehicles()
+  const disp = useDispositions()
   const docs = useDocuments()
+  const cats = useLicensingCats()
+  const bookings = useBookings()
+  const operated = useOperatedVehicles().filter((v) => v.branch === branch)
 
-  const fleet = useMemo(() => vehicles.filter((v) => v.branch === branch), [vehicles, branch])
-  const branchDocs = useMemo(() => docs.filter((d) => d.branch === branch && !d.superseded), [docs, branch])
+  // The working fleet excludes retired vehicles, exactly as every other page does.
+  const fleet = useMemo(() => allVehicles.filter((v) => v.branch === branch && !disp[v.id]), [allVehicles, branch, disp])
+  const retired = useMemo(() => allVehicles.filter((v) => v.branch === branch && disp[v.id]), [allVehicles, branch, disp])
 
-  const counts = useMemo(() => {
-    const active = fleet.filter((v) => v.status === 'active').length
-    const repair = fleet.filter((v) => v.status === 'under_repair').length
-    const grounded = fleet.filter((v) => v.status === 'grounded').length
-    const total = fleet.length
-    return { active, repair, grounded, total, avail: total ? Math.round((active / total) * 100) : 0 }
-  }, [fleet])
-
-  // ── Licensing attention (prioritised: expired first, then soonest) ──
-  const attention = useMemo(() => {
-    const items = branchDocs
-      .map((d) => ({ d, st: docStatus(d) }))
-      .filter(({ st }) => st === 'expired' || st === 'expiring')
-    const order: Record<string, number> = { expired: 0, expiring: 1 }
-    return items.sort((a, b) => order[a.st] - order[b.st] || a.d.expiry_date.localeCompare(b.d.expiry_date))
-  }, [branchDocs])
-
-  const expired = attention.filter((a) => a.st === 'expired').length
-  const expiring = attention.filter((a) => a.st === 'expiring').length
-
-  const licCats = useLicensingCats()
-  const incomplete = useMemo(
-    () => {
-      const requiredCats = licCats.filter((c) => c.required).map((c) => c.key)
-      return fleet.filter((v) =>
-        requiredCats.some((cat) => !branchDocs.some((d) => d.entity_id === v.id && d.category === cat)),
-      ).length
-    },
-    [fleet, branchDocs, licCats],
-  )
-
-  // ── Seats available by seating capacity (active vehicles only) ──
-  const capacityData = useMemo(() => {
-    const m = new Map<number, number>() // capacity → number of active vehicles
-    for (const v of fleet) {
-      if (v.status !== 'active') continue
+  // ── Vehicle Register ──
+  const register = useMemo(() => {
+    const by = (s: VehicleStatus) => fleet.filter((v) => v.status === s).length
+    const active = by('active')
+    const seats = fleet.filter((v) => v.status === 'active').reduce((s, v) => s + (v.capacity ?? 0), 0)
+    const capacityMix = [...fleet.filter((v) => v.status === 'active').reduce((m, v) => {
       const cap = v.capacity ?? 0
-      if (cap <= 0) continue
-      m.set(cap, (m.get(cap) ?? 0) + 1)
+      if (cap > 0) m.set(cap, (m.get(cap) ?? 0) + 1)
+      return m
+    }, new Map<number, number>()).entries()].sort((a, b) => b[0] - a[0])
+    return {
+      total: fleet.length, active, repair: by('under_repair'), grounded: by('grounded'), seats, capacityMix,
+      availability: fleet.length ? Math.round((active / fleet.length) * 100) : 0,
     }
-    return [...m.entries()]
-      .sort((a, b) => b[0] - a[0])
-      .map(([cap, n]) => ({ name: `${cap}-seat`, seats: cap * n, vehicles: n }))
   }, [fleet])
-  const totalSeats = useMemo(() => fleet.filter((v) => v.status === 'active').reduce((s, v) => s + (v.capacity ?? 0), 0), [fleet])
 
-  // ── Recent activity (audit) — latest 5 ──
-  const activity = useMemo(() => {
-    type Ev = { at: string; who: string; text: string }
-    const evs: Ev[] = []
-    for (const v of fleet) {
-      const created = v.created_at === v.updated_at
-      evs.push({ at: v.updated_at, who: created ? v.created_by : v.updated_by, text: created ? `added vehicle ${v.fleet_no}` : `updated vehicle ${v.fleet_no}` })
+  // ── Licensing — same helpers as the Licensing page, so the figures match ──
+  const licensing = useMemo(() => {
+    const rows = buildLicensingRows(fleet, docs, cats)
+    const byFleet = new Map(fleet.map((v) => [v.fleet_no, v]))
+    let expired = 0, expiring = 0, missing = 0, requiredSlots = 0, ok = 0
+    const attention: { fleet: string; cat: string; expiry: string; days: number | null; tone: 'expired' | 'expiring' }[] = []
+    for (const r of rows) {
+      r.cells.forEach((c, i) => {
+        const cat = cats[i]
+        if (cat?.required) requiredSlots++
+        if (c.tone === 'expired') { expired++; attention.push({ fleet: r.fleet, cat: cat.short, expiry: c.expiry, days: c.days, tone: 'expired' }); return }
+        if (c.tone === 'missing') { missing++; return }
+        if (c.tone === 'expiring' || c.tone === 'today') { expiring++; attention.push({ fleet: r.fleet, cat: cat.short, expiry: c.expiry, days: c.days, tone: 'expiring' }) }
+        if (cat?.required) ok++
+      })
     }
-    for (const d of branchDocs) {
-      evs.push({ at: d.uploaded_at, who: d.uploaded_by, text: `uploaded ${typeLabelOf(d)} for ${d.entity_label}` })
+    const compliantVehicles = rows.filter((r) => rowFlags(r.cells).compliant).length
+    // Expired first, then soonest to lapse.
+    attention.sort((a, b) => (a.tone === b.tone ? (a.days ?? 0) - (b.days ?? 0) : a.tone === 'expired' ? -1 : 1))
+
+    // Inspections still ahead of us (proposed or confirmed, not yet done).
+    const upcoming: { fleet: string; date: string; confirmed: boolean }[] = []
+    for (const r of rows) {
+      const v = byFleet.get(r.fleet)
+      if (!v) continue
+      cats.forEach((cat, i) => {
+        const b = bookings[bookingKey(v.id, cat.key)]
+        const st = bookingState(b, r.cells[i]?.expiry || undefined, today)
+        if (st === 'proposed' || st === 'confirmed') upcoming.push({ fleet: r.fleet, date: b!.date, confirmed: st === 'confirmed' })
+      })
     }
-    return evs.sort((a, b) => b.at.localeCompare(a.at)).slice(0, 5)
-  }, [fleet, branchDocs])
+    upcoming.sort((a, b) => a.date.localeCompare(b.date))
+    return {
+      expired, expiring, missing, attention, upcoming, compliantVehicles,
+      score: requiredSlots > 0 ? Math.round((ok / requiredSlots) * 100) : 100,
+    }
+  }, [fleet, docs, cats, bookings, today])
+
+  // ── Operated (contract) vehicles ──
+  const operatedStats = useMemo(() => {
+    const bySection = [...operated.reduce((m, v) => m.set(v.section || 'Unassigned', (m.get(v.section || 'Unassigned') ?? 0) + 1), new Map<string, number>()).entries()]
+      .sort((a, b) => b[1] - a[1])
+    return {
+      total: operated.length,
+      active: operated.filter((v) => v.status === 'active').length,
+      down: operated.filter((v) => v.status !== 'active').length,
+      owners: new Set(operated.map((v) => v.owner).filter(Boolean)).size,
+      bySection,
+    }
+  }, [operated])
+
+  const scoreTone = licensing.score >= 95 ? 'good' : licensing.score >= 80 ? 'warning' : 'critical'
+  const urgent = licensing.expired + register.grounded
 
   return (
-    <div className="page space-y-6">
+    <div className="page space-y-5">
       <p className="text-sm text-status-neutral">
-        Live summary of the Vehicle Register and Licensing for <span className="font-medium text-navy">{branchLabel}</span>.
+        What {branchLabel} is running, whether it is on the road, and whether its paperwork is in order.
       </p>
 
-      {/* Priority alerts — colour-coded to grab attention first */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <KpiCard label="Licensing expired" value={expired} tone={expired > 0 ? 'critical' : 'good'} sub={expired > 0 ? 'needs renewal now' : 'all current'} />
-        <KpiCard label="Expiring ≤30 days" value={expiring} tone={expiring > 0 ? 'warning' : 'good'} sub={expiring > 0 ? 'renew soon' : 'none due'} />
-        <KpiCard label="Grounded" value={counts.grounded} tone={counts.grounded > 0 ? 'critical' : 'good'} sub="out of service" />
-        <KpiCard label="In workshop" value={counts.repair} tone={counts.repair > 0 ? 'warning' : 'good'} sub="under repair" />
-      </div>
+      {/* One line for anything that needs acting on today */}
+      {urgent > 0 && (
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 rounded-xl border border-status-critical/30 bg-status-critical/5 px-4 py-3 text-sm">
+          <AlertOctagon size={16} className="shrink-0 text-status-critical" />
+          {licensing.expired > 0 && (
+            <Link to="/fleet/licensing?filter=expired" className="text-navy hover:underline">
+              <b className="text-status-critical">{licensing.expired}</b> document{licensing.expired === 1 ? '' : 's'} expired
+            </Link>
+          )}
+          {register.grounded > 0 && (
+            <Link to="/fleet/vehicles?status=grounded" className="text-navy hover:underline">
+              <b className="text-status-critical">{register.grounded}</b> vehicle{register.grounded === 1 ? '' : 's'} grounded
+            </Link>
+          )}
+          <span className="text-[11px] text-status-neutral">needs action today</span>
+        </div>
+      )}
 
-      {/* Fleet status — neutral KPIs */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-5">
-        <KpiCard label="Fleet availability" value={`${counts.avail}%`} highlight sub={`${counts.active} of ${counts.total} on road`} />
-        <KpiCard label="Total vehicles" value={counts.total} />
-        <KpiCard label="Active" value={counts.active} tone="good" />
-        <KpiCard label="Incomplete licensing" value={incomplete} tone={incomplete > 0 ? 'warning' : 'good'} sub="missing a doc" />
-        <KpiCard label="Documents on file" value={branchDocs.length} />
-      </div>
+      <div className="grid gap-5 lg:grid-cols-2">
+        {/* ── Vehicle Register ── */}
+        <SectionCard icon={Truck} title="Vehicle Register" to="/fleet/vehicles" linkLabel="Open register">
+          <div className="flex items-end justify-between">
+            <div>
+              <div className="font-display text-3xl font-bold leading-none text-navy">{register.availability}%</div>
+              <div className="mt-1 text-[11px] text-status-neutral">on the road — {register.active} of {register.total} vehicles</div>
+            </div>
+            <div className="text-right">
+              <div className="font-display text-xl font-bold leading-none text-navy">{register.seats.toLocaleString()}</div>
+              <div className="mt-1 text-[11px] text-status-neutral">seats available</div>
+            </div>
+          </div>
 
-      <div className="grid gap-6 lg:grid-cols-[1.4fr_1fr]">
-        {/* Needs attention — licensing first */}
-        <div className="card overflow-hidden">
-          <div className="flex items-center gap-2 border-b border-black/5 px-5 py-3.5">
-            <FileWarning size={16} className="text-brand" />
-            <h3 className="font-display text-sm font-bold text-navy">Licensing — needs attention</h3>
-            {attention.length > 0 && (
-              <span className="ml-2 rounded-full bg-status-critical/10 px-2 py-0.5 text-xs font-medium text-status-critical">{attention.length}</span>
+          {/* Status split — the register's whole story in one bar */}
+          <div className="mt-3 flex h-2.5 overflow-hidden rounded-full bg-canvas ring-1 ring-inset ring-black/5">
+            {(['active', 'under_repair', 'grounded'] as VehicleStatus[]).map((s) => {
+              const n = s === 'active' ? register.active : s === 'under_repair' ? register.repair : register.grounded
+              return n > 0 ? <div key={s} className={clsx('h-full', STATUS_BAR[s])} style={{ width: `${(n / Math.max(1, register.total)) * 100}%` }} title={`${STATUS_META[s].label}: ${n}`} /> : null
+            })}
+          </div>
+          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
+            {(['active', 'under_repair', 'grounded'] as VehicleStatus[]).map((s) => {
+              const n = s === 'active' ? register.active : s === 'under_repair' ? register.repair : register.grounded
+              return (
+                <span key={s} className="inline-flex items-center gap-1.5 text-status-neutral">
+                  <span className={clsx('h-2 w-2 rounded-full', STATUS_BAR[s])} />
+                  {STATUS_META[s].label} <b className="text-navy">{n}</b>
+                </span>
+              )
+            })}
+            {retired.length > 0 && (
+              <span className="inline-flex items-center gap-1.5 text-status-neutral" title={retired.map((v) => `${v.fleet_no} — ${DISPOSITION_META[disp[v.id].kind].label}`).join('\n')}>
+                <Archive size={11} /> Retired <b className="text-navy">{retired.length}</b>
+              </span>
             )}
-            <Link to="/fleet/licensing" className="ml-auto inline-flex items-center gap-1 text-xs text-brand hover:underline">
-              Open licensing <ChevronRight size={13} />
-            </Link>
           </div>
-          {attention.length === 0 ? (
-            <div className="flex flex-col items-center gap-2 px-6 py-10 text-center text-status-neutral">
-              <ShieldCheck size={24} className="text-status-good" />
-              <p className="text-sm">All licensing current for {branchLabel}.</p>
-            </div>
-          ) : (
-            <div className="max-h-96 divide-y divide-black/5 overflow-y-auto">
-              {attention.map(({ d, st }) => (
-                <Link to="/fleet/licensing" key={d.id} className="flex items-center gap-3 px-5 py-3 hover:bg-canvas">
-                  <StatusBadge tone={DOC_STATUS_META[st].tone}>{DOC_STATUS_META[st].label}</StatusBadge>
-                  <div className="min-w-0 flex-1">
-                    <div className="text-sm font-medium text-navy">{typeLabelOf(d)} — {d.entity_label}</div>
-                    <div className="text-xs text-status-neutral">Expiry {d.expiry_date || '—'}</div>
+
+          {register.capacityMix.length > 0 && (
+            <div className="mt-4 border-t border-black/5 pt-3">
+              <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-status-neutral">Active fleet by size</div>
+              <div className="space-y-1.5">
+                {register.capacityMix.map(([cap, n]) => (
+                  <div key={cap} className="flex items-center gap-2 text-xs">
+                    <span className="w-16 shrink-0 text-navy">{cap}-seat</span>
+                    <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-canvas">
+                      <div className="h-full rounded-full bg-brand" style={{ width: `${(n / Math.max(1, register.active)) * 100}%` }} />
+                    </div>
+                    <span className="w-24 shrink-0 text-right text-status-neutral">{n} bus{n === 1 ? '' : 'es'} · {(cap * n).toLocaleString()} seats</span>
                   </div>
-                  <ArrowRight size={15} className="text-status-neutral" />
-                </Link>
-              ))}
+                ))}
+              </div>
             </div>
           )}
-        </div>
+        </SectionCard>
 
-        {/* Recent activity (audit) — latest 5 */}
-        <div className="card overflow-hidden">
-          <div className="flex items-center gap-2 border-b border-black/5 px-5 py-3.5">
-            <Activity size={16} className="text-brand" />
-            <h3 className="font-display text-sm font-bold text-navy">Recent activity</h3>
-            <span className="ml-auto text-[11px] text-status-neutral">latest 5</span>
+        {/* ── Licensing & Documents ── */}
+        <SectionCard icon={ShieldCheck} title="Licensing & Documents" to="/fleet/licensing" linkLabel="Open licensing">
+          <div className="flex items-end justify-between">
+            <div>
+              <div className={clsx('font-display text-3xl font-bold leading-none', scoreTone === 'good' ? 'text-status-good' : scoreTone === 'warning' ? 'text-[#8a6d10]' : 'text-status-critical')}>
+                {licensing.score}%
+              </div>
+              <div className="mt-1 text-[11px] text-status-neutral">of required documents valid</div>
+            </div>
+            <div className="text-right">
+              <div className="font-display text-xl font-bold leading-none text-navy">{licensing.compliantVehicles}</div>
+              <div className="mt-1 text-[11px] text-status-neutral">vehicles fully in order</div>
+            </div>
           </div>
-          {activity.length === 0 ? (
-            <p className="px-5 py-8 text-center text-sm text-status-neutral">No activity yet.</p>
-          ) : (
-            <div className="max-h-96 divide-y divide-black/5 overflow-y-auto">
-              {activity.map((e, i) => (
-                <div key={i} className="px-5 py-2.5 text-sm">
-                  <span className="font-medium text-navy">{e.who}</span>{' '}
-                  <span className="text-status-neutral">{e.text}</span>
-                  <div className="text-[11px] text-status-neutral">{rel(e.at)}</div>
-                </div>
-              ))}
+          <div className="mt-3 h-2.5 overflow-hidden rounded-full bg-canvas ring-1 ring-inset ring-black/5">
+            <div className={clsx('h-full rounded-full transition-[width] duration-500', scoreTone === 'good' ? 'bg-status-good' : scoreTone === 'warning' ? 'bg-status-warning' : 'bg-status-critical')}
+              style={{ width: `${licensing.score}%` }} />
+          </div>
+          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-status-neutral">
+            <span>Expired <b className={licensing.expired ? 'text-status-critical' : 'text-navy'}>{licensing.expired}</b></span>
+            <span>Due in {EXPIRING_WINDOW_DAYS} days <b className={licensing.expiring ? 'text-[#8a6d10]' : 'text-navy'}>{licensing.expiring}</b></span>
+            <span>Not on file <b className={licensing.missing ? 'text-[#7f1d1d]' : 'text-navy'}>{licensing.missing}</b></span>
+          </div>
+
+          <div className="mt-4 border-t border-black/5 pt-3">
+            <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-status-neutral">Renew next</div>
+            {licensing.attention.length === 0 ? (
+              <p className="py-3 text-center text-xs text-status-neutral">Nothing expired or expiring — all current.</p>
+            ) : (
+              <div className="space-y-1">
+                {licensing.attention.slice(0, 5).map((a, i) => (
+                  <div key={i} className="flex items-center gap-2 text-xs">
+                    <span className="w-16 shrink-0 font-medium text-navy">{a.fleet}</span>
+                    <span className="min-w-0 flex-1 truncate text-status-neutral">{a.cat}</span>
+                    <span className="text-[10px] text-status-neutral">{a.expiry ? shortDate(a.expiry) : ''}</span>
+                    <span className={clsx('w-12 shrink-0 rounded-full px-1.5 py-0.5 text-center text-[10px] font-semibold',
+                      a.tone === 'expired' ? 'bg-status-critical/15 text-status-critical' : 'bg-status-warning/20 text-[#8a6d10]')}>
+                      {daysChip({ expiry: a.expiry, days: a.days, status: '', tone: a.tone })}
+                    </span>
+                  </div>
+                ))}
+                {licensing.attention.length > 5 && (
+                  <Link to="/fleet/licensing?filter=expired" className="block pt-1 text-[11px] text-brand hover:underline">
+                    +{licensing.attention.length - 5} more to renew
+                  </Link>
+                )}
+              </div>
+            )}
+          </div>
+
+          {licensing.upcoming.length > 0 && (
+            <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg bg-brand-tint/40 px-3 py-2 text-[11px] text-navy">
+              <CalendarCheck size={13} className="text-brand" />
+              <b>{licensing.upcoming.length}</b> inspection{licensing.upcoming.length === 1 ? '' : 's'} booked
+              <span className="text-status-neutral">next {shortDate(licensing.upcoming[0].date)} · {licensing.upcoming[0].fleet}</span>
             </div>
           )}
-        </div>
+        </SectionCard>
       </div>
 
-      {/* Composition by seating capacity + quick links */}
-      <div className="grid gap-6 lg:grid-cols-[1.4fr_1fr]">
-        <div className="card p-5">
-          <div className="mb-3 flex items-center justify-between">
-            <h3 className="font-display text-sm font-bold text-navy">Fleet by seating capacity</h3>
-            <span className="text-xs text-status-neutral">{totalSeats.toLocaleString()} seats available · active</span>
-          </div>
-          {capacityData.length === 0 ? (
-            <p className="py-8 text-center text-sm text-status-neutral">No active vehicles with seats.</p>
-          ) : (
-            <div className="h-56">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={capacityData} margin={{ top: 8, right: 8, bottom: 0, left: -20 }}>
-                  <XAxis dataKey="name" tick={{ fontSize: 12, fill: '#6B7280' }} axisLine={false} tickLine={false} />
-                  <YAxis allowDecimals={false} tick={{ fontSize: 12, fill: '#6B7280' }} axisLine={false} tickLine={false} />
-                  <Tooltip
-                    cursor={{ fill: 'rgba(209,107,33,0.06)' }}
-                    contentStyle={{ borderRadius: 10, border: '1px solid #eee', fontSize: 12 }}
-                    formatter={(v: number, _n: any, item: any) => [`${v} seats · ${item.payload.vehicles} bus${item.payload.vehicles === 1 ? '' : 'es'}`, 'Available']}
-                  />
-                  <Bar dataKey="seats" radius={[6, 6, 0, 0]} maxBarSize={64}>
-                    {capacityData.map((_, i) => (
-                      <Cell key={i} fill="#D16B21" />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
+      {/* ── Operated (contract) vehicles ── */}
+      <SectionCard icon={Handshake} title="Operated Vehicles" to="/fleet/operated" linkLabel="Open operated vehicles"
+        note="Vehicles we crew but do not own — no documents required from us.">
+        {operatedStats.total === 0 ? (
+          <p className="py-3 text-sm text-status-neutral">No contract vehicles recorded for {branchLabel}.</p>
+        ) : (
+          <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
+            <div>
+              <div className="font-display text-2xl font-bold leading-none text-navy">{operatedStats.total}</div>
+              <div className="mt-1 text-[11px] text-status-neutral">under our crews · {operatedStats.owners} owner{operatedStats.owners === 1 ? '' : 's'}</div>
             </div>
-          )}
-        </div>
-
-        <div className="card p-5">
-          <h3 className="mb-3 font-display text-sm font-bold text-navy">Jump to</h3>
-          <div className="space-y-2">
-            <Link to="/fleet/vehicles" className="flex items-center gap-3 rounded-lg border border-black/10 px-4 py-3 hover:bg-canvas">
-              <Truck size={16} className="text-brand" />
-              <span className="text-sm font-medium text-navy">Vehicle Register</span>
-              <ArrowRight size={15} className="ml-auto text-status-neutral" />
-            </Link>
-            <Link to="/fleet/licensing" className="flex items-center gap-3 rounded-lg border border-black/10 px-4 py-3 hover:bg-canvas">
-              <ShieldCheck size={16} className="text-brand" />
-              <span className="text-sm font-medium text-navy">Licensing &amp; Documents</span>
-              <ArrowRight size={15} className="ml-auto text-status-neutral" />
-            </Link>
+            <div>
+              <div className="font-display text-2xl font-bold leading-none text-status-good">{operatedStats.active}</div>
+              <div className="mt-1 text-[11px] text-status-neutral">{OPERATED_STATUS_LABEL.active.toLowerCase()}</div>
+            </div>
+            {operatedStats.down > 0 && (
+              <div>
+                <div className="font-display text-2xl font-bold leading-none text-[#8a6d10]">{operatedStats.down}</div>
+                <div className="mt-1 text-[11px] text-status-neutral">not available</div>
+              </div>
+            )}
+            <div className="flex flex-wrap gap-1.5">
+              {operatedStats.bySection.map(([section, n]) => (
+                <span key={section} className="rounded-full bg-navy/5 px-2.5 py-1 text-[11px] text-navy">{section} <b>{n}</b></span>
+              ))}
+            </div>
           </div>
-        </div>
-      </div>
+        )}
+      </SectionCard>
     </div>
+  )
+}
+
+/** A card that summarises one page of the section and links straight to it. */
+function SectionCard({ icon: Icon, title, to, linkLabel, note, children }: {
+  icon: typeof Truck; title: string; to: string; linkLabel: string; note?: string; children: React.ReactNode
+}) {
+  return (
+    <section className="card p-5">
+      <div className="mb-3 flex items-center gap-2">
+        <Icon size={16} className="text-brand" />
+        <h2 className="font-display text-sm font-bold text-navy">{title}</h2>
+        <Link to={to} className="ml-auto inline-flex items-center gap-1 text-xs font-medium text-brand hover:underline">
+          {linkLabel} <ChevronRight size={13} />
+        </Link>
+      </div>
+      {note && <p className="-mt-1.5 mb-3 text-[11px] text-status-neutral">{note}</p>}
+      {children}
+    </section>
   )
 }
