@@ -7,6 +7,7 @@ import { brandingStore } from '@/lib/roles'
 import { usersStore, allowedBranches, type AppUser } from '@/lib/auth/users'
 import { supabase, isSupabaseConfigured } from '@/lib/supabase/client'
 import { rowToUser, supaUsersStore } from '@/lib/auth/profiles'
+import { idleExpired, noteIdleSignout, stampActivity, startIdleWatch } from '@/auth/idle'
 
 /**
  * Authentication. When Supabase is configured this is backed by Supabase Auth
@@ -82,6 +83,14 @@ function SupabaseAuthProvider({ children }: { children: ReactNode }) {
     let active = true
     supabase.auth.getSession().then(async ({ data }) => {
       if (!active) return
+      // Security: a session untouched for 2+ hours is not restored — straight
+      // to the login page, before any data can flash on screen.
+      if (data.session && idleExpired()) {
+        noteIdleSignout()
+        void supabase?.auth.signOut()
+        setReady(true)
+        return
+      }
       setSession(data.session)
       if (data.session) setProfile(await loadProfile(data.session.user.id))
       setReady(true)
@@ -119,6 +128,10 @@ function SupabaseAuthProvider({ children }: { children: ReactNode }) {
       await supabase.auth.signOut()
       return { ok: false, reason: 'This account is deactivated. Contact the administrator.' }
     }
+    // Start the inactivity clock fresh — the old stamp is deliberately left
+    // stale on idle sign-out, so without this the watcher would arm, see it,
+    // and instantly sign the user straight back out.
+    stampActivity(true)
     setSession(data.session)
     setProfile(prof)
     void supabase.rpc('record_login').then(() => {}, () => {}) // fire-and-forget (builder executes on .then)
@@ -142,6 +155,15 @@ function SupabaseAuthProvider({ children }: { children: ReactNode }) {
     if (session) setProfile(await loadProfile(session.user.id))
     return { ok: true }
   }
+
+  // Security: while signed in, watch for 2 hours without interaction and sign
+  // out. Keyed on the user id (not the object — it's rebuilt every render), so
+  // the watcher survives token refreshes and re-arms only on a real change.
+  useEffect(() => {
+    if (!user) return
+    return startIdleWatch(() => { noteIdleSignout(); logout() })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id])
 
   if (!ready) {
     return <div className="flex h-screen w-screen items-center justify-center bg-canvas text-sm text-status-neutral">Loading…</div>
@@ -167,7 +189,12 @@ function loadLocalSession(): LocalSession | null {
 }
 
 function LocalAuthProvider({ children }: { children: ReactNode }) {
-  const [session, setSession] = useState<LocalSession | null>(loadLocalSession)
+  const [session, setSession] = useState<LocalSession | null>(() => {
+    const s = loadLocalSession()
+    // Security: don't restore a session that sat untouched for 2+ hours.
+    if (s && idleExpired()) { noteIdleSignout(); return null }
+    return s
+  })
   const [, bump] = useState(0)
 
   useEffect(() => {
@@ -196,6 +223,7 @@ function LocalAuthProvider({ children }: { children: ReactNode }) {
     const res = usersStore.authenticate(username, password)
     if (!res.ok) return { ok: false, reason: res.reason }
     usersStore.recordLogin(res.user.id)
+    stampActivity(true) // fresh sign-in resets the inactivity clock (see Supabase login)
     setSession({ userId: res.user.id, viewBranch: res.user.branch })
     return { ok: true, landing: landingFor(res.user) }
   }
@@ -206,6 +234,13 @@ function LocalAuthProvider({ children }: { children: ReactNode }) {
     usersStore.update(user.id, { password: newPassword })
     return { ok: true }
   }
+
+  // Security: sign out after 2 hours without interaction (same as Supabase mode).
+  useEffect(() => {
+    if (!user) return
+    return startIdleWatch(() => { noteIdleSignout(); logout() })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id])
 
   return (
     <AuthContext.Provider value={{

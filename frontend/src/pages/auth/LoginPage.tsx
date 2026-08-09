@@ -1,7 +1,8 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { useNavigate, Navigate } from 'react-router-dom'
-import { LogIn, Mail, Lock } from 'lucide-react'
+import { LogIn, Mail, Lock, ShieldAlert } from 'lucide-react'
 import { useAuth } from '@/auth/AuthContext'
+import { consumeIdleSignoutNotice } from '@/auth/idle'
 
 /** Credential login. Accounts are created by an administrator — there is no sign-up. */
 export default function LoginPage() {
@@ -11,12 +12,20 @@ export default function LoginPage() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [idleNotice, setIdleNotice] = useState(false)
+
+  // Read-and-clear in an effect (not a state initialiser) so StrictMode's
+  // double render can't consume the flag on a throwaway pass.
+  useEffect(() => {
+    if (consumeIdleSignoutNotice()) setIdleNotice(true)
+  }, [])
 
   if (user) return <Navigate to="/" replace />
 
   async function submit(e: FormEvent) {
     e.preventDefault()
     setError('')
+    setIdleNotice(false)
     setLoading(true)
     const res = await login(email, password)
     if (res.ok) navigate(res.landing || '/')
@@ -80,6 +89,12 @@ export default function LoginPage() {
             <p className="m-0 text-sm text-status-neutral">Use the credentials issued by your administrator.</p>
           </div>
 
+          {idleNotice && (
+            <div className="mb-4 flex items-start gap-2 rounded-lg border border-status-warning/40 bg-status-warning/10 px-3 py-2 text-sm text-navy">
+              <ShieldAlert size={16} className="mt-0.5 shrink-0 text-status-warning" />
+              <span>For your security, you were signed out after 2 hours of inactivity. Please sign in again.</span>
+            </div>
+          )}
           {error && <div className="mb-4 rounded-lg border border-status-critical/30 bg-status-critical/5 px-3 py-2 text-sm text-status-critical">{error}</div>}
 
           <form onSubmit={submit} className="space-y-4">
