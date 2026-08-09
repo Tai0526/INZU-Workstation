@@ -10,6 +10,7 @@ import { useIssuances, useFuelRate } from '@/lib/fuel/store'
 import { kmMoved, isOpen, pricePerLitre } from '@/lib/fuel/types'
 import { useMileageTrips, useMileageRatesFor } from '@/lib/mileage/store'
 import { tripKm, rateFor, PROJECTS_BY_BRANCH } from '@/lib/mileage/types'
+import { sectionBreakdown, busProjectKm, busSectionLabel } from '@/lib/mileage/profit'
 
 /**
  * Mileage Overview — what is profitable and what isn't. Revenue (billable km ×
@@ -73,8 +74,12 @@ export default function MileageOverview() {
   const fuelRate = useFuelRate(branch, effMonth)
   const priceUSD = pricePerLitre(fuelRate, 'USD')
 
+  const mTrips = useMemo(() => trips.filter((t) => monthKey(t.date) === effMonth), [trips, effMonth])
+  // Which projects each bus drove for this month (km per project) — split buses
+  // exist, so this drives both the section labels and the fuel distribution.
+  const weights = useMemo(() => busProjectKm(mTrips), [mTrips])
+
   const perBus = useMemo<BusRow[]>(() => {
-    const mTrips = trips.filter((t) => monthKey(t.date) === effMonth)
     const mIss = issuances.filter((i) => monthKey(i.date) === effMonth)
     const map = new Map<string, BusRow & { litresClosed: number }>()
     const get = (bus: string, reg: string) => {
@@ -83,13 +88,12 @@ export default function MileageOverview() {
       if (reg && !r.reg) r.reg = reg
       return r
     }
-    // Mileage = the billable (paid) kilometres + revenue; the trip's project is the section.
+    // Mileage = the billable (paid) kilometres + revenue
     for (const t of mTrips) {
       const r = get(t.fleet_no, t.vehicle_reg)
       const km = tripKm(t)
       r.paidKm += km
       r.revenue += km * rateFor(rates, t.seat_class)
-      if (!r.section) r.section = t.project
     }
     // Fuel = the real distance driven (odometer between refuels) + fuel spend
     for (const i of mIss) {
@@ -100,31 +104,28 @@ export default function MileageOverview() {
     }
     return [...map.values()].map((r) => ({
       ...r,
-      section: r.section || 'Other',
+      // A split bus is labelled with every project it served, biggest first.
+      section: busSectionLabel(weights, r.bus),
       unpaidKm: Math.max(0, r.drivenKm - r.paidKm),
       paidRatio: r.drivenKm > 0 ? r.paidKm / r.drivenKm : null,
       economy: r.litresClosed > 0 ? r.drivenKm / r.litresClosed : null,
       margin: r.revenue - r.fuelCost,
       fuelShare: r.revenue > 0 ? r.fuelCost / r.revenue : null,
     }))
-  }, [trips, issuances, rates, priceUSD, effMonth])
+  }, [mTrips, issuances, weights, rates, priceUSD, effMonth])
 
   // ── The headline: profitability per section ──
-  const bySection = useMemo(() => {
-    const keys = [...sections, 'Other']
-    return keys.map((s) => {
-      const buses = perBus.filter((b) => b.section === s)
-      const revenue = buses.reduce((sum, b) => sum + b.revenue, 0)
-      const fuelCost = buses.reduce((sum, b) => sum + b.fuelCost, 0)
-      const paidKm = buses.reduce((sum, b) => sum + b.paidKm, 0)
-      const litres = buses.reduce((sum, b) => sum + b.litres, 0)
-      return {
-        section: s, buses: buses.length, revenue, fuelCost, paidKm, litres,
-        net: revenue - fuelCost,
-        fuelShare: revenue > 0 ? fuelCost / revenue : null,
-      }
-    }).filter((s) => s.buses > 0 || sections.includes(s.section))
-  }, [perBus, sections])
+  // Revenue/km come straight from trips grouped by project — the SAME numbers
+  // as the Billing Summary. Split buses' fuel is distributed by km share.
+  const bySection = useMemo(
+    () => sectionBreakdown({
+      trips: mTrips,
+      fuelByBus: perBus.map((b) => ({ fleet_no: b.bus, litres: b.litres })).filter((f) => f.litres > 0),
+      rates, priceUSD, sections,
+    }),
+    [mTrips, perBus, rates, priceUSD, sections],
+  )
+  const anySplitFuel = bySection.some((s) => s.split)
 
   const totals = useMemo(() => {
     const paidKm = perBus.reduce((s, b) => s + b.paidKm, 0)
@@ -177,7 +178,8 @@ export default function MileageOverview() {
         </label>
       </div>
 
-      {/* Profit per section — the reason this page exists */}
+      {/* Profit per section — the reason this page exists. km/revenue equal the
+          Billing Summary exactly; split buses' fuel is a km-share estimate. */}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {bySection.map((s) => (
           <div key={s.section} className={clsx('card border-l-4 p-4', s.net >= 0 ? 'border-status-good' : 'border-status-critical')}>
@@ -186,15 +188,20 @@ export default function MileageOverview() {
               <span className="text-[11px] text-status-neutral">{s.buses} bus{s.buses === 1 ? '' : 'es'} · {s.paidKm.toLocaleString()} km billed</span>
             </div>
             <div className={clsx('mt-2 text-2xl font-bold', s.net >= 0 ? 'text-status-good' : 'text-status-critical')}>{usd0(s.net)}</div>
-            <div className="text-[11px] text-status-neutral">after fuel · {monthLabel(effMonth)}</div>
+            <div className="text-[11px] text-status-neutral">after fuel · {monthLabel(effMonth)}{s.split ? ' · fuel partly estimated' : ''}</div>
             <div className="mt-2.5 flex justify-between text-xs">
               <span className="text-status-neutral">Revenue <b className="text-navy">{usd0(s.revenue)}</b></span>
-              <span className="text-status-neutral">Fuel <b className="text-navy">{usd0(s.fuelCost)}</b></span>
+              <span className="text-status-neutral">Fuel <b className="text-navy">{usd0(s.fuelCost)}</b>{s.split ? <span title="Some buses ran for more than one section this month — their fuel is split in proportion to the km driven for each."> ≈</span> : ''}</span>
               <span className="text-status-neutral">Fuel share {s.fuelShare != null ? <b className={clsx(s.fuelShare > 0.5 ? 'text-status-critical' : s.fuelShare > 0.35 ? 'text-[#8a6d10]' : 'text-status-good')}>{Math.round(s.fuelShare * 100)}%</b> : '—'}</span>
             </div>
           </div>
         ))}
       </div>
+      {anySplitFuel && (
+        <p className="-mt-3 text-[11px] text-status-neutral">
+          ≈ Some buses ran for more than one section this month; their fuel is split across sections in proportion to the kilometres driven for each. Billed km and revenue are exact — they match the Billing Summary.
+        </p>
+      )}
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <KpiCard label="Revenue" value={usd0(totals.revenue)} highlight info="Billable kilometres × the month's contract rates (Rates & Setup)." sub={`${totals.paidKm.toLocaleString()} paid km`} />

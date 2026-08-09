@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { BarChart, Bar, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ComposedChart, Line } from 'recharts'
-import { Lock, AlertTriangle, Bus, Route as RouteIcon } from 'lucide-react'
+import { Lock, AlertTriangle, Bus, Route as RouteIcon, Clock } from 'lucide-react'
 import clsx from 'clsx'
 import { useAuth } from '@/auth/AuthContext'
 import { ROLES, BRANCHES } from '@/lib/roles'
@@ -111,6 +111,73 @@ export default function OperationsOverview() {
 
   const dailyChart = useMemo(() => days.map((d) => ({ day: d.date.slice(8), runs: d.runs, buses: d.buses.size })), [days])
 
+  // ── The clock: what a typical day looks like, hour by hour ──
+  const hourOf = (t: string) => { const h = parseInt(t.slice(0, 2), 10); return Number.isFinite(h) && h >= 0 && h <= 23 ? h : null }
+  const hourly = useMemo(() => {
+    const acc = new Map<number, { pickups: number; knockoffs: number }>()
+    for (const a of mAlloc) {
+      const h = hourOf(a.departure_time)
+      if (h == null) continue
+      let r = acc.get(h)
+      if (!r) { r = { pickups: 0, knockoffs: 0 }; acc.set(h, r) }
+      if (a.trip_type === 'pickup') r.pickups++; else r.knockoffs++
+    }
+    const nDays = Math.max(1, days.length)
+    const hours = [...acc.keys()].sort((a, b) => a - b)
+    if (hours.length === 0) return { rows: [], peakPickup: null as string | null, peakKnockoff: null as string | null }
+    const span: { hour: string; pickups: number; knockoffs: number }[] = []
+    for (let h = hours[0]; h <= hours[hours.length - 1]; h++) {
+      const r = acc.get(h)
+      span.push({
+        hour: `${String(h).padStart(2, '0')}:00`,
+        pickups: r ? Math.round((r.pickups / nDays) * 10) / 10 : 0,
+        knockoffs: r ? Math.round((r.knockoffs / nDays) * 10) / 10 : 0,
+      })
+    }
+    const top = (k: 'pickups' | 'knockoffs') => {
+      const best = [...acc.entries()].sort((a, b) => b[1][k] - a[1][k])[0]
+      return best && best[1][k] > 0 ? `${String(best[0]).padStart(2, '0')}:00–${String(best[0] + 1).padStart(2, '0')}:00` : null
+    }
+    return { rows: span, peakPickup: top('pickups'), peakKnockoff: top('knockoffs') }
+  }, [mAlloc, days])
+
+  // ── The average schedule: weekday × hour, filterable by trip type ──
+  const [heatType, setHeatType] = useState<'all' | 'pickup' | 'knockoff'>('all')
+  const heat = useMemo(() => {
+    // How many of each weekday actually have logged data — the divisor for "typical".
+    const weekdayDates = new Map<number, Set<string>>()
+    for (const d of days) {
+      const w = weekdayOf(d.date)
+      let set = weekdayDates.get(w)
+      if (!set) { set = new Set(); weekdayDates.set(w, set) }
+      set.add(d.date)
+    }
+    const cell = new Map<string, number>() // `${weekday}:${hour}` -> total runs
+    let minH = 24, maxH = -1
+    for (const a of mAlloc) {
+      if (heatType !== 'all' && a.trip_type !== heatType) continue
+      const h = hourOf(a.departure_time)
+      if (h == null) continue
+      const w = weekdayOf(a.date)
+      cell.set(`${w}:${h}`, (cell.get(`${w}:${h}`) ?? 0) + 1)
+      minH = Math.min(minH, h); maxH = Math.max(maxH, h)
+    }
+    if (maxH < 0) return { hours: [] as number[], rows: [] as { w: number; day: string; nDays: number; cells: number[] }[], max: 0 }
+    const hoursSpan: number[] = []
+    for (let h = minH; h <= maxH; h++) hoursSpan.push(h)
+    let max = 0
+    const rows = WEEKDAYS.map((day, w) => {
+      const nDays = weekdayDates.get(w)?.size ?? 0
+      const cells = hoursSpan.map((h) => {
+        const avg = nDays > 0 ? (cell.get(`${w}:${h}`) ?? 0) / nDays : 0
+        max = Math.max(max, avg)
+        return Math.round(avg * 10) / 10
+      })
+      return { w, day, nDays, cells }
+    }).filter((r) => r.nDays > 0)
+    return { hours: hoursSpan, rows, max }
+  }, [mAlloc, days, heatType])
+
   if (role === 'route_supervisor') {
     return (
       <div className="page">
@@ -188,6 +255,79 @@ export default function OperationsOverview() {
           </div>
         </div>
       </div>
+
+      {/* The clock: hourly rhythm + the average schedule per weekday */}
+      {hourly.rows.length > 0 && (
+        <div className="grid gap-4 lg:grid-cols-2">
+          <div className="card p-5">
+            <h3 className="font-display text-sm font-bold text-navy">When trips happen</h3>
+            <p className="mb-2 text-[11px] text-status-neutral">Average runs per hour on a logged day — where the pickup and knock-off waves actually fall.</p>
+            <div className="mb-2 flex gap-4 text-[11px] text-status-neutral">
+              <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm" style={{ background: NAVY }} />Pickups</span>
+              <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm" style={{ background: BRAND }} />Knock-offs</span>
+            </div>
+            <div className="h-[210px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={hourly.rows} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+                  <CartesianGrid stroke={GRID} vertical={false} />
+                  <XAxis dataKey="hour" tick={{ fontSize: 10, fill: '#6B7280' }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fontSize: 11, fill: '#6B7280' }} axisLine={false} tickLine={false} />
+                  <Tooltip contentStyle={tip} formatter={(v: number, n) => [`${v} avg runs`, n]} />
+                  <Bar dataKey="pickups" name="Pickups" stackId="h" fill={NAVY} maxBarSize={22} />
+                  <Bar dataKey="knockoffs" name="Knock-offs" stackId="h" fill={BRAND} maxBarSize={22} radius={[2, 2, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            {(hourly.peakPickup || hourly.peakKnockoff) && (
+              <p className="mt-2 rounded-lg bg-brand-tint/40 px-3 py-2 text-xs text-navy">
+                <Clock size={12} className="mr-1 inline" />
+                {hourly.peakPickup && <>Peak pickups <b>{hourly.peakPickup}</b></>}
+                {hourly.peakPickup && hourly.peakKnockoff && ' · '}
+                {hourly.peakKnockoff && <>peak knock-offs <b>{hourly.peakKnockoff}</b></>}
+                — have every bus and driver ready before these windows.
+              </p>
+            )}
+          </div>
+
+          <div className="card p-5">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="font-display text-sm font-bold text-navy">The average schedule</h3>
+              <div className="ml-auto inline-flex overflow-hidden rounded-lg border border-black/15 text-[11px] font-medium">
+                {([['all', 'All'], ['pickup', 'Pickups'], ['knockoff', 'Knock-offs']] as const).map(([k, label]) => (
+                  <button key={k} onClick={() => setHeatType(k)} className={clsx('px-2.5 py-1', heatType === k ? 'bg-navy text-white' : 'bg-white text-status-neutral hover:text-navy')}>{label}</button>
+                ))}
+              </div>
+            </div>
+            <p className="mb-3 mt-0.5 text-[11px] text-status-neutral">Read a row left to right: that weekday's typical day, hour by hour (average runs). Darker = busier.</p>
+            <div className="overflow-x-auto">
+              <table className="w-full border-separate" style={{ borderSpacing: 2 }}>
+                <thead><tr>
+                  <th className="pr-2 text-left text-[10px] font-medium text-status-neutral" />
+                  {heat.hours.map((h) => <th key={h} className="min-w-[30px] text-center text-[10px] font-medium text-status-neutral">{String(h).padStart(2, '0')}</th>)}
+                </tr></thead>
+                <tbody>
+                  {heat.rows.map((r) => (
+                    <tr key={r.w}>
+                      <td className="pr-2 text-[11px] font-medium text-navy">{r.day}<span className="ml-1 text-[9px] text-status-neutral">×{r.nDays}</span></td>
+                      {r.cells.map((v, i) => {
+                        const alpha = heat.max > 0 ? 0.06 + (v / heat.max) * 0.8 : 0
+                        return (
+                          <td key={i} className="h-7 min-w-[30px] rounded text-center text-[10px] font-medium"
+                            style={{ background: v > 0 ? `rgb(var(--brand-rgb) / ${alpha.toFixed(2)})` : 'rgb(var(--black-rgb) / 0.04)', color: v / (heat.max || 1) > 0.55 ? '#fff' : undefined }}
+                            title={`${r.day} ${String(heat.hours[i]).padStart(2, '0')}:00 — avg ${v} run${v === 1 ? '' : 's'} across ${r.nDays} ${r.day}${r.nDays === 1 ? '' : 's'}`}>
+                            {v > 0 ? v : ''}
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="mt-2 text-[11px] text-status-neutral">Build each weekday's plan from its row — the buses needed at each hour are already in the data.</p>
+          </div>
+        </div>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-2">
         {/* Pressure days */}

@@ -5,10 +5,11 @@ import clsx from 'clsx'
 import { useAuth } from '@/auth/AuthContext'
 import { BRANCHES } from '@/lib/roles'
 import KpiCard from '@/components/ui/KpiCard'
-import { useIssuances, useGenFuel, useFuelRate } from '@/lib/fuel/store'
+import { useIssuances, useGenFuel, useFuelRate, getFuelRate } from '@/lib/fuel/store'
 import { type Currency, DRAW_LABEL, isApprovedDraw, isOpen, kmMoved, pricePerLitre, money } from '@/lib/fuel/types'
 import { useMileageTrips } from '@/lib/mileage/store'
-import { PROJECTS_BY_BRANCH } from '@/lib/mileage/types'
+import { PROJECTS_BY_BRANCH, type MileageTrip } from '@/lib/mileage/types'
+import { busProjectKm, projectShares, busSectionLabel } from '@/lib/mileage/profit'
 
 /**
  * Fuel Overview — WHO the fuel goes to, month by month: each section's buses
@@ -36,18 +37,26 @@ interface Group {
   buses: Set<string>
   km: number
   litresClosed: number
+  split: boolean // part of this group's fuel is a km-share estimate from split buses
 }
 
 function newGroup(key: string, label: string, kind: Group['kind']): Group {
-  return { key, label, kind, litres: 0, cost: 0, buses: new Set(), km: 0, litresClosed: 0 }
+  return { key, label, kind, litres: 0, cost: 0, buses: new Set(), km: 0, litresClosed: 0, split: false }
 }
 
-/** Litres per group for one month (pure aggregation, reused for the delta). */
+/**
+ * Litres per group for one month (pure aggregation, reused for the delta).
+ * A bus that drove for more than one project that month has its fuel, km and
+ * litres DISTRIBUTED across those projects in proportion to the km it ran for
+ * each (same rule as Mileage → Overview). Buses with no trips that month fall
+ * back to their most recent attribution, whole.
+ */
 function aggregate(
   month: string,
   issuances: ReturnType<typeof useIssuances>,
   draws: ReturnType<typeof useGenFuel>,
-  sectionOf: (fleet: string) => string,
+  trips: MileageTrip[],
+  fallbackOf: (fleet: string) => string,
   sections: string[],
   price: number,
 ): Map<string, Group> {
@@ -57,13 +66,20 @@ function aggregate(
   groups.set('__generator', newGroup('__generator', 'Workshop generator', 'generator'))
   groups.set('__visitor', newGroup('__visitor', 'Authorised vehicles', 'visitor'))
 
+  const weights = busProjectKm(trips.filter((t) => monthKey(t.date) === month))
+
   for (const i of issuances) {
     if (monthKey(i.date) !== month) continue
-    const g = groups.get(sectionOf(i.fleet_no)) ?? groups.get('__unassigned')!
-    g.litres += i.liters_given
-    g.cost += i.liters_given * price
-    g.buses.add(i.fleet_no)
-    if (!isOpen(i)) { g.km += kmMoved(i); g.litresClosed += i.liters_given }
+    const shares = projectShares(weights, i.fleet_no)
+      ?? [{ project: fallbackOf(i.fleet_no), share: 1 }]
+    for (const { project, share } of shares) {
+      const g = groups.get(project) ?? groups.get('__unassigned')!
+      g.litres += i.liters_given * share
+      g.cost += i.liters_given * share * price
+      g.buses.add(i.fleet_no)
+      if (!isOpen(i)) { g.km += kmMoved(i) * share; g.litresClosed += i.liters_given * share }
+      if (shares.length > 1) g.split = true
+    }
   }
   for (const d of draws) {
     if (monthKey(d.date) !== month || !isApprovedDraw(d)) continue
@@ -99,28 +115,26 @@ export default function FuelOverview() {
   const rate = useFuelRate(branch, effMonth)
   const price = pricePerLitre(rate, cur)
 
-  // Which section a bus belongs to — from its mileage project. The month's own
-  // trips take precedence; otherwise the bus's most recent attribution, so a
-  // bus that fuelled but didn't log mileage still lands in its usual section.
-  const sectionOf = useMemo(() => {
-    const inMonth = new Map<string, string>()
+  // Fallback for a bus with NO trips in the viewed month: its most recent
+  // attribution, whole — so a bus that fuelled without logging mileage still
+  // lands in its usual section. (Buses WITH trips are distributed by km share.)
+  const fallbackOf = useMemo(() => {
     const latest = new Map<string, { date: string; project: string }>()
     for (const t of trips) {
-      if (monthKey(t.date) === effMonth && !inMonth.has(t.fleet_no)) inMonth.set(t.fleet_no, t.project)
       const curBest = latest.get(t.fleet_no)
       if (!curBest || t.date > curBest.date) latest.set(t.fleet_no, { date: t.date, project: t.project })
     }
-    return (fleet: string) => inMonth.get(fleet) ?? latest.get(fleet)?.project ?? '__unassigned'
-  }, [trips, effMonth])
+    return (fleet: string) => latest.get(fleet)?.project ?? '__unassigned'
+  }, [trips])
 
   const groups = useMemo(
-    () => aggregate(effMonth, issuances, draws, sectionOf, sections, price),
-    [effMonth, issuances, draws, sectionOf, sections, price],
+    () => aggregate(effMonth, issuances, draws, trips, fallbackOf, sections, price),
+    [effMonth, issuances, draws, trips, fallbackOf, sections, price],
   )
   // Last month at the SAME price — the delta isolates consumption, not price moves.
   const prevGroups = useMemo(
-    () => aggregate(prevMonth(effMonth), issuances, draws, sectionOf, sections, price),
-    [effMonth, issuances, draws, sectionOf, sections, price],
+    () => aggregate(prevMonth(effMonth), issuances, draws, trips, fallbackOf, sections, price),
+    [effMonth, issuances, draws, trips, fallbackOf, sections, price],
   )
 
   const shown = useMemo(() => [...groups.values()].filter((g) => g.litres > 0 || (g.kind === 'section' && g.key !== '__unassigned')), [groups])
@@ -144,23 +158,56 @@ export default function FuelOverview() {
     [shown],
   )
 
-  // Top consumers with their section — where the big litres actually go.
+  // Top consumers with their section(s) — where the big litres actually go.
   const topBuses = useMemo(() => {
+    const weights = busProjectKm(trips.filter((t) => monthKey(t.date) === effMonth))
+    const labelOf = (fleet: string) => {
+      const l = busSectionLabel(weights, fleet)
+      if (l !== 'Other') return l
+      const fb = fallbackOf(fleet)
+      return fb === '__unassigned' ? 'Other' : fb
+    }
     const per = new Map<string, { bus: string; section: string; litres: number; km: number; litresClosed: number }>()
     for (const i of issuances) {
       if (monthKey(i.date) !== effMonth) continue
       let r = per.get(i.fleet_no)
-      if (!r) { r = { bus: i.fleet_no, section: sectionOf(i.fleet_no), litres: 0, km: 0, litresClosed: 0 }; per.set(i.fleet_no, r) }
+      if (!r) { r = { bus: i.fleet_no, section: labelOf(i.fleet_no), litres: 0, km: 0, litresClosed: 0 }; per.set(i.fleet_no, r) }
       r.litres += i.liters_given
       if (!isOpen(i)) { r.km += kmMoved(i); r.litresClosed += i.liters_given }
     }
     return [...per.values()].sort((a, b) => b.litres - a.litres).slice(0, 8)
-  }, [issuances, effMonth, sectionOf])
+  }, [issuances, trips, effMonth, fallbackOf])
 
   const visitorRows = useMemo(
     () => draws.filter((d) => monthKey(d.date) === effMonth && isApprovedDraw(d) && d.kind === 'visitor').sort((a, b) => b.date.localeCompare(a.date)),
     [draws, effMonth],
   )
+
+  // ── Month by month: every month's consumption, comparable at a glance ──
+  // Each month is costed at ITS OWN diesel price, and split-bus fuel uses that
+  // month's own trip weights — so months compare honestly.
+  const history = useMemo(() => {
+    const asc = [...dataMonths].sort()
+    let prev: number | null = null
+    return asc.map((m) => {
+      const g = aggregate(m, issuances, draws, trips, fallbackOf, sections, pricePerLitre(getFuelRate(branch, m), cur))
+      const all = [...g.values()]
+      const litres = all.reduce((s, x) => s + x.litres, 0)
+      const cost = all.reduce((s, x) => s + x.cost, 0)
+      const km = all.reduce((s, x) => s + x.km, 0)
+      const litresClosed = all.reduce((s, x) => s + x.litresClosed, 0)
+      const row = {
+        month: m, label: monthLabel(m), litres, cost, km,
+        econ: litresClosed > 0 ? km / litresClosed : null,
+        delta: prev != null && prev > 0 ? (litres - prev) / prev : null,
+        perSection: Object.fromEntries(sections.map((s) => [s, Math.round(g.get(s)?.litres ?? 0)])) as Record<string, number>,
+        other: Math.round(g.get('__unassigned')?.litres ?? 0),
+        drawsL: Math.round((g.get('__generator')?.litres ?? 0) + (g.get('__visitor')?.litres ?? 0)),
+      }
+      prev = litres
+      return row
+    })
+  }, [dataMonths, issuances, draws, trips, fallbackOf, sections, branch, cur])
 
   if (role === 'route_supervisor') {
     return (
@@ -278,7 +325,7 @@ export default function FuelOverview() {
                       {g.kind === 'visitor' && <Users size={13} className="mr-1 inline text-brand" />}
                       {g.label}
                     </td>
-                    <td className="px-4 py-2 text-navy">{Math.round(g.litres).toLocaleString()}</td>
+                    <td className="px-4 py-2 text-navy" title={g.split ? 'Includes km-share estimates from buses that ran for more than one section this month.' : undefined}>{g.split ? '≈ ' : ''}{Math.round(g.litres).toLocaleString()}</td>
                     <td className="px-4 py-2 text-status-neutral">{totalLitres > 0 ? `${Math.round((g.litres / totalLitres) * 100)}%` : '—'}</td>
                     <td className="px-4 py-2 text-navy">{money(g.cost, cur)}</td>
                     <td className="px-4 py-2 text-status-neutral">{g.kind === 'section' ? g.buses.size : '—'}</td>
@@ -300,9 +347,73 @@ export default function FuelOverview() {
           </table>
         </div>
         <p className="border-t border-black/5 px-5 py-2.5 text-[11px] text-status-neutral">
-          A bus's section comes from its Mileage project ({sections.join(' / ')}). Rising litres with flat km is the number to chase — it shows up here before it shows up in cost.
+          A bus's section comes from its Mileage project ({sections.join(' / ')}); a bus that ran for more than one section has its fuel split by km share (≈).
+          Rising litres with flat km is the number to chase — it shows up here before it shows up in cost.
         </p>
       </div>
+
+      {/* Month by month — compare consumption across every month on record */}
+      {history.length > 1 && (
+        <div className="card overflow-hidden">
+          <div className="border-b border-black/5 px-5 py-3.5">
+            <h3 className="font-display text-sm font-bold text-navy">Month by month</h3>
+            <p className="mt-0.5 text-[11px] text-status-neutral">Every month's consumption, stacked by who received it — each month costed at its own diesel price.</p>
+          </div>
+          <div className="px-5 pt-4">
+            <div className="h-[220px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={history} margin={{ top: 4, right: 8, bottom: 0, left: 0 }} barCategoryGap={18}>
+                  <CartesianGrid stroke={GRID} vertical={false} />
+                  <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#6B7280' }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fontSize: 11, fill: '#6B7280' }} axisLine={false} tickLine={false} tickFormatter={compact} />
+                  <Tooltip contentStyle={tip} formatter={(v: number, n) => [`${Math.round(v).toLocaleString()} L`, n]} />
+                  {sections.map((s, i) => <Bar key={s} dataKey={`perSection.${s}`} name={s} stackId="m" fill={GROUP_COLORS[i % GROUP_COLORS.length]} maxBarSize={44} />)}
+                  <Bar dataKey="other" name="Other buses" stackId="m" fill={NEUTRAL} maxBarSize={44} />
+                  <Bar dataKey="drawsL" name="Generator + authorised" stackId="m" fill={AMBER} maxBarSize={44} radius={[3, 3, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-right text-sm">
+              <thead className="bg-canvas text-status-neutral"><tr>
+                <th className="px-5 py-2 text-left font-medium">Month</th>
+                {sections.map((s) => <th key={s} className="px-3 py-2 font-medium">{s} (L)</th>)}
+                <th className="px-3 py-2 font-medium">Gen + auth (L)</th>
+                <th className="px-3 py-2 font-medium">Total (L)</th>
+                <th className="px-3 py-2 font-medium">Cost</th>
+                <th className="px-3 py-2 font-medium">km</th>
+                <th className="px-3 py-2 font-medium">km/L</th>
+                <th className="px-4 py-2 font-medium">vs prior</th>
+              </tr></thead>
+              <tbody>
+                {[...history].reverse().map((h) => (
+                  <tr key={h.month} className={clsx('border-t border-black/5', h.month === effMonth && 'bg-brand-tint/25')}>
+                    <td className="px-5 py-2 text-left font-medium text-navy">
+                      <button onClick={() => setMonth(h.month)} className="hover:underline" title="View this month">{h.label}</button>
+                    </td>
+                    {sections.map((s) => <td key={s} className="px-3 py-2 text-status-neutral">{h.perSection[s].toLocaleString()}</td>)}
+                    <td className="px-3 py-2 text-status-neutral">{h.drawsL.toLocaleString()}</td>
+                    <td className="px-3 py-2 font-medium text-navy">{Math.round(h.litres).toLocaleString()}</td>
+                    <td className="px-3 py-2 text-status-neutral">{money(h.cost, cur)}</td>
+                    <td className="px-3 py-2 text-status-neutral">{Math.round(h.km).toLocaleString()}</td>
+                    <td className="px-3 py-2 text-status-neutral">{h.econ != null ? h.econ.toFixed(1) : '—'}</td>
+                    <td className="px-4 py-2">
+                      {h.delta == null ? <span className="text-status-neutral">—</span> : (
+                        <span className={clsx('inline-flex items-center gap-0.5 font-medium', h.delta > 0.05 ? 'text-status-critical' : h.delta < -0.05 ? 'text-status-good' : 'text-status-neutral')}>
+                          {h.delta > 0.05 ? <TrendingUp size={13} /> : h.delta < -0.05 ? <TrendingDown size={13} /> : null}
+                          {h.delta >= 0 ? '+' : ''}{Math.round(h.delta * 100)}%
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="border-t border-black/5 px-5 py-2.5 text-[11px] text-status-neutral">Click a month to open it above. Litres falling while km holds is efficiency improving; both climbing together is just more work done.</p>
+        </div>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-2">
         {/* Top consumers */}
