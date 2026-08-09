@@ -1,16 +1,19 @@
 import { useMemo, useState } from 'react'
 import {
-  Plus, Search, Download, Upload, Pencil, Trash2, ChevronsUpDown, Info, Eye,
+  Plus, Search, Download, Upload, Pencil, Trash2, ChevronsUpDown, Info, Eye, Archive, Undo2,
 } from 'lucide-react'
+import clsx from 'clsx'
 import { useAuth } from '@/auth/AuthContext'
 import { ROLES, BRANCHES } from '@/lib/roles'
 import { canEdit } from '@/lib/permissions'
 import { useDeepLink } from '@/lib/ui/deeplink'
 import Button from '@/components/ui/Button'
+import Modal from '@/components/ui/Modal'
 import StatusBadge from '@/components/ui/StatusBadge'
 import VehicleFormModal from '@/components/fleet/VehicleFormModal'
 import ImportModal from '@/components/fleet/ImportModal'
-import { useVehicles, vehiclesStore } from '@/lib/fleet/store'
+import { useAllVehicles, vehiclesStore } from '@/lib/fleet/store'
+import { useDispositions, dispositionStore, DISPOSITION_META, type DispositionKind } from '@/lib/fleet/disposition'
 import { type Vehicle, type VehicleStatus, STATUS_META, TYPE_LABELS } from '@/lib/fleet/types'
 import { exportVehicles } from '@/lib/fleet/excel'
 
@@ -24,20 +27,29 @@ export default function VehicleRegister() {
   const branch = user!.branch
   const branchLabel = BRANCHES.find((b) => b.code === branch)!.short
 
-  const all = useVehicles()
+  // The register alone sees EVERYTHING, including retired vehicles — every
+  // other page reads useVehicles(), which excludes them.
+  const all = useAllVehicles()
+  const disp = useDispositions()
   const [q, setQ] = useState('')
-  const [statusFilter, setStatusFilter] = useState<'all' | VehicleStatus>('all')
+  const [statusFilter, setStatusFilter] = useState<'all' | VehicleStatus | 'retired'>('all')
   useDeepLink(['status'], (p) => { const s = p.get('status'); if (s) setStatusFilter(s as VehicleStatus) })
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: 'fleet_no', dir: 1 })
 
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<Vehicle | null>(null)
   const [importOpen, setImportOpen] = useState(false)
+  const [retiring, setRetiring] = useState<Vehicle | null>(null)
 
   const rows = useMemo(() => {
     const term = q.trim().toLowerCase()
     let list = all.filter((v) => v.branch === branch)
-    if (statusFilter !== 'all') list = list.filter((v) => v.status === statusFilter)
+    // "Retired" is its own view; every other filter shows the working fleet.
+    if (statusFilter === 'retired') list = list.filter((v) => disp[v.id])
+    else {
+      list = list.filter((v) => !disp[v.id])
+      if (statusFilter !== 'all') list = list.filter((v) => v.status === statusFilter)
+    }
     if (term)
       list = list.filter((v) =>
         [v.fleet_no, v.reg_plate, v.make, v.model].some((f) => f.toLowerCase().includes(term)),
@@ -48,16 +60,18 @@ export default function VehicleRegister() {
       return av < bv ? -sort.dir : av > bv ? sort.dir : 0
     })
     return list
-  }, [all, branch, q, statusFilter, sort])
+  }, [all, disp, branch, q, statusFilter, sort])
 
   const counts = useMemo(() => {
     const branchVehicles = all.filter((v) => v.branch === branch)
+    const working = branchVehicles.filter((v) => !disp[v.id])
     return {
-      total: branchVehicles.length,
-      active: branchVehicles.filter((v) => v.status === 'active').length,
-      unavailable: branchVehicles.filter((v) => v.status !== 'active').length,
+      total: working.length,
+      active: working.filter((v) => v.status === 'active').length,
+      unavailable: working.filter((v) => v.status !== 'active').length,
+      retired: branchVehicles.length - working.length,
     }
-  }, [all, branch])
+  }, [all, disp, branch])
 
   function toggleSort(key: SortKey) {
     setSort((s) => (s.key === key ? { key, dir: (s.dir * -1) as 1 | -1 } : { key, dir: 1 }))
@@ -97,7 +111,8 @@ export default function VehicleRegister() {
           <span className="font-medium text-status-good">Active</span> vehicles can receive fuel, be allocated to a
           route, log mileage, or be tracked for speed. <span className="font-medium text-status-warning">In Workshop</span>{' '}
           and <span className="font-medium text-status-critical">Grounded</span> vehicles drop out of those flows
-          automatically.
+          automatically. <span className="font-medium">Retired</span> vehicles (written off or left the fleet)
+          disappear from every page — including Licensing and its alerts — but keep their record here.
         </p>
       </div>
 
@@ -121,6 +136,7 @@ export default function VehicleRegister() {
           {Object.entries(STATUS_META).map(([v, m]) => (
             <option key={v} value={v}>{m.label}</option>
           ))}
+          <option value="retired">Retired (written off / left)</option>
         </select>
 
         <Button variant="secondary" onClick={() => exportVehicles(rows, branchLabel)} title="Export current list to Excel">
@@ -143,6 +159,11 @@ export default function VehicleRegister() {
         <span><b className="text-navy">{counts.total}</b> vehicles</span>
         <span><b className="text-status-good">{counts.active}</b> active</span>
         <span><b className="text-status-critical">{counts.unavailable}</b> unavailable</span>
+        {counts.retired > 0 && (
+          <button onClick={() => setStatusFilter('retired')} className="hover:underline">
+            <b className="text-navy">{counts.retired}</b> retired
+          </button>
+        )}
         <span>Showing <b className="text-navy">{rows.length}</b></span>
       </div>
 
@@ -163,31 +184,54 @@ export default function VehicleRegister() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((v, i) => (
-                <tr key={v.id} className={i % 2 ? 'bg-canvas/40' : ''}>
-                  <td className="px-4 py-2.5 font-semibold text-navy">{v.fleet_no}</td>
-                  <td className="px-4 py-2.5 text-navy">{v.reg_plate}</td>
-                  <td className="px-4 py-2.5 text-status-neutral">{v.make} {v.model}</td>
-                  <td className="px-4 py-2.5 text-status-neutral">{TYPE_LABELS[v.type]}</td>
-                  <td className="px-4 py-2.5 text-status-neutral">{v.year ?? '—'}</td>
-                  <td className="px-4 py-2.5 text-status-neutral">{v.capacity ?? '—'}</td>
-                  <td className="px-4 py-2.5">
-                    <StatusBadge tone={STATUS_META[v.status].tone}>{STATUS_META[v.status].label}</StatusBadge>
-                  </td>
-                  {editable && (
+              {rows.map((v, i) => {
+                const d = disp[v.id]
+                return (
+                  <tr key={v.id} className={clsx(i % 2 ? 'bg-canvas/40' : '', d && 'opacity-60')}>
+                    <td className="px-4 py-2.5 font-semibold text-navy">{v.fleet_no}</td>
+                    <td className="px-4 py-2.5 text-navy">{v.reg_plate}</td>
+                    <td className="px-4 py-2.5 text-status-neutral">{v.make} {v.model}</td>
+                    <td className="px-4 py-2.5 text-status-neutral">{TYPE_LABELS[v.type]}</td>
+                    <td className="px-4 py-2.5 text-status-neutral">{v.year ?? '—'}</td>
+                    <td className="px-4 py-2.5 text-status-neutral">{v.capacity ?? '—'}</td>
                     <td className="px-4 py-2.5">
-                      <div className="flex justify-end gap-1">
-                        <button onClick={() => openEdit(v)} className="rounded-md p-1.5 text-status-neutral hover:bg-canvas hover:text-navy" title="Edit">
-                          <Pencil size={15} />
-                        </button>
-                        <button onClick={() => remove(v)} className="rounded-md p-1.5 text-status-neutral hover:bg-status-critical/10 hover:text-status-critical" title="Delete">
-                          <Trash2 size={15} />
-                        </button>
-                      </div>
+                      {d ? (
+                        <span className="inline-flex flex-col">
+                          <span className="inline-flex w-fit items-center gap-1 rounded-full bg-navy px-2 py-0.5 text-[11px] font-semibold text-white">
+                            <Archive size={11} /> {DISPOSITION_META[d.kind].label}
+                          </span>
+                          <span className="mt-0.5 text-[10px] text-status-neutral">{d.date}{d.note ? ` · ${d.note}` : ''}</span>
+                        </span>
+                      ) : (
+                        <StatusBadge tone={STATUS_META[v.status].tone}>{STATUS_META[v.status].label}</StatusBadge>
+                      )}
                     </td>
-                  )}
-                </tr>
-              ))}
+                    {editable && (
+                      <td className="px-4 py-2.5">
+                        <div className="flex justify-end gap-1">
+                          {d ? (
+                            <button onClick={() => dispositionStore.restore(v.id)} className="inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-xs font-medium text-status-neutral hover:bg-canvas hover:text-navy" title="Return this vehicle to the working fleet">
+                              <Undo2 size={14} /> Restore
+                            </button>
+                          ) : (
+                            <>
+                              <button onClick={() => openEdit(v)} className="rounded-md p-1.5 text-status-neutral hover:bg-canvas hover:text-navy" title="Edit">
+                                <Pencil size={15} />
+                              </button>
+                              <button onClick={() => setRetiring(v)} className="rounded-md p-1.5 text-status-neutral hover:bg-canvas hover:text-navy" title="Retire — written off or left the fleet">
+                                <Archive size={15} />
+                              </button>
+                            </>
+                          )}
+                          <button onClick={() => remove(v)} className="rounded-md p-1.5 text-status-neutral hover:bg-status-critical/10 hover:text-status-critical" title="Delete">
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
+                      </td>
+                    )}
+                  </tr>
+                )
+              })}
               {rows.length === 0 && (
                 <tr>
                   <td colSpan={editable ? 8 : 7} className="px-4 py-12 text-center text-sm text-status-neutral">
@@ -213,7 +257,47 @@ export default function VehicleRegister() {
         activeBranch={branch}
       />
       <ImportModal open={importOpen} onClose={() => setImportOpen(false)} defaultBranch={branch} />
+      <RetireModal vehicle={retiring} onClose={() => setRetiring(null)} byName={user!.fullName} />
     </div>
+  )
+}
+
+/** Retire a vehicle — written off (crash) or left the fleet. Reversible. */
+function RetireModal({ vehicle, onClose, byName }: { vehicle: Vehicle | null; onClose: () => void; byName: string }) {
+  const [kind, setKind] = useState<DispositionKind>('written_off')
+  const [date, setDate] = useState('')
+  const [note, setNote] = useState('')
+  const [seen, setSeen] = useState('')
+  if (vehicle && seen !== vehicle.id) {
+    setSeen(vehicle.id); setKind('written_off'); setDate(new Date().toISOString().slice(0, 10)); setNote('')
+  }
+  if (!vehicle) return null
+
+  function save() {
+    dispositionStore.retire(vehicle!.id, { kind, date, note: note.trim(), by: byName, at: new Date().toISOString() })
+    onClose()
+  }
+
+  return (
+    <Modal open={!!vehicle} onClose={onClose} title={`Retire ${vehicle.fleet_no}`}
+      subtitle={`${vehicle.reg_plate} · it disappears from licensing, alerts, fuel and planning — the record and its history stay here, and it can be restored any time.`}
+      footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={save}><Archive size={15} /> Retire vehicle</Button></>}>
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {(Object.keys(DISPOSITION_META) as DispositionKind[]).map((k) => (
+          <button key={k} onClick={() => setKind(k)}
+            className={clsx('rounded-xl border-2 p-3 text-left transition-colors', kind === k ? 'border-brand bg-brand-tint/30' : 'border-black/10 hover:border-black/25')}>
+            <div className="text-sm font-semibold text-navy">{DISPOSITION_META[k].label}</div>
+            <div className="mt-0.5 text-[11px] leading-relaxed text-status-neutral">{DISPOSITION_META[k].hint}</div>
+          </button>
+        ))}
+      </div>
+      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Date</span>
+          <input type="date" className="w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand" value={date} onChange={(e) => setDate(e.target.value)} /></label>
+        <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Note (optional)</span>
+          <input className="w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand" placeholder="e.g. Accident on T5, insurance claim 4412" value={note} onChange={(e) => setNote(e.target.value)} /></label>
+      </div>
+    </Modal>
   )
 }
 

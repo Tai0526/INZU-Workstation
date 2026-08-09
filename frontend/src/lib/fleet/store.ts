@@ -1,6 +1,7 @@
-import { useSyncExternalStore } from 'react'
+import { useMemo, useSyncExternalStore } from 'react'
 import type { BranchCode } from '@/lib/roles'
 import { getActor } from '@/lib/audit/actor'
+import { dispositionStore } from './disposition'
 import { type Vehicle, type VehicleInput, isAvailable } from './types'
 import { TRIDENT_BUSES } from '@/lib/demo/buses'
 import { documentsStore } from '@/lib/documents/store'
@@ -99,13 +100,29 @@ export const vehiclesStore = {
 }
 
 // ── React bindings ─────────────────────────────────────────────────────
+/**
+ * The working fleet — retired vehicles (written off / left the fleet, see
+ * lib/fleet/disposition) are excluded HERE so every consumer (licensing,
+ * alerts, fuel, planning, dashboards) drops them automatically.
+ */
 export function useVehicles(): Vehicle[] {
+  const all = useSyncExternalStore(subscribe, load, load)
+  const disp = useSyncExternalStore(dispositionStore.subscribe, dispositionStore.get, dispositionStore.get)
+  return useMemo(
+    () => (Object.keys(disp).length ? all.filter((v) => !disp[v.id]) : all),
+    [all, disp],
+  )
+}
+
+/** Every record including retired vehicles — the Vehicle Register only. */
+export function useAllVehicles(): Vehicle[] {
   return useSyncExternalStore(subscribe, load, load)
 }
 
 /** Shared selector other modules use — only available vehicles in a branch. */
 export function availableVehicles(branch: BranchCode): Vehicle[] {
-  return load().filter((v) => v.branch === branch && isAvailable(v))
+  const disp = dispositionStore.get()
+  return load().filter((v) => v.branch === branch && isAvailable(v) && !disp[v.id])
 }
 
 /** Heal historical mismatches: align each vehicle's documents to its current branch. */
