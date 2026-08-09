@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { BarChart, Bar, ComposedChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
-import { Lock, Scale, TrendingUp, TrendingDown } from 'lucide-react'
+import { Lock, Scale, TrendingUp, TrendingDown, AlertTriangle } from 'lucide-react'
 import clsx from 'clsx'
 import { useAuth } from '@/auth/AuthContext'
 import { ROLES, BRANCHES } from '@/lib/roles'
@@ -156,12 +156,29 @@ export default function MileageOverview() {
   // price, so the trend is honest and a rate change is visible beside its effect.
   const rateMaps = useMileageRateMaps()
   const fuelRates = useFuelRates()
+
+  // Only months with BOTH sides entered can be compared. A month with mileage
+  // but no fuel yet has nothing deducted, so its "net" is really gross — it
+  // would top the table for ever and drag every vs-prior beside it off.
+  const monthsWithTrips = useMemo(() => new Set(trips.map((t) => monthKey(t.date))), [trips])
+  const monthsWithFuel = useMemo(() => new Set(issuances.map((i) => monthKey(i.date))), [issuances])
+  const comparableMonths = useMemo(
+    () => dataMonths.filter((m) => monthsWithTrips.has(m) && monthsWithFuel.has(m)).sort(),
+    [dataMonths, monthsWithTrips, monthsWithFuel],
+  )
+  const skippedMonths = useMemo(
+    () => dataMonths.filter((m) => !(monthsWithTrips.has(m) && monthsWithFuel.has(m))).sort().reverse(),
+    [dataMonths, monthsWithTrips, monthsWithFuel],
+  )
+  // What the viewed month is missing, so the cards above aren't read as final.
+  const viewedGap = !monthsWithTrips.has(effMonth) ? 'mileage' : !monthsWithFuel.has(effMonth) ? 'fuel' : null
+
   const history = useMemo(() => {
     let prevNet: number | null = null
     let prevRates: ReturnType<typeof resolveRates> | null = null
     let prevDiesel: number | null = null
     let prevFx: number | null = null
-    return [...dataMonths].sort().map((m) => {
+    return comparableMonths.map((m) => {
       const r = resolveRates(rateMaps.monthly, rateMaps.legacy, branch, m)
       const fr = resolveFuelRate(fuelRates, branch, m)
       const price = pricePerLitre(fr, 'USD')
@@ -187,7 +204,7 @@ export default function MileageOverview() {
       prevNet = net; prevRates = r; prevDiesel = fr.diesel_zmw; prevFx = fr.fx_zmw_per_usd
       return row
     })
-  }, [dataMonths, trips, issuances, rateMaps, fuelRates, branch])
+  }, [comparableMonths, trips, issuances, rateMaps, fuelRates, branch])
 
   if (role === 'route_supervisor') {
     return (
@@ -213,6 +230,19 @@ export default function MileageOverview() {
           </select>
         </label>
       </div>
+
+      {/* An incomplete month can't be read as profit — say so before the figures. */}
+      {viewedGap && (
+        <div className="flex items-start gap-2 rounded-xl border border-status-warning/40 bg-status-warning/10 px-4 py-2.5 text-sm text-navy">
+          <AlertTriangle size={16} className="mt-0.5 shrink-0 text-[#8a6d10]" />
+          <span>
+            {viewedGap === 'fuel'
+              ? <>No fuel has been captured for <b>{monthLabel(effMonth)}</b> yet, so nothing is being deducted — the net and fuel-share figures below are revenue only until fuel is entered.</>
+              : <>No mileage has been entered for <b>{monthLabel(effMonth)}</b> yet, so there is no revenue to set the fuel cost against.</>}
+            {' '}It is left out of the month-by-month comparison for the same reason.
+          </span>
+        </div>
+      )}
 
       {/* Profit per section — the reason this page exists. km/revenue equal the
           Billing Summary exactly; split buses' fuel is a km-share estimate. */}
@@ -405,8 +435,19 @@ export default function MileageOverview() {
           </div>
           <p className="border-t border-black/5 px-5 py-2.5 text-[11px] text-status-neutral">
             Each month is billed at its own contract rates and costed at its own diesel price — <span className="font-semibold text-brand">highlighted</span> where a rate changed from the month before, so a jump in the numbers can be read against the rate that caused it.
+            {skippedMonths.length > 0 && (
+              <> Only months with <b>both</b> mileage and fuel entered are compared, so {skippedMonths.map((m) => monthLabel(m)).join(', ')} {skippedMonths.length === 1 ? 'is' : 'are'} left out — a month missing its fuel would show revenue as profit and top the table for ever.</>
+            )}
           </p>
         </div>
+      )}
+
+      {/* Nothing to compare yet — explain rather than silently showing no table. */}
+      {history.length <= 1 && skippedMonths.length > 0 && (
+        <p className="rounded-xl border border-dashed border-black/15 px-4 py-3 text-xs text-status-neutral">
+          Month-by-month tracking needs at least two months with <b className="text-navy">both</b> mileage and fuel entered.
+          {' '}{skippedMonths.map((m) => monthLabel(m)).join(', ')} {skippedMonths.length === 1 ? 'has' : 'have'} only one side so far.
+        </p>
       )}
 
       {!ROLES[role].canToggleBranch && <p className="text-xs text-status-neutral">Showing {branchLabel} only.</p>}
