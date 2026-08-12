@@ -1,11 +1,11 @@
 import { useMemo, useState } from 'react'
 import {
   BarChart, Bar, LineChart, Line, ComposedChart, AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
-  ReferenceLine, ReferenceArea, Legend, CartesianGrid,
+  ReferenceLine, ReferenceArea, Legend, CartesianGrid, LabelList,
 } from 'recharts'
 import {
   TrendingDown, TrendingUp, Minus, Download, ShieldCheck, AlertTriangle, Trophy, Activity, ShieldAlert,
-  FileText, MapPin, Lightbulb, Clock, Gavel, FileCheck, ChevronRight,
+  FileText, FileType2, MapPin, Lightbulb, Clock, Gavel, FileCheck, ChevronRight,
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import clsx from 'clsx'
@@ -23,6 +23,7 @@ import { computeSpeedAnalytics } from '@/lib/speed/analytics'
 import { useAbsorbedSpeedIds } from '@/lib/speed/useTrips'
 import SpeedHotspotMap from '@/components/speed/SpeedHotspotMap'
 import { exportSpeedPdf, svgToPng } from '@/lib/speed/pdf'
+import { exportSpeedWord, movement, type SpeedReport } from '@/lib/speed/report'
 import {
   overBy, offenceNumberInBand, penaltyFor, countsAgainstDriver, isGlitch, zoneOf,
   ZONE_META, monthKey, monthLabel, lastMonths,
@@ -361,57 +362,242 @@ export default function SpeedOverview() {
     return recs
   }, [offPeriod, ytdCompare, byYear, single, a, repeatOffenders, peakHourOverall, hotspots, worstBusOverall, atDismissal])
 
-  // ── PDF ──
-  const [exporting, setExporting] = useState(false)
-  async function exportPdf() {
-    setExporting(true)
-    try {
-      const specs: [string, string][] = [
-        ['spd-chart-trend', 'Speeding rate by month'],
-        ['spd-chart-hourly', 'Hourly pattern'],
-        ['spd-chart-zone', 'Where it happens — by speed zone'],
-      ]
-      const charts: { title: string; dataUrl: string; w: number; h: number }[] = []
-      for (const [id, title] of specs) {
-        const svg = document.getElementById(id)?.querySelector('svg') as SVGSVGElement | null
-        if (!svg) continue
-        const png = await svgToPng(svg)
-        if (png) charts.push({ title, ...png })
-      }
-      const verdict = single
-        ? `${monthFull(a.thisKey)}: ${a.countThis} speeding event${a.countThis === 1 ? '' : 's'} from ${busesSpedThis} of ${busesRunThis} buses on the road, averaging ${a.avgSevThis.toFixed(1)} km/h over the limit.`
-        : sameRate
-          ? `Speeding held steady in ${monthFull(a.thisKey)}: ${a.countThis} events, the same as ${monthFull(a.lastKey)}.`
-          : improving
-            ? `Speeding fell ${Math.abs(ratePct)}% in ${monthFull(a.thisKey)}: ${a.countThis} events, down from ${a.countLast} in ${monthFull(a.lastKey)}.`
-            : `Speeding rose ${ratePct}% in ${monthFull(a.thisKey)}: ${a.countThis} events, up from ${a.countLast} in ${monthFull(a.lastKey)}.`
-      const suggestions: string[] = []
-      if (hotspots[0]) suggestions.push(`${hotspots[0].name} is the worst location (${hotspots[0].count} events) — prioritise signage and enforcement there.`)
-      if (peakHour.count > 0) suggestions.push(`Most breaches cluster around ${String(peakHour.hour).padStart(2, '0')}:00 — brief crews before that window.`)
-      if (topGeoBus) suggestions.push(`${topGeoBus.fleet} triggered the most events (${topGeoBus.count}) — focus coaching and review its route.`)
-      if (repeatOffenders.length) suggestions.push(`${repeatOffenders.length} repeat offender${repeatOffenders.length === 1 ? '' : 's'} — hold counselling sessions and apply the penalty ladder consistently.`)
-      exportSpeedPdf({
-        branchLabel,
-        periodLabel: single ? monthFull(a.thisKey) : `${monthFull(a.thisKey)} vs ${monthFull(a.lastKey)}`,
-        generated: new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
-        verdict,
-        kpis: [
-          { label: 'Speeding events', value: String(a.countThis), sub: single ? monthLabel(a.thisKey) : `vs ${a.countLast} in ${monthLabel(a.lastKey)}` },
-          { label: 'Valid events', value: String(a.countThis), sub: monthLabel(a.thisKey) },
-          { label: 'Avg over limit', value: `${a.avgSevThis.toFixed(1)} km/h`, sub: 'severity' },
-          { label: 'Repeat offenders', value: String(repeatOffenders.length), sub: `2+ events · ${offPeriodLabel}` },
-          single
-            ? { label: 'Buses on the road', value: String(a.activeBuses), sub: `ran in ${monthLabel(a.thisKey)}` }
-            : { label: 'Buses speeding more', value: `${a.busesWorse}/${a.activeBuses}`, sub: `${a.busesImproved} improved` },
-          { label: 'Fines this month', value: `K${finesThisMonth.toLocaleString()}`, sub: 'confirmed' },
+  // ── The report ────────────────────────────────────────────────────
+  // Built once, rendered to PDF and to Word. Nothing on a printed page can be
+  // hovered, so every chart goes out with a caption saying what it shows and
+  // the table it was drawn from.
+  const [exporting, setExporting] = useState<'' | 'pdf' | 'word'>('')
+
+  async function grabChart(id: string): Promise<{ dataUrl: string; w: number; h: number }> {
+    const svg = document.getElementById(id)?.querySelector('svg') as SVGSVGElement | null
+    const png = svg ? await svgToPng(svg) : null
+    return png ?? { dataUrl: '', w: 1, h: 1 }
+  }
+
+  async function buildReport(): Promise<SpeedReport> {
+    const [trend, hourly, zone] = await Promise.all([
+      grabChart('spd-chart-trend'), grabChart('spd-chart-hourly'), grabChart('spd-chart-zone'),
+    ])
+    const thisM = monthFull(effCmp)
+    const lastM = monthFull(a.lastKey)
+    const openThis = cmpRow?.open ?? 0
+    const openLast = baseRow?.open ?? 0
+    const openShare = (row?: typeof cmpRow) => (row && row.events ? Math.round((row.open / row.events) * 100) : 0)
+
+    // ── The answer, first ──
+    const headline = single
+      ? `${thisM}: ${eventsThis} speeding event${eventsThis === 1 ? '' : 's'}`
+      : sameRate ? 'Speeding held steady'
+        : improving ? `Speeding down ${Math.abs(ratePct)}%` : `Speeding up ${ratePct}%`
+    const verdict = single
+      ? `In ${thisM}, ${busesSpedThis} of the ${busesRunThis} buses on the road were flagged for speeding, producing ${eventsThis} event${eventsThis === 1 ? '' : 's'} at an average of ${a.avgSevThis.toFixed(1)} km/h over the limit. ${openShare(cmpRow)}% of those were open-road breaches above 80 km/h, the ones that carry the most risk. Pick an earlier month to compare against and this report will show the direction of travel.`
+      : `Speeding ${improving ? 'fell' : sameRate ? 'held level' : 'rose'} in ${thisM}: ${eventsThis} event${eventsThis === 1 ? '' : 's'} against ${eventsLast} in ${lastM}${sameRate ? '' : `, ${movement(eventsThis, eventsLast)}`}. ${busesSpedThis} of the ${busesRunThis} buses on the road were involved, at an average of ${a.avgSevThis.toFixed(1)} km/h over the limit against ${a.avgSevLast.toFixed(1)} the month before. ${improving ? 'The measures in place are working and should be sustained.' : sameRate ? 'Nothing has moved either way: the current measures are holding the line but not improving it.' : 'This needs acting on before it settles into a habit.'}`
+
+    // ── What has changed, each line carrying its own numbers ──
+    const progress: string[] = []
+    if (!single) {
+      progress.push(`Speeding events ${movement(eventsThis, eventsLast)} against ${lastM}.`)
+      progress.push(`Buses involved ${movement(busesSpedThis, baseRow?.busesSped ?? 0)} — ${busesSpedThis} of the ${busesRunThis} on the road this month.`)
+      progress.push(`Severity ${a.avgSevThis.toFixed(1) === a.avgSevLast.toFixed(1) ? `unchanged at ${a.avgSevThis.toFixed(1)} km/h over the limit` : `${a.avgSevThis < a.avgSevLast ? 'eased' : 'worsened'} from ${a.avgSevLast.toFixed(1)} to ${a.avgSevThis.toFixed(1)} km/h over the limit`}.`)
+      progress.push(`Open-road breaches above 80 km/h ${movement(openThis, openLast)} — ${openShare(cmpRow)}% of this month's events against ${openShare(baseRow)}%.`)
+      progress.push(`Buses speeding more than the month before: ${a.busesWorse} of ${a.activeBuses}. Buses that improved: ${a.busesImproved}.`)
+      if (fleetNote) progress.push(`Fleet size moved ${fleetNote.diff > 0 ? 'up' : 'down'} ${Math.abs(fleetNote.diff)}% (${fleetNote.now} buses ran against ${fleetNote.before}), so part of the change is simply how many buses were out.`)
+    } else {
+      progress.push(`${eventsThis} speeding event${eventsThis === 1 ? '' : 's'} from ${busesSpedThis} of the ${busesRunThis} buses on the road.`)
+      progress.push(`The average breach was ${a.avgSevThis.toFixed(1)} km/h over the limit, and ${openShare(cmpRow)}% were open-road breaches above 80 km/h.`)
+    }
+    progress.push(`${repeatOffenders.length} repeat offender${repeatOffenders.length === 1 ? '' : 's'} (two or more counted offences) among ${offence.length} driver${offence.length === 1 ? '' : 's'} with any offence, measured over ${offPeriodLabel}.`)
+    progress.push(`Enforcement: ${enforcement.monthCases.length} case${enforcement.monthCases.length === 1 ? '' : 's'} raised from this month's events, ${enforcement.charged.length} with a sanction approved by Operations, ${enforcement.cleared.length} cleared and ${enforcement.open.length} still open. Fines issued K${enforcement.fineTotal.toLocaleString()}.`)
+    if (atDismissal > 0) progress.push(`${atDismissal} driver${atDismissal === 1 ? ' has' : 's have'} reached the dismissal step of the penalty ladder.`)
+    const best = withData.length ? withData.reduce((m, h) => (h.events < m.events ? h : m)) : null
+    const worst = withData.length ? withData.reduce((m, h) => (h.events > m.events ? h : m)) : null
+    if (best && worst && best.key !== worst.key) {
+      progress.push(`Across the last ${withData.length} months with data the quietest was ${best.full} (${best.events}) and the worst ${worst.full} (${worst.events}). ${thisM} stands at ${eventsThis}.`)
+    }
+    if (ytdCompare?.hasPrev) {
+      progress.push(`Year to date: ${ytdCompare.thisYtd} against ${ytdCompare.lastYtd} for the same span of ${ytdCompare.prevYear}, ${ytdCompare.improving ? 'down' : 'up'} ${Math.abs(ytdCompare.pct)}%.`)
+    }
+
+    // ── KPIs ──
+    const kpis: SpeedReport['kpis'] = [
+      { label: 'Speeding events', value: String(eventsThis), sub: single ? thisM : `${movement(eventsThis, eventsLast)} vs ${monthLabel(a.lastKey)}`, tone: single ? 'plain' : improving || sameRate ? 'good' : 'bad' },
+      { label: 'Buses involved', value: `${busesSpedThis} of ${busesRunThis}`, sub: busesRunThis ? `${Math.round((busesSpedThis / busesRunThis) * 100)}% of the buses on the road` : 'no mileage logged' },
+      { label: 'Avg over the limit', value: `${a.avgSevThis.toFixed(1)} km/h`, sub: single ? 'severity of the average breach' : `against ${a.avgSevLast.toFixed(1)} in ${monthLabel(a.lastKey)}`, tone: single ? 'plain' : a.avgSevThis <= a.avgSevLast ? 'good' : 'bad' },
+      { label: 'Open-road breaches', value: String(openThis), sub: `${openShare(cmpRow)}% of events, above 80 km/h`, tone: openShare(cmpRow) >= 40 ? 'bad' : 'plain' },
+      { label: 'Repeat offenders', value: String(repeatOffenders.length), sub: `2+ offences · ${offPeriodLabel}`, tone: repeatOffenders.length ? 'bad' : 'good' },
+      { label: 'Fines issued', value: `K${enforcement.fineTotal.toLocaleString()}`, sub: `${enforcement.fineCount} fine${enforcement.fineCount === 1 ? '' : 's'} approved by Ops` },
+    ]
+
+    // ── Sections ──
+    const sections: SpeedReport['sections'] = []
+
+    sections.push({
+      title: 'Month by month',
+      intro: 'How many events each month, how many different buses were involved, and how hard the average breach was. A month where the count falls but severity climbs is not really an improvement.',
+      charts: [{
+        title: 'Speeding events by month',
+        caption: single
+          ? `${thisM} recorded ${eventsThis} event${eventsThis === 1 ? '' : 's'} from ${busesSpedThis} bus${busesSpedThis === 1 ? '' : 'es'}. Each bar is labelled with its count.`
+          : `${thisM} recorded ${eventsThis} against ${eventsLast} in ${lastM}, ${movement(eventsThis, eventsLast)}. Each bar is labelled with its count.`,
+        ...trend,
+        table: {
+          head: ['Month', 'Events', 'Buses involved', 'Buses on the road', 'Avg over', 'Open road', 'vs prior month'],
+          numeric: [1, 2, 3, 4, 5, 6],
+          rows: [...withData].reverse().map((h) => [
+            h.full, h.events, h.busesSped || '-', h.busesLogged || '-',
+            h.events ? `+${h.avgOver} km/h` : '-',
+            h.events ? `${Math.round((h.open / h.events) * 100)}%` : '-',
+            h.delta == null ? '-' : h.delta === 0 ? 'same' : `${h.delta > 0 ? '+' : ''}${Math.round(h.delta * 100)}%`,
+          ]),
+          note: 'Open road is the share of breaches above 80 km/h. GPS faults are excluded throughout.',
+        },
+      }],
+    })
+
+    const topHours = a.hourly.filter((h) => h.thisM > 0 || h.lastM > 0).sort((x, y) => y.thisM - x.thisM).slice(0, 8)
+    sections.push({
+      title: 'When it happens',
+      intro: 'Breaches cluster around the shift-change windows. Briefing crews just before those windows is the cheapest intervention available.',
+      charts: [{
+        title: 'Hour of the day',
+        caption: peakHourOverall.count > 0
+          ? `The worst hour is ${String(peakHourOverall.hour).padStart(2, '0')}:00, with ${peakHourOverall.count} event${peakHourOverall.count === 1 ? '' : 's'} over ${offPeriodLabel}. The table gives every busy hour, since a printed chart cannot be hovered.`
+          : 'No events to place in the day for this period.',
+        ...hourly,
+        table: {
+          head: single ? ['Hour', 'Events'] : ['Hour', monthLabel(a.thisKey), monthLabel(a.lastKey), 'Change'],
+          numeric: single ? [1] : [1, 2, 3],
+          rows: topHours.map((h) => {
+            const label = `${h.hour}:00 - ${String(Number(h.hour) + 1).padStart(2, '0')}:00`
+            return single
+              ? [label, h.thisM]
+              : [label, h.thisM, h.lastM, h.thisM === h.lastM ? 'same' : `${h.thisM > h.lastM ? '+' : ''}${h.thisM - h.lastM}`]
+          }),
+          note: 'Busiest hours only, worst first.',
+        },
+      }],
+    })
+
+    const zoneRows = a.zoneMix.map((z) => [z.month, z.open, z.site, z.ring, z.open + z.site + z.ring])
+    sections.push({
+      title: 'Where it happens - by speed zone',
+      intro: 'An open-road breach above 80 km/h carries far more risk than a slow site-zone one, so the mix matters as much as the count.',
+      charts: [{
+        title: 'Breaches by speed zone',
+        caption: single
+          ? `${openThis} of this month's ${eventsThis} breach${eventsThis === 1 ? '' : 'es'} (${openShare(cmpRow)}%) were on the open road.`
+          : `${openThis} of this month's ${eventsThis} breach${eventsThis === 1 ? '' : 'es'} (${openShare(cmpRow)}%) were on the open road, against ${openLast} of ${eventsLast} (${openShare(baseRow)}%) in ${lastM}.`,
+        ...zone,
+        table: {
+          head: ['Month', 'Open road (>80)', 'General site (>60)', 'Ring road (>40)', 'Total'],
+          numeric: [1, 2, 3, 4],
+          rows: single ? zoneRows.slice(1) : zoneRows,
+        },
+      }],
+    })
+
+    if (!single && (a.watch.length || a.improved.length)) {
+      sections.push({
+        title: 'Which buses moved',
+        intro: `Against ${lastM}. Concentration matters: if a handful of buses account for most of a rise, coaching those crews beats a fleet-wide memo.`,
+        tables: [
+          { title: 'Getting worse', head: ['Bus', monthLabel(a.lastKey), monthLabel(a.thisKey), 'Change'], numeric: [1, 2, 3], rows: a.watch.map((b) => [b.fleet, b.last, b.this, `+${b.change}`]) },
+          { title: 'Improving', head: ['Bus', monthLabel(a.lastKey), monthLabel(a.thisKey), 'Change'], numeric: [1, 2, 3], rows: a.improved.map((b) => [b.fleet, b.last, b.this, String(b.change)]) },
         ],
-        charts,
-        hotspots: hotspots.slice(0, 8),
-        offenders: offence.slice(0, 8),
-        suggestions,
-        filename: `INZU_Speeding_Report_${branchLabel}_${a.thisKey}.pdf`,
+        bullets: a.concentrationBuses.length
+          ? [`${a.concentrationBuses.join(', ')} account for ${a.concentrationShare}% of this month's increase.`]
+          : undefined,
       })
-    } finally { setExporting(false) }
+    }
+
+    sections.push({
+      title: 'Where on the ground',
+      intro: 'Locations ranked by how often a bus was flagged there. The worst few are where signage, a rumble strip or an enforcement point would bite hardest.',
+      tables: hotspots.length ? [{
+        head: ['#', 'Location', 'Events', 'Buses', 'Avg over'],
+        numeric: [0, 2, 3, 4],
+        rows: hotspots.slice(0, 12).map((h, i) => [i + 1, h.name, h.count, h.buses, `+${h.avgOver} km/h`]),
+      }] : [],
+      empty: 'No located events this month. Import the Geotab report with coordinates to map them.',
+    })
+
+    sections.push({
+      title: 'Driver accountability',
+      intro: `Counted offences per driver over ${offPeriodLabel}. A journey that crossed the limit several times counts once, so these are occasions of speeding, not tracker pings.`,
+      tables: offence.length ? [{
+        head: ['#', 'Driver', 'Offences'],
+        numeric: [0, 2],
+        rows: offence.slice(0, 15).map((d, i) => [i + 1, d.name, d.count]),
+        note: `${clean.length} driver${clean.length === 1 ? ' has' : 's have'} a clean record over the same period.`,
+      }] : [],
+      empty: `No counted offences in ${offPeriodLabel}.`,
+    })
+
+    sections.push({
+      title: 'Action taken',
+      intro: 'Proof that a breach leads somewhere. Only sanctions approved by Operations are counted: a proposal still sitting with Safety is not a charge.',
+      tables: [
+        {
+          head: ['Escalated to a case', 'Charged', 'Fines issued', 'Cleared', 'Still open'],
+          rows: [[
+            `${enforcement.monthCases.length} of ${eventsThis} events`,
+            String(enforcement.charged.length),
+            `K${enforcement.fineTotal.toLocaleString()} (${enforcement.fineCount})`,
+            String(enforcement.cleared.length),
+            String(enforcement.open.length),
+          ]],
+        },
+        ...(enforcement.rows.length ? [{
+          title: 'Decisions recorded',
+          head: ['Driver', 'Bus', 'Offence', 'Decision', 'Fine', 'Decided by'],
+          numeric: [4],
+          rows: enforcement.rows.map((c) => [
+            c.driver_name || '-', c.vehicle_label || '-',
+            c.over_by ? `+${c.over_by} km/h · ${fmtDayMonth(c.event_datetime)}` : fmtDayMonth(c.event_datetime),
+            (c.verdict!.decisions ?? []).filter((d) => d !== 'cleared').map((d) => DECISION_LABEL[d]).join(', ') || 'Cleared',
+            c.verdict!.fine_amount ? `K${c.verdict!.fine_amount.toLocaleString()}` : '-',
+            `${c.verdict!.decided_by}${c.verdict!.decided_at ? ` · ${fmtDayMonth(c.verdict!.decided_at)}` : ''}`,
+          ]),
+          note: `${enforcement.withProof} of ${enforcement.charged.length} carry a signed document on file.`,
+        }] : []),
+      ],
+    })
+
+    sections.push({ title: 'Recommended actions', bullets: recommendations })
+
+    sections.push({
+      title: 'What was excluded',
+      intro: 'A governed Tata bus cannot plausibly exceed about 100 km/h, so readings at or above 105 km/h are GPS faults. They are left out of every figure above so they cannot flatter or distort the trend.',
+      tables: a.glitches.length ? [{
+        head: ['When', 'Bus', 'Reported speed', 'Location'],
+        numeric: [2],
+        rows: a.glitches.map((e) => [`${fmtDate(e.event_datetime)} ${fmtTime(e.event_datetime)}`, e.vehicle_label, `${e.recorded_speed} km/h`, e.route || '-']),
+      }] : [],
+      empty: `No implausible readings in ${single ? thisM : 'these months'}. Every event above was genuine.`,
+    })
+
+    return {
+      branchLabel,
+      periodLabel: single ? thisM : `${thisM} vs ${lastM}`,
+      comparison: !single,
+      generated: new Date().toLocaleDateString('en-GB', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' }),
+      headline,
+      headlineTone: single ? 'plain' : improving ? 'good' : sameRate ? 'plain' : 'bad',
+      verdict,
+      progress,
+      kpis,
+      sections,
+      filename: `INZU_Speeding_Report_${branchLabel}_${single ? effCmp : effCmp + '_vs_' + a.lastKey}`,
+    }
+  }
+
+  async function runExport(kind: 'pdf' | 'word') {
+    setExporting(kind)
+    try {
+      const report = await buildReport()
+      if (kind === 'pdf') exportSpeedPdf(report)
+      else exportSpeedWord(report)
+    } finally { setExporting('') }
   }
 
   const TrendIcon = single ? Activity : sameRate ? Minus : improving ? TrendingDown : TrendingUp
@@ -439,7 +625,8 @@ export default function SpeedOverview() {
               {monthOptions.filter((k) => k !== effCmp).map((k) => <option key={k} value={k}>{monthFull(k)}</option>)}
             </select>
           </label>
-          <Button variant="secondary" onClick={exportPdf} disabled={exporting}><FileText size={15} /> {exporting ? 'Preparing…' : 'PDF report'}</Button>
+          <Button variant="secondary" onClick={() => runExport('pdf')} disabled={!!exporting} title="Fixed-layout report for filing and sending to the client."><FileText size={15} /> {exporting === 'pdf' ? 'Preparing…' : 'PDF report'}</Button>
+          <Button variant="secondary" onClick={() => runExport('word')} disabled={!!exporting} title="The same report, editable — add your own paragraph before sending it on."><FileType2 size={15} /> {exporting === 'word' ? 'Preparing…' : 'Word report'}</Button>
           <Button variant="secondary" onClick={() => exportEvents(allEvents.filter((e) => e.branch === branch), branchLabel)}><Download size={15} /> Export</Button>
         </div>
       </div>
@@ -499,7 +686,10 @@ export default function SpeedOverview() {
                   <Tooltip contentStyle={tip} labelFormatter={(l: any, p: any) => (p?.[0]?.payload?.full ?? l)}
                     formatter={(v: number, _n: any, p: any) => [`${v} event${v === 1 ? '' : 's'} · ${p.payload.busesSped} bus${p.payload.busesSped === 1 ? '' : 'es'} involved`, 'Speeding']} />
                   {!single && <ReferenceLine y={eventsLast} stroke={NAVY} strokeDasharray="4 4" />}
-                  <Area type="monotone" dataKey="events" stroke={BRAND} strokeWidth={2.5} fill="url(#spdGrad)" dot={{ r: 2 }} activeDot={{ r: 4 }} />
+                  <Area type="monotone" dataKey="events" stroke={BRAND} strokeWidth={2.5} fill="url(#spdGrad)" dot={{ r: 2 }} activeDot={{ r: 4 }}>
+                    <LabelList dataKey="events" position="top" style={{ fontSize: 9, fill: '#6B7280' }}
+                      formatter={(v: any) => (Number(v) > 0 ? v : '')} />
+                  </Area>
                 </AreaChart>
               </ResponsiveContainer>
             </div>
@@ -544,6 +734,8 @@ export default function SpeedOverview() {
               <Legend wrapperStyle={{ fontSize: 11 }} />
               <Bar yAxisId="l" dataKey="events" name="Events" radius={[5, 5, 0, 0]} maxBarSize={40}>
                 {withData.map((h) => <Cell key={h.key} fill={h.key === a.thisKey ? NAVY : h.key === a.lastKey && !single ? BRAND : 'rgba(15,27,51,0.18)'} />)}
+                {/* Printed and pasted into email, this chart cannot be hovered — so it states its own figures. */}
+                <LabelList dataKey="events" position="top" style={{ fontSize: 10, fill: NAVY, fontWeight: 600 }} />
               </Bar>
               <Line yAxisId="r" dataKey="busesSped" name="Buses involved" stroke={CRIT} strokeWidth={2.5} dot={{ r: 2.5 }} />
             </ComposedChart>
@@ -640,9 +832,15 @@ export default function SpeedOverview() {
                 <YAxis type="category" dataKey="month" width={52} tick={{ fontSize: 12, fill: '#0F1B33' }} axisLine={false} tickLine={false} />
                 <Tooltip contentStyle={tip} />
                 <Legend wrapperStyle={{ fontSize: 11 }} />
-                <Bar dataKey="open" stackId="z" name={ZONE_META.open.label} fill={ZONE_META.open.fill} />
-                <Bar dataKey="site" stackId="z" name={ZONE_META.site.label} fill={ZONE_META.site.fill} />
-                <Bar dataKey="ring" stackId="z" name={ZONE_META.ring.label} fill={ZONE_META.ring.fill} radius={[0, 4, 4, 0]} />
+                <Bar dataKey="open" stackId="z" name={ZONE_META.open.label} fill={ZONE_META.open.fill}>
+                  <LabelList dataKey="open" position="center" style={{ fontSize: 10, fill: '#fff', fontWeight: 700 }} formatter={(v: any) => (Number(v) > 0 ? v : '')} />
+                </Bar>
+                <Bar dataKey="site" stackId="z" name={ZONE_META.site.label} fill={ZONE_META.site.fill}>
+                  <LabelList dataKey="site" position="center" style={{ fontSize: 10, fill: '#0F1B33', fontWeight: 700 }} formatter={(v: any) => (Number(v) > 0 ? v : '')} />
+                </Bar>
+                <Bar dataKey="ring" stackId="z" name={ZONE_META.ring.label} fill={ZONE_META.ring.fill} radius={[0, 4, 4, 0]}>
+                  <LabelList dataKey="ring" position="center" style={{ fontSize: 10, fill: '#fff', fontWeight: 700 }} formatter={(v: any) => (Number(v) > 0 ? v : '')} />
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           </div>
