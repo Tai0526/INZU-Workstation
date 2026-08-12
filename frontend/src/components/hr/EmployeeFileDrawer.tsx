@@ -22,6 +22,7 @@ import { useTaxConfig, round2 } from '@/lib/payroll/tax'
 import { deptNo, STANDARD_ALLOWANCES, isGratuity } from '@/lib/payroll/payslip'
 import { useSpeedEvents } from '@/lib/speed/store'
 import { countsAgainstDriver } from '@/lib/speed/types'
+import { useAbsorbedSpeedIds } from '@/lib/speed/useTrips'
 import { useDriverLeave } from '@/lib/drivers/leave'
 import { useEmployeeLeave } from '@/lib/hr/leave'
 
@@ -45,6 +46,7 @@ export default function EmployeeFileDrawer({ person, canManage, onClose }: { per
   const cases = useCases()
   const deductions = useDeductions()
   const speed = useSpeedEvents()
+  const absorbedSpeed = useAbsorbedSpeedIds()
   const driverLeave = useDriverLeave()
   const empLeave = useEmployeeLeave()
   const year = new Date().getFullYear()
@@ -63,7 +65,9 @@ export default function EmployeeFileDrawer({ person, canManage, onClose }: { per
 
   const bal = useMemo(() => leaveBalance(ledger, person.id, { openingBalance: f.leave_opening, openingAt: f.leave_opening_at, asOf: today, currentLeave: curLeave }), [ledger, person.id, f.leave_opening, f.leave_opening_at, today, curLeave])
   const myLeave = useMemo(() => ledger.filter((e) => e.person_id === person.id && e.kind === 'leave').sort((a, b) => b.start.localeCompare(a.start)), [ledger, person.id])
-  const speedCount = useMemo(() => speed.filter((e) => (e.driver_id ? e.driver_id === person.id : e.driver_name === person.full_name) && countsAgainstDriver(e)).length, [speed, person])
+  // One offence per journey, matching the Speed Events page — a run that tripped
+  // the tracker a dozen times is one mark on the file, not a dozen.
+  const speedCount = useMemo(() => speed.filter((e) => (e.driver_id ? e.driver_id === person.id : e.driver_name === person.full_name) && countsAgainstDriver(e) && !absorbedSpeed.has(e.id)).length, [speed, person, absorbedSpeed])
   const risk = useMemo(() => assessRisk({ personId: person.id, personName: person.full_name, ledger, cases, deductions, year, speedEvents: speedCount }), [ledger, cases, deductions, person, year, speedCount])
   const myCases = useMemo(() => cases.filter((c) => (c.driver_id ? c.driver_id === person.id : c.driver_name === person.full_name)).sort((a, b) => b.event_datetime.localeCompare(a.event_datetime)), [cases, person])
   const myFines = useMemo(() => deductions.filter((d) => (d.driver_id ? d.driver_id === person.id : d.driver_name === person.full_name)).sort((a, b) => b.date.localeCompare(a.date)), [deductions, person])

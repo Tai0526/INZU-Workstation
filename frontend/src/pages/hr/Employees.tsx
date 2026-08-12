@@ -17,6 +17,7 @@ import { useCases } from '@/lib/safety/cases'
 import { useDeductions } from '@/lib/payroll/deductions'
 import { useSpeedEvents } from '@/lib/speed/store'
 import { countsAgainstDriver } from '@/lib/speed/types'
+import { useAbsorbedSpeedIds } from '@/lib/speed/useTrips'
 import { assessRisk, RISK_META } from '@/lib/hr/analytics'
 import { canViewEmployeeFile } from '@/lib/hr/employeeFile'
 import EmployeeFileDrawer from '@/components/hr/EmployeeFileDrawer'
@@ -41,14 +42,17 @@ export default function Employees() {
   const cases = useCases()
   const deductions = useDeductions()
   const speed = useSpeedEvents().filter((e) => e.branch === branch)
+  const absorbedSpeed = useAbsorbedSpeedIds()
   const canFile = canViewEmployeeFile(role)
   const year = new Date().getFullYear()
   const today = new Date().toISOString().slice(0, 10)
   const onLeaveNow = (p: HrPerson) => (p.source === 'driver' ? isOnLeave(p.id, today) : empOnLeave(p.id, today))
   const riskById = useMemo(() => new Map(people.map((p) => {
-    const se = speed.filter((e) => (e.driver_id ? e.driver_id === p.id : e.driver_name === p.full_name) && countsAgainstDriver(e)).length
+    // One offence per journey — a single run that tripped the tracker a dozen
+    // times must not read as a dozen marks against someone's record.
+    const se = speed.filter((e) => (e.driver_id ? e.driver_id === p.id : e.driver_name === p.full_name) && countsAgainstDriver(e) && !absorbedSpeed.has(e.id)).length
     return [p.id, assessRisk({ personId: p.id, personName: p.full_name, ledger, cases, deductions, year, speedEvents: se })]
-  })), [people, ledger, cases, deductions, year, speed])
+  })), [people, ledger, cases, deductions, year, speed, absorbedSpeed])
 
   const [q, setQ] = useState('')
   const [dept, setDept] = useState('all')

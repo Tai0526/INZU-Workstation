@@ -23,6 +23,7 @@ import { docStatus } from '@/lib/documents/types'
 import { useLicensingCats } from '@/lib/documents/licensingConfig'
 import { SECTIONS } from '@/lib/org/sections'
 import { useSpeedEvents } from '@/lib/speed/store'
+import { useAbsorbedSpeedIds } from '@/lib/speed/useTrips'
 import { isGlitch, countsAgainstDriver } from '@/lib/speed/types'
 import { useCases } from '@/lib/safety/cases'
 import {
@@ -120,6 +121,7 @@ export default function Dashboard() {
   const drivers = useDrivers().filter((d) => d.branch === branch)
   const docs = useDocuments()
   const events = useSpeedEvents().filter((e) => e.branch === branch)
+  const absorbedSpeed = useAbsorbedSpeedIds()
   const cases = useCases().filter((c) => c.branch === branch)
   const hazards = useHazards().filter((h) => h.branch === branch)
   const cap = useCap().filter((f) => f.branch === branch)
@@ -211,7 +213,9 @@ export default function Dashboard() {
     const incSafety = cases.filter((c) => c.stage === 'safety_review').length
     const incOps = cases.filter((c) => c.stage === 'ops_review').length
     // Speed
-    const valid = events.filter((e) => countsAgainstDriver(e))
+    // One offence per journey (see lib/speed/trips) — a single run that tripped
+    // the tracker a dozen times is one mark against the driver, not a dozen.
+    const valid = events.filter((e) => countsAgainstDriver(e) && !absorbedSpeed.has(e.id))
     const offence = new Map<string, number>()
     valid.forEach((e) => { const k = e.driver_id || e.driver_name; offence.set(k, (offence.get(k) ?? 0) + 1) })
     const offenderKeys = new Set(events.filter((e) => !isGlitch(e)).map((e) => e.driver_id || e.driver_name))
@@ -247,7 +251,7 @@ export default function Dashboard() {
       drawsPending: draws.filter((g) => g.status === 'pending').length,
       mileagePending: mileage.filter((mm) => mm.status === 'pending').length,
     }
-  }, [classes, cases, events, hazards, cap, compliance, drivers, loto, tools, draws, mileage])
+  }, [classes, cases, events, absorbedSpeed, hazards, cap, compliance, drivers, loto, tools, draws, mileage])
 
   // Monthly vehicle inspection coverage for this month — which buses aren't done.
   const inspections = useInspections().filter((i) => i.branch === branch)

@@ -117,13 +117,18 @@ export function penaltyFor(over: number, offenceInBand: number): Penalty | null 
  * Offence number within the band for a given event = chronological position
  * among the driver's events in the same band that count against them.
  * Returns 0 if the event itself doesn't count (disputed / cleared) or is < 5 over.
+ *
+ * `absorbed` holds the readings that ride inside another event's journey (see
+ * lib/speed/trips). They are evidence of how sustained a journey was, not
+ * separate offences, so they neither carry a charge themselves nor push the
+ * driver up the ladder. Omit it and every reading counts on its own, as before.
  */
-export function offenceNumberInBand(events: SpeedEvent[], event: SpeedEvent): number {
+export function offenceNumberInBand(events: SpeedEvent[], event: SpeedEvent, absorbed?: ReadonlySet<string>): number {
   const band = bandFor(overBy(event))
-  if (!band || !countsAgainstDriver(event)) return 0
+  if (!band || !countsAgainstDriver(event) || absorbed?.has(event.id)) return 0
   const key = event.driver_id || event.driver_name
   const same = events
-    .filter((e) => (e.driver_id || e.driver_name) === key && countsAgainstDriver(e) && bandFor(overBy(e))?.key === band.key)
+    .filter((e) => (e.driver_id || e.driver_name) === key && countsAgainstDriver(e) && !absorbed?.has(e.id) && bandFor(overBy(e))?.key === band.key)
     .sort((a, b) => a.event_datetime.localeCompare(b.event_datetime))
   return same.findIndex((e) => e.id === event.id) + 1
 }
@@ -136,10 +141,10 @@ export function offenceNumberInBand(events: SpeedEvent[], event: SpeedEvent): nu
  * incident's recommendation in step with the Speed Events page. Null if the
  * event is gone or no longer counts.
  */
-export function recommendationForEvent(events: SpeedEvent[], eventId: string): Penalty | null {
+export function recommendationForEvent(events: SpeedEvent[], eventId: string, absorbed?: ReadonlySet<string>): Penalty | null {
   const ev = events.find((e) => e.id === eventId)
   if (!ev) return null
-  return penaltyFor(overBy(ev), offenceNumberInBand(events.filter((e) => e.branch === ev.branch), ev))
+  return penaltyFor(overBy(ev), offenceNumberInBand(events.filter((e) => e.branch === ev.branch), ev, absorbed))
 }
 
 export function penaltyTone(p: Penalty | null): StatusTone {

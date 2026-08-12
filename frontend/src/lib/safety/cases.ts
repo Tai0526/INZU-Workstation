@@ -186,6 +186,12 @@ export interface NewCaseInput {
   rec_fine: number
   rec_offence: number
   repeat_total: number
+  /**
+   * How the journey ran — every time the bus crossed the limit on that run, not
+   * just the worst second. Safety and Ops decide on the piece of driving, so the
+   * pattern has to travel with the case.
+   */
+  description?: string
 }
 
 // Safety-registered incident (near miss, accident, …).

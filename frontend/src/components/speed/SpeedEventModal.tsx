@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Check, AlertTriangle, XCircle, History, Ban, Clock, MapPin, RotateCcw } from 'lucide-react'
+import { Check, AlertTriangle, XCircle, History, Ban, Clock, MapPin, RotateCcw, Route } from 'lucide-react'
 import Modal from '@/components/ui/Modal'
 import Button from '@/components/ui/Button'
 import StatusBadge from '@/components/ui/StatusBadge'
@@ -11,6 +11,8 @@ import { useVehicles } from '@/lib/fleet/store'
 import { useAllocations } from '@/lib/operations/store'
 import { useSpeedEvents, speedStore } from '@/lib/speed/store'
 import { useSpeedGeo, suggestDrivers } from '@/lib/speed/geo'
+import { tripSpan, tripExposure, tripNarrative, fmtDuration } from '@/lib/speed/trips'
+import { useSpeedTrips } from '@/lib/speed/useTrips'
 import {
   type SpeedEvent, type SpeedEventInput, type SpeedStatus, STATUS_META, overBy, countsAgainstDriver,
   SPEED_ZONES, effectiveLimit, bandFor, penaltyFor, penaltyTone, penaltyLabel, offenceNumberInBand,
@@ -54,6 +56,13 @@ export default function SpeedEventModal({
   const allocations = useAllocations().filter((a) => a.branch === branch)
   const geoMap = useSpeedGeo()
   const geo = editing ? geoMap[editing.id] : undefined
+  // The journey this reading belongs to. Geotab flags a breach every time the
+  // bus crosses the limit, so one run can raise a dozen — they are decided,
+  // charged and escalated together, as a single piece of driving.
+  const { absorbed, tripOf } = useSpeedTrips(branch)
+  const trip = editing ? tripOf(editing.id) : undefined
+  const journey = trip && trip.breaches > 1 ? trip : null
+  const exposure = journey ? tripExposure(journey, geoMap) : null
   const [form, setForm] = useState<SpeedEventInput | SpeedEvent>(() => (editing ? { ...editing } : empty(branch)))
   const [error, setError] = useState('')
   const [retracting, setRetracting] = useState(false)
@@ -111,9 +120,11 @@ export default function SpeedEventModal({
     setForm((f) => ({ ...f, vehicle_id: id, vehicle_label: v?.fleet_no ?? '' }))
   }
 
-  // Driver history — same driver, excluding this event. "Done it before?"
+  // Driver history — same driver, excluding this event, one entry per journey.
+  // "Done it before?" must mean separate occasions, not separate tracker pings.
   const history = allEvents
-    .filter((e) => e.id !== editing?.id && (form.driver_id ? e.driver_id === form.driver_id : !!form.driver_name && e.driver_name === form.driver_name))
+    .filter((e) => e.id !== editing?.id && !absorbed.has(e.id)
+      && (form.driver_id ? e.driver_id === form.driver_id : !!form.driver_name && e.driver_name === form.driver_name))
     .sort((a, b) => b.event_datetime.localeCompare(a.event_datetime))
   const priorAgainst = history.filter(countsAgainstDriver).length
 
@@ -135,14 +146,20 @@ export default function SpeedEventModal({
     onClose()
   }
 
-  // Resolve a pending/open event: persist any driver + notes edits, then set the
-  // status. Confirming requires a driver; writing off keeps it in the record but
-  // does NOT count it against the driver.
+  /**
+   * Resolve a pending/open event: persist any driver + notes edits, then set the
+   * status. Confirming requires a driver; writing off keeps it in the record but
+   * does NOT count it against the driver.
+   *
+   * The decision covers the whole journey — one run cannot end up half confirmed
+   * and half written off. A journey that already went to an incident is left
+   * alone: only the reading in front of you moves.
+   */
   function decide(status: SpeedStatus) {
     if (!editing) return
     if (status === 'confirmed' && !form.driver_name) { setError('Pick the driver before confirming.'); return }
-    speedStore.update(editing.id, { driver_id: form.driver_id, driver_name: form.driver_name, notes: form.notes })
-    speedStore.setStatus(editing.id, status)
+    const ids = trip && !trip.locked ? trip.events.map((x) => x.id) : [editing.id]
+    speedStore.setStatusMany(ids, status, { driver_id: form.driver_id, driver_name: form.driver_name, notes: form.notes })
     onClose()
   }
 
@@ -151,16 +168,16 @@ export default function SpeedEventModal({
   function escalate() {
     if (!editing) return
     if (!form.driver_name) { setError('Pick the driver before escalating.'); return }
-    // Confirm the event against the (corrected) driver, then escalate from those values.
-    speedStore.update(editing.id, { driver_id: form.driver_id, driver_name: form.driver_name, notes: form.notes })
-    if (form.status !== 'confirmed') speedStore.setStatus(editing.id, 'confirmed')
+    // Confirm the journey against the (corrected) driver, then escalate from those values.
+    const ids = trip && !trip.locked ? trip.events.map((x) => x.id) : [editing.id]
+    speedStore.setStatusMany(ids, 'confirmed', { driver_id: form.driver_id, driver_name: form.driver_name, notes: form.notes })
     const ev = { ...editing, ...form, status: 'confirmed' as SpeedStatus } as SpeedEvent
     const branchEvents = allEvents.filter((e) => e.branch === ev.branch).map((e) => (e.id === ev.id ? ev : e))
     const over = overBy(ev)
-    const offN = offenceNumberInBand(branchEvents, ev)
+    const offN = offenceNumberInBand(branchEvents, ev, absorbed)
     const pen = penaltyFor(over, offN)
     const repeatTotal = branchEvents.filter(
-      (e) => (e.driver_id || e.driver_name) === (ev.driver_id || ev.driver_name) && countsAgainstDriver(e),
+      (e) => (e.driver_id || e.driver_name) === (ev.driver_id || ev.driver_name) && countsAgainstDriver(e) && !absorbed.has(e.id),
     ).length
     casesStore.create({
       branch: ev.branch, event_id: ev.id, driver_id: ev.driver_id, driver_name: ev.driver_name,
@@ -168,9 +185,12 @@ export default function SpeedEventModal({
       over_by: over, recorded_speed: ev.recorded_speed, speed_limit: ev.speed_limit,
       rec_band: pen?.bandKey ?? '—', rec_action: pen?.action ?? 'No charge', rec_fine: pen?.fine ?? 0,
       rec_offence: pen?.offence ?? offN, repeat_total: repeatTotal,
+      // Safety and Ops decide on the journey, not on one ping — so the whole
+      // pattern travels with the case rather than just its worst second.
+      description: trip ? tripNarrative(trip, geoMap) : '',
     })
     speedAuditStore.log(ev.id, trail.length ? 'Re-escalated to incident' : 'Escalated to incident',
-      `Driver: ${ev.driver_name}${pen?.action ? ` · ${pen.action}` : ''}${pen?.fine ? ` · K${pen.fine.toLocaleString()}` : ''}`)
+      `Driver: ${ev.driver_name}${journey ? ` · ${journey.breaches} breaches in one journey` : ''}${pen?.action ? ` · ${pen.action}` : ''}${pen?.fine ? ` · K${pen.fine.toLocaleString()}` : ''}`)
     onClose()
   }
   /** Undo an escalation made in error (e.g. wrong driver): delete the incident,
@@ -183,9 +203,11 @@ export default function SpeedEventModal({
     const ded = deductionsStore.forIncident(existingCase.id)
     if (ded) deductionsStore.remove(ded.id) // void the fine raised on the wrong driver
     casesStore.remove(existingCase.id)
-    // The wrong driver's record must be clean: un-confirm the event and clear the
-    // driver, so it no longer counts against them and awaits the correct driver.
-    speedStore.update(editing.id, { status: 'pending', driver_id: '', driver_name: '', resolved_by: '', resolved_at: '' })
+    // The wrong driver's record must be clean: un-confirm the journey and clear
+    // the driver, so it no longer counts against them and awaits the correct one.
+    // The whole run goes back, not just the reading that was escalated.
+    const ids = trip ? trip.events.map((x) => x.id) : [editing.id]
+    speedStore.setStatusMany(ids, 'pending', { driver_id: '', driver_name: '', resolved_by: '', resolved_at: '' })
     setForm((f) => ({ ...f, status: 'pending', driver_id: '', driver_name: '', resolved_by: '', resolved_at: '' }))
     setRetracting(false); setRetractReason(''); setError('')
   }
@@ -226,6 +248,48 @@ export default function SpeedEventModal({
         </div>
       )}
 
+      {/* The journey behind the reading — every breach on the same run */}
+      {journey && (
+        <div className="mb-4 overflow-hidden rounded-lg border border-brand/30 bg-brand-tint/25">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2">
+            <Route size={15} className="shrink-0 text-brand" />
+            <span className="text-sm font-semibold text-navy">One journey · {journey.breaches} breaches</span>
+            <span className="text-xs text-status-neutral">{journey.startISO.slice(0, 10)} · {tripSpan(journey)}</span>
+            {exposure && exposure.seconds > 0 && (
+              <span className="text-xs text-status-neutral">
+                over the limit for <b className="text-navy">{fmtDuration(exposure.seconds)}</b> across <b className="text-navy">{exposure.km.toFixed(2)} km</b>
+              </span>
+            )}
+            {journey.locked && (
+              <span className="rounded-full bg-navy/5 px-2 py-0.5 text-[10px] font-medium text-status-neutral">already escalated — left as raised</span>
+            )}
+          </div>
+          <div className="max-h-44 overflow-auto border-t border-brand/20 bg-surface">
+            <table className="w-full text-left text-xs">
+              <tbody>
+                {journey.events.map((x) => {
+                  const isLead = x.id === journey.lead.id
+                  return (
+                    <tr key={x.id} className={`border-b border-black/5 last:border-0 ${isLead ? 'bg-status-critical/[0.05]' : ''}`}>
+                      <td className="w-16 px-3 py-1 font-medium text-navy">{x.event_datetime.slice(11, 16)}</td>
+                      <td className="w-28 px-3 py-1 text-navy">{x.recorded_speed}/{x.speed_limit} <span className="text-status-critical">+{overBy(x)}</span></td>
+                      <td className="w-14 px-2 py-1 text-right text-status-neutral">{geoMap[x.id]?.dur ? `${geoMap[x.id].dur}s` : ''}</td>
+                      <td className="w-20 px-2 py-1">
+                        {isLead && <span className="rounded-full bg-status-critical/10 px-1.5 py-0.5 text-[10px] font-bold text-status-critical">charged</span>}
+                      </td>
+                      <td className="px-3 py-1 text-status-neutral">{x.route || '—'}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+          <p className="border-t border-brand/20 px-3 py-1.5 text-[11px] leading-relaxed text-status-neutral">
+            The charge is raised once, on the worst reading. Confirming, disputing or writing off here applies to the whole journey — and the full list travels with it to Safety.
+          </p>
+        </div>
+      )}
+
       {/* Repeat-offender banner */}
       {form.driver_name && (
         <div className={`mb-4 flex items-center gap-2 rounded-lg px-3 py-2 text-sm ${priorAgainst >= 2 ? 'bg-status-critical/10 text-status-critical' : priorAgainst === 1 ? 'bg-status-warning/10 text-[#8a6d10]' : 'bg-status-good/10 text-status-good'}`}>
@@ -243,6 +307,7 @@ export default function SpeedEventModal({
           <div className="text-sm font-bold">{penaltyLabel(penalty)}</div>
           <div className="mt-0.5 text-xs opacity-90">
             {liveBand?.label} · {ordinals[liveOffence] ?? `${liveOffence}th`} offence in this band · {liveOver} km/h over the {effectiveLimit(Number(form.speed_limit) || 0)} limit
+            {journey && ` · one charge for the whole journey, not ${journey.breaches}`}
           </div>
           {penalty?.dismissal && <div className="mt-1 text-xs font-bold">⚠ Dismissal threshold reached for this band.</div>}
         </div>
@@ -319,6 +384,7 @@ export default function SpeedEventModal({
           <span className="text-xs font-medium text-status-neutral">Status</span>
           <StatusBadge tone={STATUS_META[form.status].tone}>{STATUS_META[form.status].label}</StatusBadge>
           {form.resolved_by && <span className="text-[11px] text-status-neutral">by {form.resolved_by}</span>}
+          {journey && !journey.locked && <span className="text-[11px] text-status-neutral">applies to all {journey.breaches} readings</span>}
           {canEdit && (
             <div className="ml-auto flex flex-wrap gap-1.5">
               <Button onClick={() => decide('confirmed')}><Check size={14} /> Confirm</Button>
@@ -385,7 +451,9 @@ export default function SpeedEventModal({
       {/* Driver history */}
       {history.length > 0 && (
         <div className="mt-4">
-          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-status-neutral">This driver’s history ({history.length})</div>
+          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-status-neutral">
+            This driver’s history — {history.length} separate journey{history.length === 1 ? '' : 's'}
+          </div>
           <div className="max-h-40 overflow-auto rounded-lg border border-black/10">
             <table className="w-full text-left text-sm">
               <tbody>

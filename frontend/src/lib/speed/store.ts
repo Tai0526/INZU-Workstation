@@ -92,6 +92,23 @@ export const speedStore = {
     commit(load().map((e) => (e.id === id ? { ...e, status, resolved_by: who, resolved_at: now, updated_by: who, updated_at: now } : e)))
   },
 
+  /**
+   * Decide a whole journey at once. A run that tripped the tracker a dozen times
+   * is one decision, so it goes in as one write — the record can never end up
+   * with half the run confirmed and half of it written off. `patch` is applied
+   * last, so a caller clearing a decision (e.g. a retraction) can also blank the
+   * resolver stamp.
+   */
+  setStatusMany(ids: string[], status: SpeedStatus, patch: Partial<SpeedEvent> = {}) {
+    if (ids.length === 0) return
+    const who = getActor().name
+    const now = stamp()
+    const set = new Set(ids)
+    commit(load().map((e) => (set.has(e.id)
+      ? { ...e, status, resolved_by: who, resolved_at: now, updated_by: who, updated_at: now, ...patch, id: e.id }
+      : e)))
+  },
+
   remove(id: string) {
     commit(load().filter((e) => e.id !== id))
   },

@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { UploadCloud, FileText, ExternalLink, Gavel, History, Send, Clock, MapPin, CheckCircle2, XCircle, Wallet, X } from 'lucide-react'
+import { UploadCloud, FileText, ExternalLink, Gavel, History, Send, Clock, MapPin, CheckCircle2, XCircle, Wallet, X, Route } from 'lucide-react'
 import Modal from '@/components/ui/Modal'
 import Button from '@/components/ui/Button'
 import StatusBadge from '@/components/ui/StatusBadge'
@@ -12,7 +12,9 @@ import {
 import { useDeductions, DEDUCTION_STATUS_META } from '@/lib/payroll/deductions'
 import { useSpeedGeo } from '@/lib/speed/geo'
 import { useSpeedEvents } from '@/lib/speed/store'
-import { recommendationForEvent, penaltyLabel } from '@/lib/speed/types'
+import { tripSpan, tripExposure, fmtDuration } from '@/lib/speed/trips'
+import { useSpeedTrips } from '@/lib/speed/useTrips'
+import { recommendationForEvent, penaltyLabel, overBy } from '@/lib/speed/types'
 
 const inputCls = 'w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand'
 const ALL_DECISIONS = Object.keys(DECISION_LABEL) as Decision[]
@@ -35,9 +37,15 @@ export default function CaseModal({
   const geoMap = useSpeedGeo()
   const speedEvents = useSpeedEvents()
   const c = all.find((x) => x.id === caseId) ?? null
+  // The journey the escalated reading came from — a run that crossed the limit
+  // repeatedly is one piece of driving, and the decision here is taken on all
+  // of it, so the whole pattern has to be visible.
+  const { absorbed, tripOf } = useSpeedTrips()
+  const trip = c?.event_id ? tripOf(c.event_id) : undefined
+  const journey = trip && trip.breaches > 1 ? trip : null
   // Live recommendation, recomputed from the current events (the case's stored
   // rec_* is a snapshot at escalation and can be stale — see the Speed Events page).
-  const liveRec = c && c.source === 'speed' ? recommendationForEvent(speedEvents, c.event_id) : null
+  const liveRec = c && c.source === 'speed' ? recommendationForEvent(speedEvents, c.event_id, absorbed) : null
   const chargeRef = useRef<HTMLInputElement>(null)
   const excRef = useRef<HTMLInputElement>(null)
   const memoRef = useRef<HTMLInputElement>(null)
@@ -207,6 +215,48 @@ export default function CaseModal({
           <span><span className="font-medium text-navy">{geo.dist.toFixed(2)} km</span> while speeding</span>
           {(geo.lat !== 0 || geo.lng !== 0) && <span className="inline-flex items-center gap-1"><MapPin size={13} /> {geo.lat.toFixed(5)}, {geo.lng.toFixed(5)}</span>}
           {geo.loc && <span className="font-medium text-navy">{geo.loc}</span>}
+        </div>
+      )}
+
+      {/* The journey behind the charge — every breach on that same run */}
+      {isSpeed && journey && (
+        <div className="mt-4 overflow-hidden rounded-xl border border-brand/30 bg-brand-tint/25">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5">
+            <Route size={15} className="shrink-0 text-brand" />
+            <span className="text-sm font-semibold text-navy">One journey · {journey.breaches} breaches</span>
+            <span className="text-xs text-status-neutral">{journey.startISO.slice(0, 10)} · {tripSpan(journey)}</span>
+            {(() => {
+              const x = tripExposure(journey, geoMap)
+              return x.seconds > 0 ? (
+                <span className="text-xs text-status-neutral">
+                  over the limit for <b className="text-navy">{fmtDuration(x.seconds)}</b> across <b className="text-navy">{x.km.toFixed(2)} km</b>
+                </span>
+              ) : null
+            })()}
+          </div>
+          <div className="max-h-44 overflow-auto border-t border-brand/20 bg-surface">
+            <table className="w-full text-left text-xs">
+              <tbody>
+                {journey.events.map((x) => {
+                  const isLead = x.id === journey.lead.id
+                  return (
+                    <tr key={x.id} className={`border-b border-black/5 last:border-0 ${isLead ? 'bg-status-critical/[0.05]' : ''}`}>
+                      <td className="w-16 px-3 py-1 font-medium text-navy">{x.event_datetime.slice(11, 16)}</td>
+                      <td className="w-28 px-3 py-1 text-navy">{x.recorded_speed}/{x.speed_limit} <span className="text-status-critical">+{overBy(x)}</span></td>
+                      <td className="w-14 px-2 py-1 text-right text-status-neutral">{geoMap[x.id]?.dur ? `${geoMap[x.id].dur}s` : ''}</td>
+                      <td className="w-20 px-2 py-1">
+                        {isLead && <span className="rounded-full bg-status-critical/10 px-1.5 py-0.5 text-[10px] font-bold text-status-critical">charged</span>}
+                      </td>
+                      <td className="px-3 py-1 text-status-neutral">{x.route || '—'}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+          <p className="border-t border-brand/20 px-4 py-1.5 text-[11px] leading-relaxed text-status-neutral">
+            One charge was raised for the run, on its worst reading — the rest show how sustained the speeding was, and are part of the same case.
+          </p>
         </div>
       )}
 

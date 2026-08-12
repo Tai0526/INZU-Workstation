@@ -16,6 +16,7 @@ import {
 import { SortTh, useSort, sortRows } from '@/components/ui/SortTh'
 import { monthKey, monthLabel, recommendationForEvent, penaltyLabel } from '@/lib/speed/types'
 import { useSpeedEvents } from '@/lib/speed/store'
+import { useAbsorbedSpeedIds } from '@/lib/speed/useTrips'
 import { downloadTablePdf } from '@/lib/reports/pdfDoc'
 import { useSpeedGeo } from '@/lib/speed/geo'
 
@@ -53,6 +54,9 @@ export default function Incidents() {
   const all = useCases()
   const geoMap = useSpeedGeo()
   const speedEvents = useSpeedEvents()
+  // Readings that ride inside another journey — skipped when working out which
+  // offence this is, so the number here matches the Speed Events page.
+  const absorbedSpeed = useAbsorbedSpeedIds()
   const [q, setQ] = useState('')
   const [stage, setStage] = useState<'all' | CaseStage>('all')
   const [type, setType] = useState<'all' | IncidentType>('all')
@@ -99,7 +103,7 @@ export default function Incidents() {
     const rows = list.map((c) => {
       const g = c.source === 'speed' ? geoMap[c.event_id] : undefined
       const geoLine = g ? `\n${g.dur}s over · ${g.dist.toFixed(2)} km${g.loc ? ` · ${g.loc}` : ''}${(g.lat || g.lng) ? `\n${g.lat.toFixed(5)}, ${g.lng.toFixed(5)}` : ''}` : ''
-      const rec = c.source === 'speed' ? recommendationForEvent(speedEvents, c.event_id) : null
+      const rec = c.source === 'speed' ? recommendationForEvent(speedEvents, c.event_id, absorbedSpeed) : null
       const recAction = rec?.action ?? c.rec_action
       const recFine = rec?.fine ?? c.rec_fine ?? 0
       const details = c.source === 'speed'
@@ -142,7 +146,7 @@ export default function Incidents() {
   function exportDecided() {
     const list = [...scoped].filter((c) => c.stage === 'closed').sort((a, b) => a.event_datetime.localeCompare(b.event_datetime))
     const rows = list.map((c) => {
-      const rec = c.source === 'speed' ? recommendationForEvent(speedEvents, c.event_id) : null
+      const rec = c.source === 'speed' ? recommendationForEvent(speedEvents, c.event_id, absorbedSpeed) : null
       const recAction = rec?.action ?? c.rec_action
       const recFine = rec?.fine ?? c.rec_fine ?? 0
       const details = c.source === 'speed'
@@ -268,7 +272,7 @@ export default function Incidents() {
             <tbody>
               {rows.map((c, i) => {
                 const g = c.source === 'speed' ? geoMap[c.event_id] : undefined
-                const liveRec = c.source === 'speed' ? recommendationForEvent(speedEvents, c.event_id) : null
+                const liveRec = c.source === 'speed' ? recommendationForEvent(speedEvents, c.event_id, absorbedSpeed) : null
                 const detail = c.source === 'speed'
                   ? `+${c.over_by ?? 0} km/h · ${liveRec ? penaltyLabel(liveRec) : (c.rec_action || '—')}`
                   : detailOf(c)

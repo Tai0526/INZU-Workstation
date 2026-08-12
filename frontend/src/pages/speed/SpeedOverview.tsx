@@ -20,6 +20,7 @@ import { useVehicles } from '@/lib/fleet/store'
 import { useDrivers } from '@/lib/drivers/store'
 import { useMileageTrips } from '@/lib/mileage/store'
 import { computeSpeedAnalytics } from '@/lib/speed/analytics'
+import { useAbsorbedSpeedIds } from '@/lib/speed/useTrips'
 import SpeedHotspotMap from '@/components/speed/SpeedHotspotMap'
 import { exportSpeedPdf, svgToPng } from '@/lib/speed/pdf'
 import {
@@ -83,6 +84,10 @@ export default function SpeedOverview() {
   const vehicles = useVehicles()
   const drivers = useDrivers().filter((d) => d.branch === branch)
   const cases = useCases()
+  // The counts on this page are about behaviour, so every breach counts. The
+  // CHARGES are about discipline, and those are raised once per journey — so
+  // the money and the dismissal count below skip the absorbed readings.
+  const absorbedSpeed = useAbsorbedSpeedIds()
 
   const dataMonths = useMemo(
     () => [...new Set(allEvents.filter((e) => e.branch === branch).map((e) => monthKey(e.event_datetime)))].sort().reverse(),
@@ -222,9 +227,9 @@ export default function SpeedOverview() {
   const clean = drivers.filter((d) => !offenderKeys.has(d.id) && !offenderKeys.has(d.full_name))
   const finesThisMonth = allEvents
     .filter((e) => e.branch === branch && !isGlitch(e) && monthKey(e.event_datetime) === a.thisKey && e.status === 'confirmed')
-    .reduce((s, e) => s + (penaltyFor(overBy(e), offenceNumberInBand(allEvents.filter((x) => x.branch === branch), e))?.fine ?? 0), 0)
+    .reduce((s, e) => s + (penaltyFor(overBy(e), offenceNumberInBand(allEvents.filter((x) => x.branch === branch), e, absorbedSpeed))?.fine ?? 0), 0)
   const atDismissal = new Set(
-    allEvents.filter((e) => e.branch === branch && penaltyFor(overBy(e), offenceNumberInBand(allEvents.filter((x) => x.branch === branch), e))?.dismissal).map((e) => e.driver_id || e.driver_name),
+    allEvents.filter((e) => e.branch === branch && penaltyFor(overBy(e), offenceNumberInBand(allEvents.filter((x) => x.branch === branch), e, absorbedSpeed))?.dismissal).map((e) => e.driver_id || e.driver_name),
   ).size
 
   // ── Map: located events for the selected month ──
