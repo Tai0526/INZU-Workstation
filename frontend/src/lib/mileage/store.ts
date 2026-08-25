@@ -34,6 +34,12 @@ function makeStore<T extends Audited>(key: string, seed: T[]) {
     },
     update(id: string, patch: Partial<T>) { commit(load().map((x) => (x.id === id ? { ...x, ...patch, id: x.id, updated_by: who(), updated_at: stampNow() } : x))) },
     remove(id: string) { commit(load().filter((x) => x.id !== id)) },
+    /** Delete many rows in ONE commit — a bulk clear must not race itself row by row. */
+    removeMany(ids: string[]) {
+      if (!ids.length) return
+      const gone = new Set(ids)
+      commit(load().filter((x) => !gone.has(x.id)))
+    },
     subscribe,
     snapshot: () => load(),
   }

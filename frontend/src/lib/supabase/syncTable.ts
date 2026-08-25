@@ -126,7 +126,14 @@ function supabaseTable<T extends { id: string }>({ table, lsKey }: { table: stri
     const dels = [...tombstoned]
     try {
       if (ups.length) { const { error } = await db.from(table).upsert(ups as any); if (error) throw error }
-      if (dels.length) { const { error } = await db.from(table).delete().in('id', dels); if (error) throw error }
+      // Deletes go in the URL (?id=in.(...)), so a bulk clear of a whole month
+      // — a thousand-plus ids — must be chunked or the request line overflows
+      // and NOTHING gets deleted. Chunks are idempotent: a retry after a
+      // mid-way failure re-deletes already-gone rows harmlessly.
+      for (let i = 0; i < dels.length; i += 150) {
+        const { error } = await db.from(table).delete().in('id', dels.slice(i, i + 150))
+        if (error) throw error
+      }
       for (const r of ups) if (pending.get(r.id) === r) pending.delete(r.id) // keep any newer edit
       for (const id of dels) tombstoned.delete(id)
       saveOutbox()

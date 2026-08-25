@@ -115,6 +115,7 @@ function LogTab({ trips, branch, project, routes, vehicles, canManage }: { trips
   const [vehicleFilter, setVehicleFilter] = useState('all')
   const [addOpen, setAddOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
+  const [clearOpen, setClearOpen] = useState(false)
   const [editing, setEditing] = useState<MileageTrip | null>(null)
 
   const rows = useMemo(
@@ -139,6 +140,7 @@ function LogTab({ trips, branch, project, routes, vehicles, canManage }: { trips
         </select>
         <div className="ml-auto flex gap-2">
           <Button variant="secondary" onClick={() => exportTrips(rows, project)}><Download size={15} /> Export</Button>
+          {canManage && <Button variant="secondary" onClick={() => setClearOpen(true)}><Trash2 size={15} /> Clear period</Button>}
           {canManage && <Button variant="secondary" onClick={() => setImportOpen(true)}><Upload size={15} /> Bulk upload</Button>}
           {canManage && <Button onClick={() => setAddOpen(true)}><Plus size={15} /> Log movements</Button>}
         </div>
@@ -190,6 +192,7 @@ function LogTab({ trips, branch, project, routes, vehicles, canManage }: { trips
       <AddTripsModal open={addOpen} onClose={() => setAddOpen(false)} branch={branch} project={project} routes={routes} vehicles={vehicles} trips={trips} />
       <EditTripModal editing={editing} onClose={() => setEditing(null)} routes={routes} vehicles={vehicles} />
       <ImportModal open={importOpen} onClose={() => setImportOpen(false)} branch={branch} project={project} />
+      <ClearPeriodModal open={clearOpen} onClose={() => setClearOpen(false)} trips={trips} project={project} defaultMonth={effMonth} />
     </div>
   )
 }
@@ -380,6 +383,122 @@ function ImportModal({ open, onClose, branch, project }: { open: boolean; onClos
         </div>
       )}
       {done !== null && <div className="mt-4 flex flex-col items-center gap-2 rounded-xl bg-canvas px-6 py-8 text-center"><CheckCircle2 size={26} className="text-status-good" /><div className="font-display text-base font-semibold text-navy">Imported {done}</div></div>}
+    </Modal>
+  )
+}
+
+/**
+ * Bulk delete — the other half of bulk upload. The import APPENDS, so
+ * re-uploading a corrected period from the Geotab lab doubles it unless those
+ * days are cleared first. This clears a day, a week, or a whole month in one
+ * committed write: what will go is shown first, and the word DELETE has to be
+ * typed before the button arms. There is no undo.
+ */
+function ClearPeriodModal({ open, onClose, trips, project, defaultMonth }: {
+  open: boolean; onClose: () => void; trips: MileageTrip[]; project: string; defaultMonth: string
+}) {
+  const [from, setFrom] = useState('')
+  const [to, setTo] = useState('')
+  const [bus, setBus] = useState('all')
+  const [confirm, setConfirm] = useState('')
+  const [done, setDone] = useState<number | null>(null)
+
+  // Open on the month being viewed, so "clear this month" is zero typing.
+  const [wasOpen, setWasOpen] = useState(false)
+  if (open && !wasOpen) {
+    setWasOpen(true); setDone(null); setConfirm(''); setBus('all')
+    const [y, m] = defaultMonth.split('-').map(Number)
+    if (y && m) { setFrom(`${defaultMonth}-01`); setTo(`${defaultMonth}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`) }
+  }
+  if (!open && wasOpen) setWasOpen(false)
+
+  const fleets = useMemo(() => [...new Set(trips.map((t) => t.fleet_no))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })), [trips])
+  const matching = useMemo(
+    () => (from && to && from <= to
+      ? trips.filter((t) => t.date >= from && t.date <= to && (bus === 'all' || t.fleet_no === bus))
+      : []),
+    [trips, from, to, bus],
+  )
+  const km = matching.reduce((s, t) => s + t.internal_km + t.external_km, 0)
+  const dates = new Set(matching.map((t) => t.date)).size
+  const buses = new Set(matching.map((t) => t.fleet_no)).size
+  const armed = matching.length > 0 && confirm.trim().toUpperCase() === 'DELETE'
+
+  function setWeek(back: number) {
+    // The Monday-to-Sunday week, `back` weeks ago (0 = the current week).
+    const now = new Date()
+    const mon = new Date(now)
+    mon.setDate(now.getDate() - ((now.getDay() + 6) % 7) - back * 7)
+    const sun = new Date(mon); sun.setDate(mon.getDate() + 6)
+    const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    setFrom(iso(mon)); setTo(iso(sun))
+  }
+
+  function wipe() {
+    if (!armed) return
+    tripsStore.removeMany(matching.map((t) => t.id))
+    setDone(matching.length)
+  }
+
+  return (
+    <Modal open={open} onClose={onClose} title={`Clear a period — ${project}`}
+      subtitle="Delete every logged movement in a date range, e.g. before re-uploading a corrected period. This cannot be undone."
+      footer={done !== null
+        ? <Button onClick={onClose}>Done</Button>
+        : <><Button variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button variant="danger" onClick={wipe} disabled={!armed}><Trash2 size={15} /> Delete {matching.length.toLocaleString()} movement{matching.length === 1 ? '' : 's'}</Button></>}>
+      {done !== null ? (
+        <div className="flex flex-col items-center gap-2 rounded-xl bg-canvas px-6 py-8 text-center">
+          <CheckCircle2 size={26} className="text-status-good" />
+          <div className="font-display text-base font-semibold text-navy">Deleted {done.toLocaleString()} movement{done === 1 ? '' : 's'}</div>
+          <div className="text-sm text-status-neutral">The period is clear — a corrected file can now be uploaded without doubling.</div>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <label className="block"><span className="mb-1 block text-xs font-medium text-navy">From</span>
+              <input type="date" className={inputCls} value={from} onChange={(e) => setFrom(e.target.value)} /></label>
+            <label className="block"><span className="mb-1 block text-xs font-medium text-navy">To</span>
+              <input type="date" className={inputCls} value={to} onChange={(e) => setTo(e.target.value)} /></label>
+            <label className="block"><span className="mb-1 block text-xs font-medium text-navy">Bus</span>
+              <select className={inputCls} value={bus} onChange={(e) => setBus(e.target.value)}>
+                <option value="all">All buses</option>
+                {fleets.map((f) => <option key={f} value={f}>{f}</option>)}
+              </select></label>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            <button type="button" onClick={() => { if (from) setTo(from) }} className="rounded-full border border-black/15 px-2.5 py-1 text-xs text-navy hover:bg-canvas">One day</button>
+            <button type="button" onClick={() => setWeek(0)} className="rounded-full border border-black/15 px-2.5 py-1 text-xs text-navy hover:bg-canvas">This week</button>
+            <button type="button" onClick={() => setWeek(1)} className="rounded-full border border-black/15 px-2.5 py-1 text-xs text-navy hover:bg-canvas">Last week</button>
+            <button type="button" onClick={() => { const [y, m] = defaultMonth.split('-').map(Number); setFrom(`${defaultMonth}-01`); setTo(`${defaultMonth}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`) }}
+              className="rounded-full border border-black/15 px-2.5 py-1 text-xs text-navy hover:bg-canvas">{monthLabel(defaultMonth)}</button>
+          </div>
+
+          {/* What will actually go — shown before anything is armed. */}
+          {from && to && from > to && <div className="rounded-lg border border-status-critical/30 bg-status-critical/5 px-3 py-2 text-sm text-status-critical">The From date is after the To date.</div>}
+          <div className={`rounded-lg border px-4 py-3 text-sm ${matching.length ? 'border-status-critical/30 bg-status-critical/5' : 'border-black/10 bg-canvas'}`}>
+            {matching.length === 0 ? (
+              <span className="text-status-neutral">Nothing logged for {project} in that range{bus !== 'all' ? ` for ${bus}` : ''}.</span>
+            ) : (
+              <span className="text-navy">
+                Will delete <b>{matching.length.toLocaleString()} movement{matching.length === 1 ? '' : 's'}</b> — {km.toLocaleString()} km
+                across <b>{buses}</b> bus{buses === 1 ? '' : 'es'} and <b>{dates}</b> day{dates === 1 ? '' : 's'}, {project} only.
+              </span>
+            )}
+          </div>
+
+          {matching.length > 0 && (
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-navy">Type <b>DELETE</b> to arm the button</span>
+              <input className={inputCls} value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder="DELETE" autoComplete="off" />
+            </label>
+          )}
+          <p className="text-[11px] leading-relaxed text-status-neutral">
+            Only {project} movements in this branch are touched — other projects, other months and everything else stay as they are.
+            If the range was already invoiced, re-upload the corrected file straight after clearing so the totals never sit empty.
+          </p>
+        </div>
+      )}
     </Modal>
   )
 }
