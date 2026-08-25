@@ -33,6 +33,15 @@ function makeStore<T extends Audited>(key: string, seed: T[]) {
       commit([...load(), ...created]); return created
     },
     update(id: string, patch: Partial<T>) { commit(load().map((x) => (x.id === id ? { ...x, ...patch, id: x.id, updated_by: who(), updated_at: stampNow() } : x))) },
+    /** Patch many rows in ONE commit — a heal touching hundreds must not write row by row. */
+    updateMany(patches: Map<string, Partial<T>>) {
+      if (!patches.size) return
+      const now = stampNow()
+      commit(load().map((x) => {
+        const p = patches.get(x.id)
+        return p ? { ...x, ...p, id: x.id, updated_by: who(), updated_at: now } : x
+      }))
+    },
     remove(id: string) { commit(load().filter((x) => x.id !== id)) },
     /** Delete many rows in ONE commit — a bulk clear must not race itself row by row. */
     removeMany(ids: string[]) {

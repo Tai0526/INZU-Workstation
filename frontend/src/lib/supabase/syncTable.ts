@@ -62,6 +62,15 @@ function supabaseTable<T extends { id: string }>({ table, lsKey }: { table: stri
   const tombstoned = new Set<string>()
   const listeners = new Set<() => void>()
   const emit = () => listeners.forEach((l) => l())
+  // Realtime echoes a bulk change back one row at a time — clearing a month is
+  // ~1,500 DELETE events in quick succession, and emitting per event froze the
+  // page (every subscribed view re-rendered 1,500 times). Coalesce: the cache
+  // updates per event, the listeners hear about it once per frame-ish.
+  let emitTimer: ReturnType<typeof setTimeout> | null = null
+  const emitSoon = () => {
+    if (emitTimer) return
+    emitTimer = setTimeout(() => { emitTimer = null; emit() }, 50)
+  }
 
   // ── durable outbox: mirror un-confirmed changes to localStorage so a refresh,
   //    a closed tab, or a dropped connection can't lose them — they're retried. ──
@@ -160,14 +169,20 @@ function supabaseTable<T extends { id: string }>({ table, lsKey }: { table: stri
   function applyRealtime(payload: { eventType: string; new: Partial<T>; old: Partial<T> }) {
     if (payload.eventType === 'DELETE') {
       const id = payload.old?.id
-      if (id != null) { tombstoned.delete(id); saveOutbox(); cache = cache.filter((r) => r.id !== id); emit() }
+      if (id != null) {
+        // Only touch localStorage when this echo actually confirmed one of OUR
+        // tombstones — a mass delete otherwise wrote the outbox 1,500 times.
+        if (tombstoned.delete(id)) saveOutbox()
+        cache = cache.filter((r) => r.id !== id)
+        emitSoon()
+      }
       return
     }
     const row = payload.new as T
     if (!row || row.id == null) return
     if (pending.delete(row.id)) saveOutbox() // the server just echoed this row — our write is confirmed
     cache = cache.some((r) => r.id === row.id) ? cache.map((r) => (r.id === row.id ? row : r)) : [...cache, row]
-    emit()
+    emitSoon()
   }
 
   function start() {

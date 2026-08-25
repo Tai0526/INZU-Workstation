@@ -1,6 +1,7 @@
 import * as XLSX from 'xlsx'
 import * as XS from 'xlsx-js-style'
 import type { BranchCode } from '@/lib/roles'
+import { vehiclesStore } from '@/lib/fleet/store'
 import {
   type MileageTrip, type MileageTripInput, type MileageSummary, type MileageRates, type Signatories,
   type SeatClass, type Shift, SEAT_CLASSES, SEAT_LABEL, SHIFTS, classFromCapacity, rateFor, vehicleSheet, summarise,
@@ -44,12 +45,35 @@ function normShift(v: any): Shift {
 
 export interface TripImport { valid: MileageTripInput[]; errors: { row: number; reason: string }[] }
 
+/**
+ * "INZ 120", "INZ120", "inz-120" and "TRIBS INZ120 TPT" are all the same bus.
+ * Everything that compares fleet numbers goes through this first.
+ */
+export function canonFleetNo(s: string): string {
+  const m = String(s || '').toUpperCase().match(/INZ\s*0*(\d+)/)
+  return m ? `INZ${parseInt(m[1], 10)}` : String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
+}
+
+/**
+ * Resolve an imported fleet number to the REGISTER's spelling, so an upload
+ * can never split a bus in two. The Geotab lab writes "INZ120" where the
+ * register says "INZ 120" — same bus, and every per-vehicle view keys on the
+ * string, so the variant showed up as a brand-new vehicle. A number with no
+ * registered match keeps its own spelling (a genuinely new bus must still be
+ * importable, and stands out for review).
+ */
+export function resolveFleet(raw: string, vehicles: { fleet_no: string; reg_plate?: string }[]): { fleet_no: string; reg_plate: string } {
+  const hit = vehicles.find((v) => canonFleetNo(v.fleet_no) === canonFleetNo(raw))
+  return hit ? { fleet_no: hit.fleet_no, reg_plate: hit.reg_plate ?? '' } : { fleet_no: String(raw).trim(), reg_plate: '' }
+}
+
 /** Parse a bulk-upload sheet of trips. Columns by header (order-independent). */
 export async function parseTrips(file: File, branch: BranchCode, project: string): Promise<TripImport> {
   const buf = await file.arrayBuffer()
   const wb = XLSX.read(buf, { type: 'array' })
   const ws = wb.Sheets[wb.SheetNames[0]]
   const rows = XLSX.utils.sheet_to_json<any>(ws, { defval: '' })
+  const vehicles = vehiclesStore.list().filter((v) => v.branch === branch)
   const valid: MileageTripInput[] = []
   const errors: { row: number; reason: string }[] = []
   const pick = (row: any, ...keys: string[]) => {
@@ -58,11 +82,13 @@ export async function parseTrips(file: File, branch: BranchCode, project: string
   }
   rows.forEach((row, i) => {
     const date = parseDate(pick(row, 'date'))
-    const fleet = String(pick(row, 'fleet no', 'fleet', 'fleet_no') ?? '').trim()
-    if (!date || !fleet) { errors.push({ row: i + 2, reason: 'Missing date or fleet no' }); return }
+    const fleetRaw = String(pick(row, 'fleet no', 'fleet', 'fleet_no') ?? '').trim()
+    if (!date || !fleetRaw) { errors.push({ row: i + 2, reason: 'Missing date or fleet no' }); return }
+    const { fleet_no, reg_plate } = resolveFleet(fleetRaw, vehicles)
     valid.push({
-      branch, project, date, fleet_no: fleet,
-      vehicle_reg: String(pick(row, 'reg', 'reg no', 'vehicle reg', 'reg_no') ?? '').trim(),
+      branch, project, date, fleet_no,
+      // The register's plate beats a blank or mistyped one in the file.
+      vehicle_reg: String(pick(row, 'reg', 'reg no', 'vehicle reg', 'reg_no') ?? '').trim() || reg_plate,
       seat_class: normSeat(pick(row, 'seat class', 'class', 'seat', 'seat_class')),
       shift: normShift(pick(row, 'shift')),
       route: String(pick(row, 'route') ?? '').trim(),

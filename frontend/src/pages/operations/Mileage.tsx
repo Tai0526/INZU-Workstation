@@ -9,6 +9,7 @@ import Button from '@/components/ui/Button'
 import KpiCard from '@/components/ui/KpiCard'
 import { useVehicles } from '@/lib/fleet/store'
 import { ensureRouteCatalogues } from '@/lib/operations/catalogue'
+import { healFleetSpellings } from '@/lib/mileage/healFleet'
 import { useFuelRate } from '@/lib/fuel/store'
 import { type Currency, money as fmtMoney } from '@/lib/fuel/types'
 import {
@@ -19,7 +20,7 @@ import {
   type MileageTrip, type SeatClass, type Shift, type MileageRates, type Signatories,
   PROJECTS_BY_BRANCH, SEAT_CLASSES, SEAT_LABEL, SHIFTS, classFromCapacity, summarise, vehicleSheet, tripKm, routeTotal,
 } from '@/lib/mileage/types'
-import { exportWorkbook, printSummaryPDF, exportTrips, downloadTripTemplate, parseTrips, type TripImport } from '@/lib/mileage/excel'
+import { exportWorkbook, printSummaryPDF, exportTrips, downloadTripTemplate, parseTrips, canonFleetNo, type TripImport } from '@/lib/mileage/excel'
 
 const inputCls = 'w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand'
 const cellCls = 'w-full rounded-md border border-black/15 bg-white px-2 py-1 text-xs text-navy outline-none focus:border-brand'
@@ -49,7 +50,7 @@ export default function Mileage({ tab = 'log' }: { tab?: Tab }) {
   // entry someone deleted after an earlier heal stays deleted.
   useEffect(() => {
     if (!canManage) return
-    const t = setTimeout(ensureRouteCatalogues, 4000)
+    const t = setTimeout(() => { ensureRouteCatalogues(); healFleetSpellings() }, 4000)
     return () => clearTimeout(t)
   }, [canManage])
 
@@ -214,7 +215,14 @@ function AddTripsModal({ open, onClose, branch, project, routes, vehicles, trips
   if (open && !wasOpen) { setWasOpen(true); setFleet(''); setReg(''); setSeat('40'); setRows(startRows()) }
   if (!open && wasOpen) setWasOpen(false)
 
-  function onFleet(v: string) { setFleet(v); const veh = vehicles.find((x: any) => x.fleet_no.toLowerCase() === v.toLowerCase()); if (veh) { setReg(veh.reg_plate); setSeat(classFromCapacity(veh.capacity)) } }
+  function onFleet(v: string) {
+    // Match the register however the number was typed — INZ120, inz 120 — and
+    // snap the box to the register's own spelling, so a hand-typed variant can
+    // never split a bus in two.
+    const veh = vehicles.find((x: any) => canonFleetNo(x.fleet_no) === canonFleetNo(v))
+    if (veh) { setFleet(veh.fleet_no); setReg(veh.reg_plate); setSeat(classFromCapacity(veh.capacity)) }
+    else setFleet(v)
+  }
   function setRow(i: number, patch: Partial<Draft>) { setRows((rs) => rs.map((r, idx) => (idx === i ? { ...r, ...patch } : r))) }
   function onRoute(i: number, name: string) {
     const r = routes.find((x: any) => x.name === name)
@@ -532,6 +540,14 @@ function VehicleTab({ trips, project }: { trips: MileageTrip[]; project: string 
         </select>
       </div>
 
+      {monthTrips.length === 0 && (
+        <div className="card flex flex-col items-center gap-2 px-6 py-16 text-center">
+          <FileSpreadsheet size={26} className="text-status-neutral" />
+          <p className="text-sm font-medium text-navy">No movements logged for {monthLabel(effMonth)}.</p>
+          <p className="max-w-md text-sm text-status-neutral">If this period was just cleared, bulk-upload the corrected file on the Daily log tab - or pick another month above.</p>
+        </div>
+      )}
+
       {meta && (
         <div className="grid grid-cols-3 gap-3">
           <KpiCard label="Internal total" value={`${sheet.internal.toLocaleString()} km`} />
@@ -540,7 +556,7 @@ function VehicleTab({ trips, project }: { trips: MileageTrip[]; project: string 
         </div>
       )}
 
-      <div className="card overflow-hidden">
+      {monthTrips.length > 0 && <div className="card overflow-hidden">
         <div className="border-b border-black/5 px-5 py-3.5"><h3 className="font-display text-sm font-bold text-navy">{effFleet || '—'} — daily movements</h3></div>
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
@@ -590,7 +606,7 @@ function VehicleTab({ trips, project }: { trips: MileageTrip[]; project: string 
             )}
           </table>
         </div>
-      </div>
+      </div>}
     </div>
   )
 }
@@ -635,13 +651,25 @@ function SummaryTab({ trips, branch, branchShort, project }: { trips: MileageTri
           ))}
         </div>
         <div className="ml-auto flex gap-2">
-          <Button variant="secondary" onClick={() => printSummaryPDF({ summary, signatories: sig, project, monthLabel: monthLabel(effMonth), branchShort })} disabled={!effMonth}><FileText size={15} /> PDF summary</Button>
-          <Button onClick={() => exportWorkbook({ trips: monthTrips, rates, signatories: sig, project, monthLabel: monthLabel(effMonth), branchShort })} disabled={!effMonth}><FileSpreadsheet size={15} /> Export workbook</Button>
+          <Button variant="secondary" onClick={() => printSummaryPDF({ summary, signatories: sig, project, monthLabel: monthLabel(effMonth), branchShort })} disabled={!effMonth || monthTrips.length === 0}><FileText size={15} /> PDF summary</Button>
+          <Button onClick={() => exportWorkbook({ trips: monthTrips, rates, signatories: sig, project, monthLabel: monthLabel(effMonth), branchShort })} disabled={!effMonth || monthTrips.length === 0}><FileSpreadsheet size={15} /> Export workbook</Button>
         </div>
       </div>
 
       {cur === 'ZMW' && <p className="text-[11px] text-status-neutral">Converted at K{fx.toFixed(2)}/USD (Bank of Zambia, {monthLabel(effMonth)}). FQM is invoiced in USD.</p>}
 
+      {/* A month with nothing in it must SAY so. Rendering the billing tables
+          with zero seat classes produced colSpan={0} headers - full-width navy
+          bars with no body, which read as a black screen after a bulk clear. */}
+      {monthTrips.length === 0 && (
+        <div className="card flex flex-col items-center gap-2 px-6 py-16 text-center">
+          <FileSpreadsheet size={26} className="text-status-neutral" />
+          <p className="text-sm font-medium text-navy">No movements logged for {monthLabel(effMonth)}.</p>
+          <p className="max-w-md text-sm text-status-neutral">If this period was just cleared, bulk-upload the corrected file on the Daily log tab - or pick another month above.</p>
+        </div>
+      )}
+
+      {monthTrips.length > 0 && <>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <KpiCard label="Claimable km" value={summary.total_km.toLocaleString()} highlight sub={monthLabel(effMonth)} />
         <KpiCard label="Internal km" value={summary.internal_km.toLocaleString()} />
@@ -817,6 +845,7 @@ function SummaryTab({ trips, branch, branchShort, project }: { trips: MileageTri
         <SignBlock title="INZU MCS Limited" rows={[['Prepared By', sig.inzu_prepared], ['Checked By', sig.inzu_checked], ['Authorised By', sig.inzu_authorised], ['Approved By', sig.inzu_approved]]} />
         <SignBlock title={`FQM ${branchShort}`} rows={[['Checked By', sig.fqm_checked], ['Approved By', sig.fqm_approved]]} />
       </div>
+      </>}
     </div>
   )
 }
