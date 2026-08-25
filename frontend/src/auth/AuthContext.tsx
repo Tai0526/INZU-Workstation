@@ -68,13 +68,27 @@ function SupabaseAuthProvider({ children }: { children: ReactNode }) {
     return () => { p(); b() }
   }, [])
 
-  async function loadProfile(userId: string): Promise<AppUser | null> {
+  /**
+   * Fetch the profile row. Returns null ONLY when the row genuinely does not
+   * exist; a network / server hiccup THROWS instead. The two must never be
+   * conflated: treating a slow first connection as "no profile" made login
+   * fail and sign the user straight back out — the "I have to sign in twice"
+   * bug. maybeSingle() is what separates them: zero rows is a clean null,
+   * anything else is an error.
+   */
+  async function fetchProfile(userId: string): Promise<AppUser | null> {
     if (!supabase) return null
-    const { data, error } = await supabase.from('profiles').select('*').eq('id', userId).single()
-    if (error || !data) return null
+    const { data, error } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle()
+    if (error) throw new Error(error.message)
+    if (!data) return null
     setMustChange(!!(data as any).must_change_password)
     void supaUsersStore.refresh() // keep the directory warm for the rest of the app
     return rowToUser(data as any)
+  }
+
+  /** Best-effort variant for background paths (bootstrap, auth events). */
+  async function loadProfile(userId: string): Promise<AppUser | null> {
+    try { return await fetchProfile(userId) } catch { return null }
   }
 
   // Bootstrap: current session + react to auth changes.
@@ -95,10 +109,21 @@ function SupabaseAuthProvider({ children }: { children: ReactNode }) {
       if (data.session) setProfile(await loadProfile(data.session.user.id))
       setReady(true)
     })
-    const { data: sub } = supabase.auth.onAuthStateChange(async (_event, s) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {
       if (!active) return
       setSession(s)
-      setProfile(s ? await loadProfile(s.user.id) : null)
+      if (!s) { setProfile(null); return }
+      // Deferred on purpose, two reasons. Awaiting inside onAuthStateChange is
+      // the documented supabase-js footgun — and this client AWAITS every
+      // subscriber before signInWithPassword returns, so an await here put a
+      // whole extra profile round-trip on the critical path of every login.
+      // And on a failed load (a hiccup during the hourly token refresh) the
+      // last-known profile is KEPT rather than nulled — nulling it threw the
+      // user back to the login page mid-session for a moment's bad network.
+      setTimeout(() => {
+        if (!active) return
+        void loadProfile(s.user.id).then((p) => { if (active && p) setProfile(p) })
+      }, 0)
     })
     return () => { active = false; sub.subscription.unsubscribe() }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -119,7 +144,19 @@ function SupabaseAuthProvider({ children }: { children: ReactNode }) {
     const email = emailOrUsername.trim()
     const { data, error } = await supabase.auth.signInWithPassword({ email, password })
     if (error || !data.user) return { ok: false, reason: error?.message || 'Sign-in failed.' }
-    const prof = await loadProfile(data.user.id)
+    // A transient failure here must not read as "no profile" — that combination
+    // signed the user out again and made every slow first connection a
+    // sign-in-twice. Retry once; if it still cannot be reached, say so plainly
+    // and KEEP the session, so the next press goes straight through.
+    let prof: AppUser | null = null
+    try {
+      prof = await fetchProfile(data.user.id)
+    } catch {
+      await new Promise((r) => setTimeout(r, 700))
+      try { prof = await fetchProfile(data.user.id) } catch {
+        return { ok: false, reason: 'Signed in, but your profile could not be loaded — the connection hiccupped. Press Enter Workstation again.' }
+      }
+    }
     if (!prof) {
       await supabase.auth.signOut()
       return { ok: false, reason: 'No profile found for this account. Has the database setup (0001_init.sql) been run, and your account promoted?' }

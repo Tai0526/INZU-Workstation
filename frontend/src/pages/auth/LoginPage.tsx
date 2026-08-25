@@ -22,12 +22,19 @@ export default function LoginPage() {
 
   if (user) return <Navigate to="/" replace />
 
-  async function submit(e: FormEvent) {
+  async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
     setError('')
     setIdleNotice(false)
+    // Autofill belt-and-braces: a password manager can fill the boxes without
+    // firing React's onChange, so state can be empty while the form LOOKS
+    // complete — the submit then fails and only the second attempt (after the
+    // events finally fire) works. The DOM value is what the user sees; use it.
+    const form = e.currentTarget
+    const domEmail = (form.elements.namedItem('email') as HTMLInputElement | null)?.value ?? ''
+    const domPassword = (form.elements.namedItem('password') as HTMLInputElement | null)?.value ?? ''
     setLoading(true)
-    const res = await login(email, password)
+    const res = await login(email || domEmail, password || domPassword)
     if (res.ok) navigate(res.landing || '/')
     else { setError(res.reason || 'Sign-in failed.'); setLoading(false) }
   }
@@ -102,7 +109,7 @@ export default function LoginPage() {
               <span className="mb-1.5 block text-xs font-medium text-navy">Email</span>
               <div className="relative">
                 <Mail size={16} className="pointer-events-none absolute left-3.5 top-3.5 text-status-neutral" />
-                <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoFocus autoComplete="username"
+                <input type="email" name="email" value={email} onChange={(e) => setEmail(e.target.value)} autoFocus autoComplete="username"
                   className="h-11 w-full rounded-[10px] border-[1.5px] border-navy/15 bg-white pl-10 pr-3.5 text-sm text-navy outline-none focus:border-brand" placeholder="you@inzumcs.com" />
               </div>
             </label>
@@ -110,7 +117,7 @@ export default function LoginPage() {
               <span className="mb-1.5 block text-xs font-medium text-navy">Password</span>
               <div className="relative">
                 <Lock size={16} className="pointer-events-none absolute left-3.5 top-3.5 text-status-neutral" />
-                <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password"
+                <input type="password" name="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password"
                   className="h-11 w-full rounded-[10px] border-[1.5px] border-navy/15 bg-white pl-10 pr-3.5 text-sm text-navy outline-none focus:border-brand" placeholder="••••••••" />
               </div>
             </label>
