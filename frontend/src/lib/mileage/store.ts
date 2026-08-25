@@ -14,7 +14,7 @@ function newId() {
 }
 const stampNow = () => new Date().toISOString()
 const who = () => getActor().name
-type Input<T extends Audited> = Omit<T, keyof Audited>
+type Input<T extends Audited> = Omit<T, keyof Audited> & Partial<Pick<T, 'id'>>
 
 function makeStore<T extends Audited>(key: string, seed: T[]) {
   const { load, commit, subscribe } = createSyncTable<T>({ table: key.replace(/^inzu_/, ''), lsKey: key, seed })
@@ -22,7 +22,9 @@ function makeStore<T extends Audited>(key: string, seed: T[]) {
     list: () => load(),
     add(data: Input<T>): T {
       const now = stampNow()
-      const item = { ...(data as object), id: newId(), created_by: who(), created_at: now, updated_by: who(), updated_at: now } as T
+      // A caller may pass a stable id (the catalogue heal does, so re-adding is
+      // an idempotent upsert rather than a duplicate); otherwise one is minted.
+      const item = { ...(data as object), id: data.id ?? newId(), created_by: who(), created_at: now, updated_by: who(), updated_at: now } as T
       commit([...load(), item]); return item
     },
     bulkAdd(items: Input<T>[]): T[] {

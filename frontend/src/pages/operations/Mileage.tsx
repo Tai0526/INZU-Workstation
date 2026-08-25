@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { Plus, Upload, Download, Trash2, Pencil, FileSpreadsheet, FileText, Settings, Lock, CheckCircle2, AlertTriangle, UploadCloud, Route as RouteIcon } from 'lucide-react'
 import clsx from 'clsx'
 import { useAuth } from '@/auth/AuthContext'
@@ -8,6 +8,7 @@ import Modal from '@/components/ui/Modal'
 import Button from '@/components/ui/Button'
 import KpiCard from '@/components/ui/KpiCard'
 import { useVehicles } from '@/lib/fleet/store'
+import { ensureRouteCatalogues } from '@/lib/operations/catalogue'
 import { useFuelRate } from '@/lib/fuel/store'
 import { type Currency, money as fmtMoney } from '@/lib/fuel/types'
 import {
@@ -41,6 +42,16 @@ export default function Mileage({ tab = 'log' }: { tab?: Tab }) {
   const branch = user!.branch
   const branchShort = BRANCHES.find((b) => b.code === branch)!.short
   const canManage = canEdit(role, 'mileage')
+
+  // Top the route catalogues up to the Geotab lab's names and contract
+  // distances - once per catalogue version. Delayed so the server copy has
+  // hydrated first: the version gate then reads the stored value, and an
+  // entry someone deleted after an earlier heal stays deleted.
+  useEffect(() => {
+    if (!canManage) return
+    const t = setTimeout(ensureRouteCatalogues, 4000)
+    return () => clearTimeout(t)
+  }, [canManage])
 
   const projects = PROJECTS_BY_BRANCH[branch]
   const [project, setProject] = useState(projects[0])

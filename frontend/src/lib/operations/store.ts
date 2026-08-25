@@ -48,9 +48,9 @@ const audit = { created_by: 'System (seed)', created_at: A, updated_by: 'System 
 
 // Locations library — destinations with a reference one-way distance (drives planned km).
 const ROUTE_SEED: OpRoute[] = [
-  { id: 'L-T1', branch: 'trident', name: 'Kisasa', code: '', distance_km: 35, notes: '', ...audit },
-  { id: 'L-T2', branch: 'trident', name: 'Pineaple', code: '', distance_km: 28, notes: '', ...audit },
-  { id: 'L-T3', branch: 'trident', name: 'Lumwana', code: '', distance_km: 60, notes: '', ...audit },
+  { id: 'L-T1', branch: 'trident', name: 'Kisasa', code: '', distance_km: 30, notes: 'Contract km per Geotab lab.', ...audit },
+  { id: 'L-T2', branch: 'trident', name: 'Pineapple', code: '', distance_km: 11, notes: 'Contract km per Geotab lab.', ...audit },
+  { id: 'L-T3', branch: 'trident', name: 'Lumwana East', code: '', distance_km: 38, notes: 'Contract km per Geotab lab.', ...audit },
   { id: 'L-T4', branch: 'trident', name: 'Musele Junction', code: '', distance_km: 42, notes: '', ...audit },
   { id: 'L-T5', branch: 'trident', name: 'Shelter', code: '', distance_km: 25, notes: '', ...audit },
   { id: 'L-T6', branch: 'trident', name: 'Housing', code: '', distance_km: 20, notes: '', ...audit },
@@ -68,18 +68,18 @@ function al(id: string, date: string, type: Allocation['trip_type'], driver: str
 const ALLOC_SEED: Allocation[] = [
   // Morning pickups
   al('AL1', today, 'pickup', 'Kasweka', 'INZ 226', 'BCG 4666', 'L-T4', 'Musele Junction', '04:20', 45, 42),
-  al('AL2', today, 'pickup', 'Nkungamina', 'INZ 220', 'BCG 5910', 'L-T3', 'Lumwana', '04:15', null, 60),
-  al('AL3', today, 'pickup', 'Pelekelo', 'INZ 131', 'BCG 5198', 'L-T1', 'Kisasa', '04:15', 40, 35),
-  al('AL4', today, 'pickup', 'Njongo', 'INZ 120', 'BCG 4270', 'L-T2', 'Pineaple', '04:30', null, 28),
-  al('AL5', today, 'pickup', 'Kantumoya', 'INZ 230', 'BCH 7803', 'L-T1', 'Kisasa', '04:25', 60, 35),
+  al('AL2', today, 'pickup', 'Nkungamina', 'INZ 220', 'BCG 5910', 'L-T3', 'Lumwana East', '04:15', null, 38),
+  al('AL3', today, 'pickup', 'Pelekelo', 'INZ 131', 'BCG 5198', 'L-T1', 'Kisasa', '04:15', 40, 30),
+  al('AL4', today, 'pickup', 'Njongo', 'INZ 120', 'BCG 4270', 'L-T2', 'Pineapple', '04:30', null, 11),
+  al('AL5', today, 'pickup', 'Kantumoya', 'INZ 230', 'BCH 7803', 'L-T1', 'Kisasa', '04:25', 60, 30),
   al('AL6', today, 'pickup', 'Kamocha', 'INZ 121', 'BCG 4271', 'L-T6', 'Housing', '05:20', null, 20),
   // Same buses again later in the morning — multiple trips
-  al('AL7', today, 'pickup', 'Kasweka', 'INZ 226', 'BCG 4666', 'L-T1', 'Kisasa', '05:40', null, 35),
-  al('AL8', today, 'pickup', 'Njongo', 'INZ 120', 'BCG 4270', 'L-T2', 'Pineaple', '06:30', null, 28),
+  al('AL7', today, 'pickup', 'Kasweka', 'INZ 226', 'BCG 4666', 'L-T1', 'Kisasa', '05:40', null, 30),
+  al('AL8', today, 'pickup', 'Njongo', 'INZ 120', 'BCG 4270', 'L-T2', 'Pineapple', '06:30', null, 11),
   // Evening knock-offs
-  al('AL9', today, 'knockoff', 'Mbuzi', 'INZ 122', 'BCG 4272', 'L-T3', 'Lumwana', '16:20', null, 60),
-  al('AL10', today, 'knockoff', 'Chilengi', 'INZ 222', 'BCG 5912', 'L-T1', 'Kisasa', '16:40', null, 35),
-  al('AL11', today, 'knockoff', 'Njongo', 'INZ 120', 'BCG 4270', 'L-T2', 'Pineaple', '17:10', null, 28),
+  al('AL9', today, 'knockoff', 'Mbuzi', 'INZ 122', 'BCG 4272', 'L-T3', 'Lumwana East', '16:20', null, 38),
+  al('AL10', today, 'knockoff', 'Chilengi', 'INZ 222', 'BCG 5912', 'L-T1', 'Kisasa', '16:40', null, 30),
+  al('AL11', today, 'knockoff', 'Njongo', 'INZ 120', 'BCG 4270', 'L-T2', 'Pineapple', '17:10', null, 11),
 ]
 
 const MILEAGE_SEED: MileageEntry[] = [
@@ -112,9 +112,9 @@ function dp(id: string, type: DailyPlanTrip['trip_type'], fleet: string, reg: st
 }
 const DAILY_PLAN_SEED: DailyPlanTrip[] = [
   dp('DP1', 'pickup', 'INZ 226', 'BCG 4666', 'Kasweka', 'Musele Junction', DEFAULT_TO_LOCATION, '04:20'),
-  dp('DP2', 'pickup', 'INZ 220', 'BCG 5910', 'Nkungamina', 'Lumwana', DEFAULT_TO_LOCATION, '04:15'),
+  dp('DP2', 'pickup', 'INZ 220', 'BCG 5910', 'Nkungamina', 'Lumwana East', DEFAULT_TO_LOCATION, '04:15'),
   dp('DP3', 'pickup', 'INZ 131', 'BCG 5198', 'Pelekelo', 'Kisasa', DEFAULT_TO_LOCATION, '04:15'),
-  dp('DP4', 'knockoff', 'INZ 120', 'BCG 4270', 'Njongo', DEFAULT_TO_LOCATION, 'Pineaple', '16:30'),
+  dp('DP4', 'knockoff', 'INZ 120', 'BCG 4270', 'Njongo', DEFAULT_TO_LOCATION, 'Pineapple', '16:30'),
 ]
 
 function wa(id: string, week: string, fleet: string, driverId: string, driver: string, overtime = false): WeeklyAssignment {
