@@ -13,8 +13,8 @@ import { ROLE_LIST, ROLES, BRANCHES, BRANCH_CODES, brandingStore, useBranches, t
 import { NAV } from '@/lib/nav'
 import { useUsers, usersStore, useSessions, allowedBranches, type AppUser, type NewUser } from '@/lib/auth/users'
 import { isSupabaseConfigured, requireSupabase } from '@/lib/supabase/client'
-import { useReminderConfig, reminderConfigStore } from '@/lib/reminders/config'
-import { supaUsersStore } from '@/lib/auth/profiles'
+import { useReminderConfig, reminderConfigStore, REMINDER_GROUPS, categoryOn } from '@/lib/reminders/config'
+import { supaUsersStore, useSupaUsers } from '@/lib/auth/profiles'
 import { useApprovals, approvalsStore } from '@/lib/auth/approvals'
 import { useScheduling, schedulingStore } from '@/lib/drivers/scheduling'
 import { cycleKeyFor, sectionAnchorFor } from '@/lib/drivers/schedule'
@@ -532,14 +532,16 @@ const NL = String.fromCharCode(10)
 
 function RemindersCard() {
   const rc = useReminderConfig()
+  const users = useSupaUsers().filter((u) => u.active)
   const [text, setText] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState('')
   const shown = text ?? rc.recipients.join(NL)
   const dirty = text !== null && text !== rc.recipients.join(NL)
+  const picked = new Set(rc.user_ids)
 
   function save() {
-    reminderConfigStore.set({ enabled: rc.enabled, recipients: (text ?? '').split(new RegExp('[' + NL + ',;]+')) })
+    reminderConfigStore.set({ ...rc, recipients: (text ?? '').split(new RegExp('[' + NL + ',;]+')) })
     setText(null)
   }
   async function sendNow() {
@@ -549,10 +551,12 @@ function RemindersCard() {
       if (dirty) save()
       const { data, error } = await requireSupabase().functions.invoke('daily-reminders', { body: {} })
       if (error) throw error
-      const sent = (data?.sent ?? []) as { group: string; expired: number; expiring: number }[]
-      setResult(sent.length
-        ? 'Sent ' + sent.length + ' email(s): ' + sent.map((s) => s.group + ' (' + s.expired + ' expired, ' + s.expiring + ' expiring)').join(' · ')
-        : (data?.note ?? 'Nothing needed attention — no email sent.'))
+      const sent = (data?.sent ?? []) as { group: string; title: string; red: number; amber: number }[]
+      const errs = (data?.errors ?? []) as string[]
+      const done = sent.length
+        ? 'Sent ' + sent.length + ' email(s): ' + sent.map((s) => s.title + (s.red + s.amber ? ' (' + s.red + ' overdue, ' + s.amber + ' coming up)' : '')).join(' · ')
+        : (data?.note ?? 'Nothing needed attention — no email sent.')
+      setResult(errs.length ? done + ' — problems: ' + errs.join('; ') : done)
     } catch (e) {
       setResult('Failed: ' + ((e as Error).message || 'is the daily-reminders function deployed?'))
     } finally { setBusy(false) }
@@ -566,18 +570,51 @@ function RemindersCard() {
         </label>
       </div>
       <p className="mb-3 text-[11px] text-status-neutral">
-        Every morning (06:30) one email per group of items needing attention — vehicle licensing (fitness, road tax, insurance…),
-        driver credentials (licences, PSV, compliance &amp; training), and contracts &amp; company documents — each with a table of what is
-        expired and what expires within 30 days. Nothing due, nothing sent.
+        Every morning (06:30), items of the same nature go out together in one email — a table of what is overdue and what is
+        coming up (within 30 days). Nothing due, nothing sent. Tick what to include:
       </p>
-      <label className="block">
-        <span className="mb-1 block text-xs font-medium text-navy">Recipients — one address per line</span>
-        <textarea rows={3} value={shown} onChange={(e) => setText(e.target.value)} placeholder="ops@inzumcs.com&#10;md@inzumcs.com"
-          className="w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand" />
-      </label>
+      <div className="mb-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {REMINDER_GROUPS.map((g) => (
+          <div key={g.title} className="rounded-lg border border-black/10 p-2.5">
+            <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wide text-status-neutral">{g.title} <span className="font-normal normal-case">· one email</span></div>
+            <div className="space-y-1.5">
+              {g.cats.map((c) => (
+                <label key={c.key} className="flex items-start gap-1.5 text-xs text-navy" title={c.hint}>
+                  <input type="checkbox" className="mt-0.5" checked={categoryOn(rc, c.key)}
+                    onChange={(e) => reminderConfigStore.setCategory(c.key, e.target.checked)} />
+                  <span>{c.label}<span className="block text-[10px] leading-tight text-status-neutral">{c.hint}</span></span>
+                </label>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <span className="mb-1 block text-xs font-medium text-navy">Send to — Workstation users ({picked.size} picked)</span>
+          <div className="max-h-44 space-y-1 overflow-y-auto rounded-lg border border-black/15 bg-white p-2">
+            {users.length === 0 && <p className="px-1 py-2 text-xs text-status-neutral">No active accounts found.</p>}
+            {users.map((u) => (
+              <label key={u.id} className={'flex items-start gap-1.5 rounded px-1 py-0.5 text-xs ' + (u.email ? 'text-navy' : 'text-status-neutral opacity-60')} title={u.email || 'No email on this account'}>
+                <input type="checkbox" className="mt-0.5" disabled={!u.email} checked={picked.has(u.id)}
+                  onChange={(e) => reminderConfigStore.toggleUser(u.id, e.target.checked)} />
+                <span>{u.full_name || u.username}
+                  <span className="block text-[10px] leading-tight text-status-neutral">{ROLES[u.role]?.label ?? u.role}{u.email ? ' · ' + u.email : ' · no email on the account'}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+        </div>
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-navy">Extra addresses (no account) — one per line</span>
+          <textarea rows={6} value={shown} onChange={(e) => setText(e.target.value)} placeholder="md@inzumcs.com"
+            className="w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand" />
+        </label>
+      </div>
+      <p className="mt-1.5 text-[10px] text-status-neutral">Each email carries an "Open INZU Workstation" button — recipients log in to see full details and who is responsible. Users are emailed at their account address, so address changes follow automatically.</p>
       <div className="mt-2 flex items-center gap-2">
         {dirty && <Button onClick={save}>Save recipients</Button>}
-        <Button variant="secondary" onClick={sendNow} disabled={busy || (!dirty && rc.recipients.length === 0)}>
+        <Button variant="secondary" onClick={sendNow} disabled={busy || (!dirty && rc.recipients.length === 0 && picked.size === 0)}>
           <Mail size={14} /> {busy ? 'Sending…' : 'Send now'}
         </Button>
         {result && <span className="text-xs text-status-neutral">{result}</span>}

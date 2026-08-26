@@ -1,7 +1,8 @@
 -- Daily email reminders: pg_cron calls the daily-reminders Edge Function every
 -- morning at 04:30 UTC (06:30 site time), which sends one digest email per
--- group of expiring items — vehicle licensing, driver credentials, contracts —
--- to the recipients configured on the Admin page.
+-- NATURE of thing — vehicles & workshop, driver credentials, contracts &
+-- documents, fuel stock snapshot — to the recipients configured on the Admin
+-- page. Which categories are included is also chosen there (Scheduling tab).
 --
 -- ONE-TIME SETUP (dashboard SQL editor or psql, after `supabase db push`):
 --
