@@ -1,4 +1,7 @@
-// Daily attention digests — one email per KIND of thing, never one per item.
+// Daily attention digests — one email per KIND of thing PER BRANCH, never one
+// per item. Licensing is grouped item by item (Road Tax, then Fitness…), items
+// with anything expired are tagged IMPORTANT, and an email containing anything
+// overdue is sent high-priority with an "Important:" subject.
 //
 // What goes out is chosen on the Admin page (app_config 'reminder_config'):
 // each category below can be switched on/off, and categories of the same
@@ -54,8 +57,11 @@ const branchName = (b: string) => BRANCH_LABEL[b] ?? b
 
 // One line in a digest table. `tone` decides which table it lands in:
 // red = act now (overdue / out of stock), amber = coming up / needs scheduling.
+// Every email covers ONE branch — rows are split by `branch` at send time.
 interface Row { what: string; who: string; branch: string; when: string; status: string; tone: 'red' | 'amber'; sort: number }
-interface Section { key: string; title: string; rows: Row[] }
+// groupBy 'what' renders the section as one block per item (Road Tax, Fitness…),
+// each with its own expired + expiring tables and an IMPORTANT tag when overdue.
+interface Section { key: string; title: string; rows: Row[]; groupBy?: 'what' }
 
 const DAY = 86_400_000
 const daysUntil = (iso: string, today: string) =>
@@ -82,29 +88,50 @@ function expiryRow(what: string, who: string, branch: string, expiry: string, to
 // ── The email body ─────────────────────────────────────────────────────
 const esc = (s: unknown) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!))
 
-function tableOf(rows: Row[], tone: 'red' | 'amber'): string {
+function tableOf(rows: Row[], tone: 'red' | 'amber', showItem = true): string {
   const colour = tone === 'red' ? '#B3261E' : '#8a6d10'
   const body = rows.map((r) => `<tr>
-    <td style="padding:6px 10px;border-bottom:1px solid #eee">${esc(r.what)}</td>
+    ${showItem ? `<td style="padding:6px 10px;border-bottom:1px solid #eee">${esc(r.what)}</td>` : ''}
     <td style="padding:6px 10px;border-bottom:1px solid #eee"><b>${esc(r.who)}</b></td>
-    <td style="padding:6px 10px;border-bottom:1px solid #eee">${esc(branchName(r.branch))}</td>
     <td style="padding:6px 10px;border-bottom:1px solid #eee">${esc(r.when)}</td>
     <td style="padding:6px 10px;border-bottom:1px solid #eee;color:${colour};font-weight:bold">${esc(r.status)}</td>
   </tr>`).join('')
   return `<table style="border-collapse:collapse;width:100%;font-size:13px;margin:6px 0 16px">
     <tr style="background:#0F1B33;color:#fff;text-align:left">
-      <th style="padding:7px 10px">Item</th><th style="padding:7px 10px">For</th>
-      <th style="padding:7px 10px">Branch</th><th style="padding:7px 10px">Due</th><th style="padding:7px 10px">Status</th>
+      ${showItem ? '<th style="padding:7px 10px">Item</th>' : ''}<th style="padding:7px 10px">For</th>
+      <th style="padding:7px 10px">Due</th><th style="padding:7px 10px">Status</th>
     </tr>${body}</table>`
 }
 
+const IMPORTANT_TAG = '<span style="background:#B3261E;color:#fff;font-size:10px;font-weight:bold;letter-spacing:.5px;padding:2px 8px;border-radius:99px;vertical-align:middle;margin-left:8px">IMPORTANT</span>'
+
+function pairOf(rows: Row[], showItem: boolean): string {
+  const red = rows.filter((r) => r.tone === 'red').sort((a, b) => a.sort - b.sort)
+  const amber = rows.filter((r) => r.tone === 'amber').sort((a, b) => a.sort - b.sort)
+  return `${red.length ? `<div style="font-weight:bold;color:#B3261E;font-size:12px;margin:4px 0 2px">Needs action now (${red.length})</div>${tableOf(red, 'red', showItem)}` : ''}
+    ${amber.length ? `<div style="font-weight:bold;color:#8a6d10;font-size:12px;margin:4px 0 2px">Coming up (${amber.length})</div>${tableOf(amber, 'amber', showItem)}` : ''}`
+}
+
 function sectionHtml(s: Section): string {
-  const red = s.rows.filter((r) => r.tone === 'red').sort((a, b) => a.sort - b.sort)
-  const amber = s.rows.filter((r) => r.tone === 'amber').sort((a, b) => a.sort - b.sort)
-  if (!red.length && !amber.length) return ''
-  return `<div style="font-size:14px;font-weight:bold;margin:14px 0 2px">${esc(s.title)}</div>
-    ${red.length ? `<div style="font-weight:bold;color:#B3261E;font-size:12px;margin:4px 0 2px">Needs action now (${red.length})</div>${tableOf(red, 'red')}` : ''}
-    ${amber.length ? `<div style="font-weight:bold;color:#8a6d10;font-size:12px;margin:4px 0 2px">Coming up (${amber.length})</div>${tableOf(amber, 'amber')}` : ''}`
+  if (!s.rows.length) return ''
+  const head = `<div style="font-size:14px;font-weight:bold;margin:14px 0 2px">${esc(s.title)}</div>`
+  if (s.groupBy !== 'what') return head + pairOf(s.rows, true)
+  // One block per item — Road Tax on its own, then Fitness, and so on — the
+  // items with anything already expired first, tagged IMPORTANT.
+  const byItem = new Map<string, Row[]>()
+  for (const r of s.rows) {
+    const list = byItem.get(r.what) ?? []
+    if (!list.length) byItem.set(r.what, list)
+    list.push(r)
+  }
+  const blocks = [...byItem.entries()].sort((a, b) => {
+    const ia = a[1].some((r) => r.tone === 'red') ? 0 : 1
+    const ib = b[1].some((r) => r.tone === 'red') ? 0 : 1
+    return ia - ib || Math.min(...a[1].map((r) => r.sort)) - Math.min(...b[1].map((r) => r.sort))
+  })
+  return head + blocks.map(([what, rows]) =>
+    `<div style="font-size:13px;font-weight:bold;margin:10px 0 2px">${esc(what)} (${rows.length})${rows.some((r) => r.tone === 'red') ? IMPORTANT_TAG : ''}</div>${pairOf(rows, false)}`
+  ).join('')
 }
 
 function wrapEmail(title: string, today: string, inner: string, siteUrl: string): string {
@@ -124,7 +151,9 @@ function wrapEmail(title: string, today: string, inner: string, siteUrl: string)
 }
 
 // ── Transport ──────────────────────────────────────────────────────────
-async function sendEmail(to: string[], subject: string, html: string): Promise<void> {
+// `important` marks the email high-priority (the "!" in Outlook/Gmail) — used
+// whenever anything in it is already overdue, or fuel is critically low.
+async function sendEmail(to: string[], subject: string, html: string, important = false): Promise<void> {
   const from = Deno.env.get('REMINDER_FROM') || Deno.env.get('PAYSLIP_FROM') || Deno.env.get('SMTP_USER') || ''
   if (!from) throw new Error('No sender configured — set REMINDER_FROM (or SMTP_USER).')
   const resendKey = Deno.env.get('RESEND_API_KEY')
@@ -132,7 +161,7 @@ async function sendEmail(to: string[], subject: string, html: string): Promise<v
     const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { Authorization: `Bearer ${resendKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from, to, subject, html }),
+      body: JSON.stringify({ from, to, subject, html, ...(important ? { headers: { 'X-Priority': '1', Importance: 'high' } } : {}) }),
     })
     if (!res.ok) throw new Error(`Resend refused: ${res.status} ${await res.text()}`)
     return
@@ -146,7 +175,7 @@ async function sendEmail(to: string[], subject: string, html: string): Promise<v
     },
   })
   try {
-    await client.send({ from, to: to.join(', '), subject, content: 'auto', html })
+    await client.send({ from, to: to.join(', '), subject, content: 'auto', html, ...(important ? { priority: 'high' as const } : {}) })
   } finally {
     await client.close()
   }
@@ -182,18 +211,26 @@ Deno.serve(async (req: Request) => {
   const rc = await conf<{ enabled?: boolean; user_ids?: string[]; recipients?: string[]; categories?: Record<string, boolean>; site_url?: string }>('reminder_config', {})
   // The mailing list is Workstation users (resolved to their account email at
   // send time, so address changes follow automatically) plus any extra typed
-  // addresses for people without an account.
+  // addresses for people without an account. Emails are BRANCH-SCOPED: a user
+  // receives only the digests for the branches they belong to (their branch +
+  // any extra branches), while cross-branch roles — MD, directors, board,
+  // administrator, HR manager — receive every branch. Typed extras receive all.
+  const CROSS_BRANCH_ROLES = new Set(['administrator', 'board_chairman', 'board_member', 'managing_director', 'finance_director', 'hr_manager'])
   const isEmail = (r: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(r)
-  const addresses = new Set<string>((rc.recipients ?? []).map((r) => String(r).trim().toLowerCase()).filter(isEmail))
+  const extras = [...new Set((rc.recipients ?? []).map((r) => String(r).trim().toLowerCase()).filter(isEmail))]
+  const scoped: { email: string; all: boolean; branches: string[] }[] = []
   if (rc.user_ids?.length) {
-    const { data: users } = await admin.from('profiles').select('email, active').in('id', rc.user_ids)
+    const { data: users } = await admin.from('profiles').select('email, active, role, branch, extra_branches').in('id', rc.user_ids)
     for (const u of users ?? []) {
       const e = String(u.email ?? '').trim().toLowerCase()
-      if (u.active && isEmail(e)) addresses.add(e)
+      if (!u.active || !isEmail(e)) continue
+      scoped.push({ email: e, all: CROSS_BRANCH_ROLES.has(u.role), branches: [u.branch, ...(u.extra_branches ?? [])].filter(Boolean) })
     }
   }
-  const recipients = [...addresses]
-  if (!recipients.length) return json({ sent: [], note: 'No recipients configured — pick users on the Admin page.' })
+  const recipientsFor = (branch: string): string[] =>
+    [...new Set([...extras, ...scoped.filter((u) => u.all || u.branches.includes(branch)).map((u) => u.email)])]
+  const everyone = [...new Set([...extras, ...scoped.map((u) => u.email)])]
+  if (!everyone.length) return json({ sent: [], note: 'No recipients configured — pick users on the Admin page.' })
   if (rc.enabled === false && fromCron) return json({ sent: [], note: 'Reminders are switched off.' })
   const siteUrl = String(rc.site_url ?? '').replace(/\/+$/, '')
   const on = (key: string) => rc.categories?.[key] !== false // missing = on
@@ -237,7 +274,7 @@ Deno.serve(async (req: Request) => {
 
   // ── Sections, grouped into emails by nature ──────────────────────────
   const sections: Record<string, Section> = {}
-  const put = (key: string, title: string, rows: Row[]) => { sections[key] = { key, title, rows } }
+  const put = (key: string, title: string, rows: Row[], groupBy?: 'what') => { sections[key] = { key, title, rows, groupBy } }
 
   // Licensing + library documents (one table read covers both categories).
   if (on('vehicle_licensing') || on('company_documents')) {
@@ -252,7 +289,7 @@ Deno.serve(async (req: Request) => {
         if (d.entity_type === 'vehicle') lic.push(row)
         else if (d.entity_type !== 'driver') lib.push(row) // driver docs are covered by the drivers group
       }
-      if (on('vehicle_licensing')) put('vehicle_licensing', 'Licensing — expired & expiring', lic)
+      if (on('vehicle_licensing')) put('vehicle_licensing', 'Licensing — expired & expiring', lic, 'what')
       if (on('company_documents')) put('company_documents', 'Company & library documents', lib)
     })
   }
@@ -391,9 +428,8 @@ Deno.serve(async (req: Request) => {
     })
   }
 
-  // ── Fuel stock snapshot (a summary card per branch, not an expiry table) ──
-  let fuelHtml = ''
-  let fuelSubject = ''
+  // ── Fuel stock snapshot (one summary email per branch, not an expiry table) ──
+  const fuelCards: { branch: string; html: string; daysLeft: number | null }[] = []
   if (on('fuel_summary')) {
     await guard('fuel', async () => {
       interface Rec { branch: string; date: string; litres: number }
@@ -401,8 +437,6 @@ Deno.serve(async (req: Request) => {
       const { data: draws } = await admin.from('fuel_generator').select('branch, date, litres, status')
       const fuelCfg = await conf<Record<string, { opening_stock: number; dead_stock: number }>>('fuel_config', {})
       const branches = [...new Set([...issuances.map((i) => i.branch), ...receipts.map((r) => r.branch)])].sort()
-      const subjects: string[] = []
-      const cards: string[] = []
       for (const b of branches) {
         const iss = issuances.filter((i) => i.branch === b)
         const rec = receipts.filter((r) => r.branch === b)
@@ -424,23 +458,22 @@ Deno.serve(async (req: Request) => {
         const dColour = daysLeft == null ? '#0F1B33' : daysLeft < 7 ? '#B3261E' : daysLeft < 14 ? '#8a6d10' : '#1b7a3d'
         const cell = (label: string, value: string) =>
           `<td style="padding:8px 12px;border:1px solid #e5e7eb"><div style="font-size:11px;color:#6b7280">${label}</div><div style="font-size:14px;font-weight:bold">${value}</div></td>`
-        cards.push(`<div style="font-size:14px;font-weight:bold;margin:14px 0 4px">${esc(branchName(b))}</div>
-          <table style="border-collapse:collapse;font-size:13px"><tr>
+        fuelCards.push({
+          branch: b, daysLeft,
+          html: `<table style="border-collapse:collapse;font-size:13px;margin-top:12px"><tr>
             <td style="padding:8px 14px;border:1px solid #e5e7eb;text-align:center"><div style="font-size:26px;font-weight:bold;color:${dColour}">${daysLeft == null ? '—' : daysLeft}</div><div style="font-size:11px;color:#6b7280">days of fuel left</div></td>
             ${cell('Usable stock', `${Math.round(usable).toLocaleString()} L`)}
             ${cell('Average burn', burn ? `${Math.round(burn).toLocaleString()} L/day` : '—')}
             ${cell('Used this month', `${Math.round(usedThisMonth).toLocaleString()} L`)}
             ${cell('Received this month', `${Math.round(recvThisMonth).toLocaleString()} L`)}
             ${cell('Last delivery', lastRec ? `${Math.round(lastRec.litres).toLocaleString()} L · ${fmtDate(lastRec.date)}` : '—')}
-          </tr></table>`)
-        subjects.push(`${branchName(b).split(' ')[0]} ${daysLeft == null ? '—' : plural(daysLeft, 'day')} left`)
+          </tr></table>`,
+        })
       }
-      fuelHtml = cards.join('')
-      fuelSubject = subjects.join(' · ')
     })
   }
 
-  // ── One email per nature that has anything to say ────────────────────
+  // ── One email per nature PER BRANCH that has anything to say ─────────
   const GROUPS: { key: string; title: string; sections: string[] }[] = [
     { key: 'vehicles', title: 'Vehicles & workshop', sections: ['vehicle_licensing', 'vehicle_inspections', 'vehicle_service', 'workshop_spares'] },
     { key: 'drivers', title: 'Driver credentials', sections: ['driver_licences', 'safety_certs'] },
@@ -450,26 +483,40 @@ Deno.serve(async (req: Request) => {
   for (const g of GROUPS) {
     const secs = g.sections.map((k) => sections[k]).filter((s) => s && s.rows.length) as Section[]
     if (!secs.length) continue
-    const red = secs.reduce((n, s) => n + s.rows.filter((r) => r.tone === 'red').length, 0)
-    const amber = secs.reduce((n, s) => n + s.rows.filter((r) => r.tone === 'amber').length, 0)
-    const subject = `${g.title}: ${red ? `${red} overdue` : ''}${red && amber ? ', ' : ''}${amber ? `${amber} coming up` : ''} — INZU Workstation`
-    try {
-      await sendEmail(recipients, subject, wrapEmail(g.title, today, secs.map(sectionHtml).join(''), siteUrl))
-      sent.push({ group: g.key, title: g.title, red, amber })
-    } catch (e) {
-      errors.push(`${g.key}: ${(e as Error).message}`)
+    const branches = [...new Set(secs.flatMap((s) => s.rows.map((r) => r.branch || '—')))].sort()
+    for (const b of branches) {
+      const bSecs = secs
+        .map((s) => ({ ...s, rows: s.rows.filter((r) => (r.branch || '—') === b) }))
+        .filter((s) => s.rows.length)
+      const red = bSecs.reduce((n, s) => n + s.rows.filter((r) => r.tone === 'red').length, 0)
+      const amber = bSecs.reduce((n, s) => n + s.rows.filter((r) => r.tone === 'amber').length, 0)
+      const to = recipientsFor(b)
+      if (!to.length) continue // nobody on the list belongs to this branch
+      const title = `${g.title} — ${branchName(b)}`
+      const subject = `${red ? 'Important: ' : ''}${title}: ${red ? `${red} overdue` : ''}${red && amber ? ', ' : ''}${amber ? `${amber} coming up` : ''} — INZU Workstation`
+      try {
+        await sendEmail(to, subject, wrapEmail(title, today, bSecs.map(sectionHtml).join(''), siteUrl), red > 0)
+        sent.push({ group: g.key, title, red, amber })
+      } catch (e) {
+        errors.push(`${g.key} (${b}): ${(e as Error).message}`)
+      }
     }
   }
-  if (fuelHtml) {
+  for (const f of fuelCards) {
+    const to = recipientsFor(f.branch)
+    if (!to.length) continue
+    const low = f.daysLeft != null && f.daysLeft < 7
+    const title = `Fuel stock — ${branchName(f.branch)}`
+    const subject = `${low ? 'Important: ' : ''}${title}: ${f.daysLeft == null ? 'no burn rate yet' : plural(f.daysLeft, 'day')} left — INZU Workstation`
     try {
-      await sendEmail(recipients, `Fuel stock: ${fuelSubject} — INZU Workstation`, wrapEmail('Fuel stock — daily snapshot', today, fuelHtml, siteUrl))
-      sent.push({ group: 'operations', title: 'Fuel stock snapshot', red: 0, amber: 0 })
+      await sendEmail(to, subject, wrapEmail(title, today, f.html, siteUrl), low)
+      sent.push({ group: 'operations', title, red: 0, amber: 0 })
     } catch (e) {
-      errors.push(`fuel: ${(e as Error).message}`)
+      errors.push(`fuel (${f.branch}): ${(e as Error).message}`)
     }
   }
   return json({
-    sent, recipients: recipients.length,
+    sent, recipients: everyone.length,
     ...(errors.length ? { errors } : {}),
     note: sent.length ? undefined : 'Nothing needs attention today — no email sent.',
   })

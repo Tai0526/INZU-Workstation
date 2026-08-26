@@ -570,8 +570,9 @@ function RemindersCard() {
         </label>
       </div>
       <p className="mb-3 text-[11px] text-status-neutral">
-        Every morning (06:30), items of the same nature go out together in one email — a table of what is overdue and what is
-        coming up (within 30 days). Nothing due, nothing sent. Tick what to include:
+        Every morning (09:00), items of the same nature go out together — one email per branch — with tables of what is overdue and
+        what is coming up (within 30 days); licensing is grouped item by item and anything overdue makes the email high-priority.
+        Nothing due, nothing sent. Tick what to include:
       </p>
       <div className="mb-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {REMINDER_GROUPS.map((g) => (
@@ -599,7 +600,11 @@ function RemindersCard() {
                 <input type="checkbox" className="mt-0.5" disabled={!u.email} checked={picked.has(u.id)}
                   onChange={(e) => reminderConfigStore.toggleUser(u.id, e.target.checked)} />
                 <span>{u.full_name || u.username}
-                  <span className="block text-[10px] leading-tight text-status-neutral">{ROLES[u.role]?.label ?? u.role}{u.email ? ' · ' + u.email : ' · no email on the account'}</span>
+                  <span className="block text-[10px] leading-tight text-status-neutral">
+                    {ROLES[u.role]?.label ?? u.role}
+                    {' · '}{ROLES[u.role]?.crossBranch ? 'both branches' : (BRANCHES.find((b) => b.code === u.branch)?.short ?? u.branch) + (u.extra_branches?.length ? ` +${u.extra_branches.length}` : '')}
+                    {u.email ? ' · ' + u.email : ' · no email on the account'}
+                  </span>
                 </span>
               </label>
             ))}
@@ -611,7 +616,7 @@ function RemindersCard() {
             className="w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand" />
         </label>
       </div>
-      <p className="mt-1.5 text-[10px] text-status-neutral">Each email carries an "Open INZU Workstation" button — recipients log in to see full details and who is responsible. Users are emailed at their account address, so address changes follow automatically.</p>
+      <p className="mt-1.5 text-[10px] text-status-neutral">Each email carries an "Open INZU Workstation" button — recipients log in to see full details and who is responsible. Users are emailed at their account address and only for <b>their own branch</b>; cross-branch roles (MD, directors, board, administrator, HR manager) receive every branch. Extra typed addresses receive everything.</p>
       <div className="mt-2 flex items-center gap-2">
         {dirty && <Button onClick={save}>Save recipients</Button>}
         <Button variant="secondary" onClick={sendNow} disabled={busy || (!dirty && rc.recipients.length === 0 && picked.size === 0)}>

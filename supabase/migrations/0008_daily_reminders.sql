@@ -1,8 +1,9 @@
 -- Daily email reminders: pg_cron calls the daily-reminders Edge Function every
--- morning at 04:30 UTC (06:30 site time), which sends one digest email per
--- NATURE of thing — vehicles & workshop, driver credentials, contracts &
--- documents, fuel stock snapshot — to the recipients configured on the Admin
--- page. Which categories are included is also chosen there (Scheduling tab).
+-- morning at 07:00 UTC (09:00 site time), which sends one digest email per
+-- NATURE of thing per BRANCH — vehicles & workshop, driver credentials,
+-- contracts & documents, fuel stock snapshot — to the recipients configured on
+-- the Admin page. Which categories are included is also chosen there
+-- (Scheduling tab).
 --
 -- ONE-TIME SETUP (dashboard SQL editor or psql, after `supabase db push`):
 --
@@ -31,7 +32,7 @@ end $$;
 
 select cron.schedule(
   'daily-reminders',
-  '30 4 * * *',  -- 04:30 UTC = 06:30 CAT, before the working day
+  '0 7 * * *',  -- 07:00 UTC = 09:00 CAT
   $$
   select net.http_post(
     url := (select decrypted_secret from vault.decrypted_secrets where name = 'reminders_url'),
