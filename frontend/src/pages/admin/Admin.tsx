@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from 'react'
 import {
   Users as UsersIcon, ShieldCheck, Activity, GitBranch, Database, Trash2, RotateCcw, AlertTriangle,
   ShieldAlert, Plus, Search, Pencil, ArrowUp, ArrowDown, X, CheckCircle2, Clock, MapPin, CalendarClock,
-  DownloadCloud, UploadCloud, DatabaseZap, Loader2,
+  DownloadCloud, UploadCloud, DatabaseZap, Loader2, Mail,
 } from 'lucide-react'
 import { useAuth } from '@/auth/AuthContext'
 import {
@@ -12,7 +12,8 @@ import {
 import { ROLE_LIST, ROLES, BRANCHES, BRANCH_CODES, brandingStore, useBranches, type RoleKey, type BranchCode } from '@/lib/roles'
 import { NAV } from '@/lib/nav'
 import { useUsers, usersStore, useSessions, allowedBranches, type AppUser, type NewUser } from '@/lib/auth/users'
-import { isSupabaseConfigured } from '@/lib/supabase/client'
+import { isSupabaseConfigured, requireSupabase } from '@/lib/supabase/client'
+import { useReminderConfig, reminderConfigStore } from '@/lib/reminders/config'
 import { supaUsersStore } from '@/lib/auth/profiles'
 import { useApprovals, approvalsStore } from '@/lib/auth/approvals'
 import { useScheduling, schedulingStore } from '@/lib/drivers/scheduling'
@@ -527,10 +528,69 @@ function BranchesTab() {
 }
 
 // ════════════════════════════════════════════════════════════ Scheduling
+const NL = String.fromCharCode(10)
+
+function RemindersCard() {
+  const rc = useReminderConfig()
+  const [text, setText] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState('')
+  const shown = text ?? rc.recipients.join(NL)
+  const dirty = text !== null && text !== rc.recipients.join(NL)
+
+  function save() {
+    reminderConfigStore.set({ enabled: rc.enabled, recipients: (text ?? '').split(new RegExp('[' + NL + ',;]+')) })
+    setText(null)
+  }
+  async function sendNow() {
+    setBusy(true); setResult('')
+    try {
+      // Save any unsaved edits first, so the test uses what is on screen.
+      if (dirty) save()
+      const { data, error } = await requireSupabase().functions.invoke('daily-reminders', { body: {} })
+      if (error) throw error
+      const sent = (data?.sent ?? []) as { group: string; expired: number; expiring: number }[]
+      setResult(sent.length
+        ? 'Sent ' + sent.length + ' email(s): ' + sent.map((s) => s.group + ' (' + s.expired + ' expired, ' + s.expiring + ' expiring)').join(' · ')
+        : (data?.note ?? 'Nothing needed attention — no email sent.'))
+    } catch (e) {
+      setResult('Failed: ' + ((e as Error).message || 'is the daily-reminders function deployed?'))
+    } finally { setBusy(false) }
+  }
+
+  return (
+    <div className="card p-4">
+      <div className="mb-2 flex items-center gap-2"><Mail size={15} className="text-brand" /><h3 className="font-display text-sm font-bold text-navy">Daily email reminders</h3>
+        <label className="ml-auto flex items-center gap-1.5 text-xs text-navy">
+          <input type="checkbox" checked={rc.enabled} onChange={(e) => reminderConfigStore.set({ ...rc, enabled: e.target.checked })} /> On
+        </label>
+      </div>
+      <p className="mb-3 text-[11px] text-status-neutral">
+        Every morning (06:30) one email per group of items needing attention — vehicle licensing (fitness, road tax, insurance…),
+        driver credentials (licences, PSV, compliance &amp; training), and contracts &amp; company documents — each with a table of what is
+        expired and what expires within 30 days. Nothing due, nothing sent.
+      </p>
+      <label className="block">
+        <span className="mb-1 block text-xs font-medium text-navy">Recipients — one address per line</span>
+        <textarea rows={3} value={shown} onChange={(e) => setText(e.target.value)} placeholder="ops@inzumcs.com&#10;md@inzumcs.com"
+          className="w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand" />
+      </label>
+      <div className="mt-2 flex items-center gap-2">
+        {dirty && <Button onClick={save}>Save recipients</Button>}
+        <Button variant="secondary" onClick={sendNow} disabled={busy || (!dirty && rc.recipients.length === 0)}>
+          <Mail size={14} /> {busy ? 'Sending…' : 'Send now'}
+        </Button>
+        {result && <span className="text-xs text-status-neutral">{result}</span>}
+      </div>
+    </div>
+  )
+}
+
 function SchedulingTab() {
   const sched = useScheduling()
   return (
     <div className="space-y-4">
+      <RemindersCard />
       <div className="flex items-center gap-2">
         <p className="flex-1 text-sm text-status-neutral">
           Define the <span className="font-medium text-navy">shifts</span>, <span className="font-medium text-navy">crews</span> and <span className="font-medium text-navy">work-day rotations</span> used across Drivers. A shift can be label-only or carry times; a crew can be A, B, C… and may be linked to a shift or left as a plain grouping.

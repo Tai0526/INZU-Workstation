@@ -6,3 +6,8 @@ project_id = "uwzofykghqebqhvroxxh"
 # — which carries no token — gets rejected and the call fails.
 [functions.admin-users]
 verify_jwt = false
+
+[functions.daily-reminders]
+# JWT is checked inside the function (admin JWT or the cron secret), so the
+# platform gate is off - pg_cron calls with x-cron-secret, not a user token.
+verify_jwt = false
