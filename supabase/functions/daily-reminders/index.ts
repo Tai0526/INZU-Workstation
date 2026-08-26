@@ -34,7 +34,6 @@
 // Schedule: migration 0008_daily_reminders.sql (pg_cron + Vault)
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { SMTPClient } from 'https://deno.land/x/denomailer@1.6.0/mod.ts'
 
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -151,6 +150,93 @@ function wrapEmail(title: string, today: string, inner: string, siteUrl: string)
 }
 
 // ── Transport ──────────────────────────────────────────────────────────
+// The SMTP path speaks the protocol directly and builds the MIME message
+// itself: base64 body, base64 subject in properly folded encoded words.
+// (denomailer's quoted-printable encoder line-wrapped long subjects in the
+// middle of the header, splitting the header block — clients then showed the
+// raw source instead of the email.)
+const utf8 = new TextEncoder()
+function b64(bytes: Uint8Array): string {
+  let bin = ''
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+  return btoa(bin)
+}
+/** RFC 2047: short plain-ASCII subjects pass through; anything else becomes
+ *  base64 encoded-words, chunked so no header line ever needs wrapping. */
+function encodeSubject(s: string): string {
+  if (/^[\x20-\x7e]*$/.test(s) && s.length <= 60) return s
+  const words: string[] = []
+  let buf = ''
+  for (const ch of s) {
+    if (buf && utf8.encode(buf + ch).length > 36) { words.push(buf); buf = ch } else buf += ch
+  }
+  if (buf) words.push(buf)
+  return words.map((w) => `=?utf-8?B?${b64(utf8.encode(w))}?=`).join('\r\n ')
+}
+
+async function smtpSend(from: string, to: string[], subject: string, html: string, important: boolean): Promise<void> {
+  const host = Deno.env.get('SMTP_HOST')!, user = Deno.env.get('SMTP_USER')!, pass = Deno.env.get('SMTP_PASS')!
+  const port = Number(Deno.env.get('SMTP_PORT') || 465)
+  const bare = (a: string) => a.match(/<([^>]+)>/)?.[1] ?? a
+  const message = [
+    `From: ${from}`,
+    `To: ${to.join(',\r\n ')}`,
+    `Subject: ${encodeSubject(subject)}`,
+    `Date: ${new Date().toUTCString()}`,
+    'MIME-Version: 1.0',
+    ...(important ? ['X-Priority: 1', 'Importance: high'] : []),
+    'Content-Type: text/html; charset=utf-8',
+    'Content-Transfer-Encoding: base64',
+    '',
+    b64(utf8.encode(html)).replace(/(.{76})/g, '$1\r\n'),
+  ].join('\r\n')
+
+  const conn = await Deno.connectTls({ hostname: host, port })
+  let pending = ''
+  const buf = new Uint8Array(8192)
+  // A reply is complete at its final "NNN<space>" line (multiline = "NNN-").
+  const readReply = async (): Promise<string> => {
+    for (;;) {
+      const lines = pending.split('\r\n')
+      for (let i = 0; i < lines.length - 1; i++) {
+        if (/^\d{3} /.test(lines[i])) {
+          const reply = lines.slice(0, i + 1).join(' / ')
+          pending = lines.slice(i + 1).join('\r\n')
+          return reply
+        }
+      }
+      const n = await conn.read(buf)
+      if (n === null) throw new Error('SMTP connection closed unexpectedly')
+      pending += new TextDecoder().decode(buf.subarray(0, n))
+    }
+  }
+  const writeAll = async (data: Uint8Array) => {
+    let done = 0
+    while (done < data.length) done += await conn.write(data.subarray(done))
+  }
+  const step = async (cmd: string, expect: string): Promise<void> => {
+    if (cmd) await writeAll(utf8.encode(cmd + '\r\n'))
+    const reply = await readReply()
+    if (!reply.startsWith(expect)) {
+      throw new Error(`SMTP ${cmd ? cmd.split(' ')[0] : 'greeting'} failed: ${reply.slice(0, 200)}`)
+    }
+  }
+  try {
+    await step('', '220') // server greeting
+    await step('EHLO inzu-workstation', '250')
+    await step(`AUTH PLAIN ${btoa(`\u0000${user}\u0000${pass}`)}`, '235')
+    await step(`MAIL FROM:<${bare(from)}>`, '250')
+    for (const r of to) await step(`RCPT TO:<${r}>`, '250')
+    await step('DATA', '354')
+    await writeAll(utf8.encode(message.replace(/\r\n\./g, '\r\n..') + '\r\n.\r\n'))
+    const reply = await readReply()
+    if (!reply.startsWith('250')) throw new Error(`SMTP delivery refused: ${reply.slice(0, 200)}`)
+    await writeAll(utf8.encode('QUIT\r\n'))
+  } finally {
+    try { conn.close() } catch { /* already closed by the server */ }
+  }
+}
+
 // `important` marks the email high-priority (the "!" in Outlook/Gmail) — used
 // whenever anything in it is already overdue, or fuel is critically low.
 async function sendEmail(to: string[], subject: string, html: string, important = false): Promise<void> {
@@ -166,19 +252,10 @@ async function sendEmail(to: string[], subject: string, html: string, important 
     if (!res.ok) throw new Error(`Resend refused: ${res.status} ${await res.text()}`)
     return
   }
-  const host = Deno.env.get('SMTP_HOST'), user = Deno.env.get('SMTP_USER'), pass = Deno.env.get('SMTP_PASS')
-  if (!host || !user || !pass) throw new Error('No email transport — set RESEND_API_KEY, or SMTP_HOST/SMTP_USER/SMTP_PASS.')
-  const client = new SMTPClient({
-    connection: {
-      hostname: host, port: Number(Deno.env.get('SMTP_PORT') || 465), tls: true,
-      auth: { username: user, password: pass },
-    },
-  })
-  try {
-    await client.send({ from, to: to.join(', '), subject, content: 'auto', html, ...(important ? { priority: 'high' as const } : {}) })
-  } finally {
-    await client.close()
+  if (!Deno.env.get('SMTP_HOST') || !Deno.env.get('SMTP_USER') || !Deno.env.get('SMTP_PASS')) {
+    throw new Error('No email transport — set RESEND_API_KEY, or SMTP_HOST/SMTP_USER/SMTP_PASS.')
   }
+  await smtpSend(from, to, subject, html, important)
 }
 
 Deno.serve(async (req: Request) => {
