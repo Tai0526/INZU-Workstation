@@ -13,9 +13,14 @@
 //                          workshop_spares      critical spares below minimum
 //   Driver credentials   — driver_licences      driving licence & PSV expiries
 //                          safety_certs         safety compliance & training expiries
+//   Safety               — open_incidents       incidents still in review, days open
 //   Contracts & documents— employee_contracts   employment contract expiries
 //                          company_documents    library documents with an expiry
 //   Operations snapshot  — fuel_summary         depot fuel stock: days left, burn rate
+//
+// Each category can also carry its OWN recipients (config `audiences`) — safety
+// things to Safety only, fuel to the fuel supervisor — otherwise it goes to the
+// default list. Same-audience categories still share one email.
 //
 // A category key missing from the config means ON. An email is only sent when
 // at least one of its enabled categories has something to say (the fuel
@@ -285,29 +290,45 @@ Deno.serve(async (req: Request) => {
     const { data } = await admin.from('app_config').select('value').eq('key', key).maybeSingle()
     return (data?.value as T) ?? fallback
   }
-  const rc = await conf<{ enabled?: boolean; user_ids?: string[]; recipients?: string[]; categories?: Record<string, boolean>; site_url?: string }>('reminder_config', {})
-  // The mailing list is Workstation users (resolved to their account email at
-  // send time, so address changes follow automatically) plus any extra typed
-  // addresses for people without an account. Emails are BRANCH-SCOPED: a user
-  // receives only the digests for the branches they belong to (their branch +
-  // any extra branches), while cross-branch roles — MD, directors, board,
-  // administrator, HR manager — receive every branch. Typed extras receive all.
+  interface Audience { user_ids?: string[]; recipients?: string[] }
+  const rc = await conf<{ enabled?: boolean; user_ids?: string[]; recipients?: string[]; categories?: Record<string, boolean>; audiences?: Record<string, Audience>; site_url?: string }>('reminder_config', {})
+  // Recipients: each category goes to the DEFAULT list unless it has its own
+  // audience (safety things to Safety only, fuel to the fuel supervisor…).
+  // Users are resolved to their account email at send time and BRANCH-SCOPED —
+  // they receive only the branches they belong to (branch + extras), while
+  // cross-branch roles — MD, directors, board, administrator, HR manager —
+  // receive every branch. Typed extra addresses receive everything.
   const CROSS_BRANCH_ROLES = new Set(['administrator', 'board_chairman', 'board_member', 'managing_director', 'finance_director', 'hr_manager'])
   const isEmail = (r: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(r)
-  const extras = [...new Set((rc.recipients ?? []).map((r) => String(r).trim().toLowerCase()).filter(isEmail))]
-  const scoped: { email: string; all: boolean; branches: string[] }[] = []
-  if (rc.user_ids?.length) {
-    const { data: users } = await admin.from('profiles').select('email, active, role, branch, extra_branches').in('id', rc.user_ids)
+  const cleanExtras = (list?: string[]) => [...new Set((list ?? []).map((r) => String(r).trim().toLowerCase()).filter(isEmail))]
+  const audiences = rc.audiences ?? {}
+  interface ScopedUser { email: string; all: boolean; branches: string[] }
+  const userById = new Map<string, ScopedUser>()
+  const allIds = [...new Set([...(rc.user_ids ?? []), ...Object.values(audiences).flatMap((a) => a?.user_ids ?? [])])]
+  if (allIds.length) {
+    const { data: users } = await admin.from('profiles').select('id, email, active, role, branch, extra_branches').in('id', allIds)
     for (const u of users ?? []) {
       const e = String(u.email ?? '').trim().toLowerCase()
       if (!u.active || !isEmail(e)) continue
-      scoped.push({ email: e, all: CROSS_BRANCH_ROLES.has(u.role), branches: [u.branch, ...(u.extra_branches ?? [])].filter(Boolean) })
+      userById.set(u.id, { email: e, all: CROSS_BRANCH_ROLES.has(u.role), branches: [u.branch, ...(u.extra_branches ?? [])].filter(Boolean) })
     }
   }
-  const recipientsFor = (branch: string): string[] =>
-    [...new Set([...extras, ...scoped.filter((u) => u.all || u.branches.includes(branch)).map((u) => u.email)])]
-  const everyone = [...new Set([...extras, ...scoped.map((u) => u.email)])]
-  if (!everyone.length) return json({ sent: [], note: 'No recipients configured — pick users on the Admin page.' })
+  const resolve = (a: Audience | undefined) => ({
+    users: (a?.user_ids ?? []).map((id) => userById.get(id)).filter(Boolean) as ScopedUser[],
+    extras: cleanExtras(a?.recipients),
+  })
+  const defaultList = resolve({ user_ids: rc.user_ids, recipients: rc.recipients })
+  const listFor = (cat: string) => (audiences[cat] ? resolve(audiences[cat]) : defaultList)
+  const recipientsFor = (branch: string, cat: string): string[] => {
+    const l = listFor(cat)
+    return [...new Set([...l.extras, ...l.users.filter((u) => u.all || u.branches.includes(branch)).map((u) => u.email)])]
+  }
+  const everyone = new Set<string>()
+  for (const l of [defaultList, ...Object.values(audiences).map((a) => resolve(a))]) {
+    l.extras.forEach((e) => everyone.add(e))
+    l.users.forEach((u) => everyone.add(u.email))
+  }
+  if (!everyone.size) return json({ sent: [], note: 'No recipients configured — pick users on the Admin page.' })
   if (rc.enabled === false && fromCron) return json({ sent: [], note: 'Reminders are switched off.' })
   const siteUrl = String(rc.site_url ?? '').replace(/\/+$/, '')
   const on = (key: string) => rc.categories?.[key] !== false // missing = on
@@ -489,6 +510,48 @@ Deno.serve(async (req: Request) => {
     })
   }
 
+  // Open incidents — disciplinary cases still in review, with how long each has
+  // waited. Old per-minute speeding cases from the same journey are shown as
+  // one incident (same driver, same day), the way the Incidents page groups them.
+  if (on('open_incidents')) {
+    await guard('incidents', async () => {
+      interface Kase { branch: string; source: string; incident_type: string; driver_name: string; vehicle_label: string; event_datetime: string; title: string; stage: string; created_at: string; over_by: number | null }
+      const open = await pageAll<Kase>((a, b) => admin.from('disciplinary_cases')
+        .select('branch, source, incident_type, driver_name, vehicle_label, event_datetime, title, stage, created_at, over_by')
+        .neq('stage', 'closed').range(a, b))
+      const TYPE: Record<string, string> = {
+        speeding: 'Speeding', near_miss: 'Near miss', accident: 'Accident / collision', injury: 'Injury',
+        property_damage: 'Property damage', environmental: 'Environmental', misconduct: 'Misconduct', fatigue: 'Fatigue', other: 'Incident',
+      }
+      const STAGE: Record<string, string> = { safety_review: 'with Safety', ops_review: 'awaiting Ops decision' }
+      const buckets = new Map<string, Kase[]>()
+      open.forEach((c, i) => {
+        const key = c.source === 'speed' ? `${c.branch}|${c.driver_name}|${(c.event_datetime || '').slice(0, 10)}` : `case|${i}`
+        const list = buckets.get(key) ?? []
+        if (!list.length) buckets.set(key, list)
+        list.push(c)
+      })
+      const rows: Row[] = []
+      for (const list of buckets.values()) {
+        list.sort((x, y) => (x.event_datetime || '').localeCompare(y.event_datetime || ''))
+        const first = list[0]
+        const started = new Date(first.created_at || first.event_datetime).getTime()
+        const days = Number.isFinite(started) ? Math.max(0, Math.floor((Date.now() - started) / DAY)) : 0
+        const stage = list.some((c) => c.stage === 'safety_review') ? 'safety_review' : 'ops_review'
+        const what = first.source === 'speed'
+          ? `Speeding — ${Math.max(...list.map((c) => c.over_by ?? 0))} km/h over${list.length > 1 ? ` · ${list.length} cases` : ''}`
+          : `${TYPE[first.incident_type] ?? 'Incident'}${first.title ? ` — ${first.title.slice(0, 60)}` : ''}`
+        rows.push({
+          what, who: first.driver_name || first.vehicle_label || '—', branch: first.branch,
+          when: fmtDate(first.event_datetime || first.created_at),
+          status: `${plural(days, 'day')} open · ${STAGE[stage] ?? stage}`,
+          tone: days >= 14 ? 'red' : 'amber', sort: -days, // oldest waits at the top
+        })
+      }
+      put('open_incidents', 'Open incidents — waiting to be closed', rows)
+    })
+  }
+
   // Employment contracts (HR files live in app_config).
   if (on('employee_contracts')) {
     await guard('contracts', async () => {
@@ -554,6 +617,7 @@ Deno.serve(async (req: Request) => {
   const GROUPS: { key: string; title: string; sections: string[] }[] = [
     { key: 'vehicles', title: 'Vehicles & workshop', sections: ['vehicle_licensing', 'vehicle_inspections', 'vehicle_service', 'workshop_spares'] },
     { key: 'drivers', title: 'Driver credentials', sections: ['driver_licences', 'safety_certs'] },
+    { key: 'safety', title: 'Safety — open incidents', sections: ['open_incidents'] },
     { key: 'library', title: 'Contracts & company documents', sections: ['employee_contracts', 'company_documents'] },
   ]
   const sent: { group: string; title: string; red: number; amber: number }[] = []
@@ -565,22 +629,33 @@ Deno.serve(async (req: Request) => {
       const bSecs = secs
         .map((s) => ({ ...s, rows: s.rows.filter((r) => (r.branch || '—') === b) }))
         .filter((s) => s.rows.length)
-      const red = bSecs.reduce((n, s) => n + s.rows.filter((r) => r.tone === 'red').length, 0)
-      const amber = bSecs.reduce((n, s) => n + s.rows.filter((r) => r.tone === 'amber').length, 0)
-      const to = recipientsFor(b)
-      if (!to.length) continue // nobody on the list belongs to this branch
-      const title = `${g.title} — ${branchName(b)}`
-      const subject = `${red ? 'Important: ' : ''}${title}: ${red ? `${red} overdue` : ''}${red && amber ? ', ' : ''}${amber ? `${amber} coming up` : ''} — INZU Workstation`
-      try {
-        await sendEmail(to, subject, wrapEmail(title, today, bSecs.map(sectionHtml).join(''), siteUrl), red > 0)
-        sent.push({ group: g.key, title, red, amber })
-      } catch (e) {
-        errors.push(`${g.key} (${b}): ${(e as Error).message}`)
+      // Categories aimed at their own people split into their own email;
+      // categories whose recipients end up identical still travel together.
+      const parts = new Map<string, { to: string[]; secs: Section[] }>()
+      for (const s of bSecs) {
+        const to = recipientsFor(b, s.key)
+        if (!to.length) continue // nobody on this category's list belongs to this branch
+        const sig = to.slice().sort().join(',')
+        const p = parts.get(sig)
+        if (p) p.secs.push(s)
+        else parts.set(sig, { to, secs: [s] })
+      }
+      for (const p of parts.values()) {
+        const red = p.secs.reduce((n, s) => n + s.rows.filter((r) => r.tone === 'red').length, 0)
+        const amber = p.secs.reduce((n, s) => n + s.rows.filter((r) => r.tone === 'amber').length, 0)
+        const title = `${g.title} — ${branchName(b)}`
+        const subject = `${red ? 'Important: ' : ''}${title}: ${red ? `${red} overdue` : ''}${red && amber ? ', ' : ''}${amber ? `${amber} coming up` : ''} — INZU Workstation`
+        try {
+          await sendEmail(p.to, subject, wrapEmail(title, today, p.secs.map(sectionHtml).join(''), siteUrl), red > 0)
+          sent.push({ group: g.key, title, red, amber })
+        } catch (e) {
+          errors.push(`${g.key} (${b}): ${(e as Error).message}`)
+        }
       }
     }
   }
   for (const f of fuelCards) {
-    const to = recipientsFor(f.branch)
+    const to = recipientsFor(f.branch, 'fuel_summary')
     if (!to.length) continue
     const low = f.daysLeft != null && f.daysLeft < 7
     const title = `Fuel stock — ${branchName(f.branch)}`
@@ -593,7 +668,7 @@ Deno.serve(async (req: Request) => {
     }
   }
   return json({
-    sent, recipients: everyone.length,
+    sent, recipients: everyone.size,
     ...(errors.length ? { errors } : {}),
     note: sent.length ? undefined : 'Nothing needs attention today — no email sent.',
   })

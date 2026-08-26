@@ -530,25 +530,60 @@ function BranchesTab() {
 // ════════════════════════════════════════════════════════════ Scheduling
 const NL = String.fromCharCode(10)
 
+// One recipients editor, used for the default list AND per-category audiences:
+// a user checklist plus free-typed extra addresses (committed when the box
+// loses focus, so Send now always tests what is on screen).
+function RecipientPicker({ users, value, onChange }: {
+  users: ReturnType<typeof useSupaUsers>
+  value: { user_ids: string[]; recipients: string[] }
+  onChange: (v: { user_ids: string[]; recipients: string[] }) => void
+}) {
+  const [draft, setDraft] = useState<string | null>(null)
+  const picked = new Set(value.user_ids)
+  const shown = draft ?? value.recipients.join(NL)
+  return (
+    <div className="grid gap-3 sm:grid-cols-2">
+      <div>
+        <span className="mb-1 block text-xs font-medium text-navy">Workstation users ({picked.size} picked)</span>
+        <div className="max-h-44 space-y-1 overflow-y-auto rounded-lg border border-black/15 bg-white p-2">
+          {users.length === 0 && <p className="px-1 py-2 text-xs text-status-neutral">No active accounts found.</p>}
+          {users.map((u) => (
+            <label key={u.id} className={'flex items-start gap-1.5 rounded px-1 py-0.5 text-xs ' + (u.email ? 'text-navy' : 'text-status-neutral opacity-60')} title={u.email || 'No email on this account'}>
+              <input type="checkbox" className="mt-0.5" disabled={!u.email} checked={picked.has(u.id)}
+                onChange={(e) => onChange({ ...value, user_ids: e.target.checked ? [...value.user_ids, u.id] : value.user_ids.filter((x) => x !== u.id) })} />
+              <span>{u.full_name || u.username}
+                <span className="block text-[10px] leading-tight text-status-neutral">
+                  {ROLES[u.role]?.label ?? u.role}
+                  {' · '}{ROLES[u.role]?.crossBranch ? 'both branches' : (BRANCHES.find((b) => b.code === u.branch)?.short ?? u.branch) + (u.extra_branches?.length ? ` +${u.extra_branches.length}` : '')}
+                  {u.email ? ' · ' + u.email : ' · no email on the account'}
+                </span>
+              </span>
+            </label>
+          ))}
+        </div>
+      </div>
+      <label className="block">
+        <span className="mb-1 block text-xs font-medium text-navy">Extra addresses (no account) — one per line</span>
+        <textarea rows={6} value={shown} onChange={(e) => setDraft(e.target.value)} placeholder="md@inzumcs.com"
+          onBlur={() => { if (draft !== null) { onChange({ ...value, recipients: draft.split(new RegExp('[' + NL + ',;]+')) }); setDraft(null) } }}
+          className="w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand" />
+      </label>
+    </div>
+  )
+}
+
 function RemindersCard() {
   const rc = useReminderConfig()
   const users = useSupaUsers().filter((u) => u.active)
-  const [text, setText] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState('')
-  const shown = text ?? rc.recipients.join(NL)
-  const dirty = text !== null && text !== rc.recipients.join(NL)
-  const picked = new Set(rc.user_ids)
+  const [editAud, setEditAud] = useState<string | null>(null)
+  const allCats = REMINDER_GROUPS.flatMap((g) => g.cats)
+  const editing = allCats.find((c) => c.key === editAud)
 
-  function save() {
-    reminderConfigStore.set({ ...rc, recipients: (text ?? '').split(new RegExp('[' + NL + ',;]+')) })
-    setText(null)
-  }
   async function sendNow() {
     setBusy(true); setResult('')
     try {
-      // Save any unsaved edits first, so the test uses what is on screen.
-      if (dirty) save()
       const { data, error } = await requireSupabase().functions.invoke('daily-reminders', { body: {} })
       if (error) throw error
       const sent = (data?.sent ?? []) as { group: string; title: string; red: number; amber: number }[]
@@ -571,55 +606,57 @@ function RemindersCard() {
       </div>
       <p className="mb-3 text-[11px] text-status-neutral">
         Every morning (09:00), items of the same nature go out together — one email per branch — with tables of what is overdue and
-        what is coming up (within 30 days); licensing is grouped item by item and anything overdue makes the email high-priority.
-        Nothing due, nothing sent. Tick what to include:
+        what is coming up (within 30 days). Each category goes to the <b>default recipients</b> below unless you give it its own
+        people ("who receives this") — safety things to Safety only, fuel to the fuel supervisor, and so on. Nothing due, nothing sent.
       </p>
       <div className="mb-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {REMINDER_GROUPS.map((g) => (
           <div key={g.title} className="rounded-lg border border-black/10 p-2.5">
             <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wide text-status-neutral">{g.title} <span className="font-normal normal-case">· one email</span></div>
             <div className="space-y-1.5">
-              {g.cats.map((c) => (
-                <label key={c.key} className="flex items-start gap-1.5 text-xs text-navy" title={c.hint}>
-                  <input type="checkbox" className="mt-0.5" checked={categoryOn(rc, c.key)}
-                    onChange={(e) => reminderConfigStore.setCategory(c.key, e.target.checked)} />
-                  <span>{c.label}<span className="block text-[10px] leading-tight text-status-neutral">{c.hint}</span></span>
-                </label>
-              ))}
+              {g.cats.map((c) => {
+                const aud = rc.audiences[c.key]
+                const n = aud ? aud.user_ids.length + aud.recipients.length : 0
+                return (
+                  <div key={c.key} className="flex items-start gap-1.5 text-xs text-navy" title={c.hint}>
+                    <input type="checkbox" className="mt-0.5" checked={categoryOn(rc, c.key)}
+                      onChange={(e) => reminderConfigStore.setCategory(c.key, e.target.checked)} />
+                    <span>{c.label}<span className="block text-[10px] leading-tight text-status-neutral">{c.hint}</span>
+                      <button type="button" onClick={() => setEditAud(editAud === c.key ? null : c.key)}
+                        className={'block text-[10px] font-medium hover:underline ' + (aud ? 'text-brand' : 'text-status-neutral')}>
+                        {aud ? `→ own list: ${n} recipient${n === 1 ? '' : 's'}` : '→ default recipients'}
+                      </button>
+                    </span>
+                  </div>
+                )
+              })}
             </div>
           </div>
         ))}
       </div>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <div>
-          <span className="mb-1 block text-xs font-medium text-navy">Send to — Workstation users ({picked.size} picked)</span>
-          <div className="max-h-44 space-y-1 overflow-y-auto rounded-lg border border-black/15 bg-white p-2">
-            {users.length === 0 && <p className="px-1 py-2 text-xs text-status-neutral">No active accounts found.</p>}
-            {users.map((u) => (
-              <label key={u.id} className={'flex items-start gap-1.5 rounded px-1 py-0.5 text-xs ' + (u.email ? 'text-navy' : 'text-status-neutral opacity-60')} title={u.email || 'No email on this account'}>
-                <input type="checkbox" className="mt-0.5" disabled={!u.email} checked={picked.has(u.id)}
-                  onChange={(e) => reminderConfigStore.toggleUser(u.id, e.target.checked)} />
-                <span>{u.full_name || u.username}
-                  <span className="block text-[10px] leading-tight text-status-neutral">
-                    {ROLES[u.role]?.label ?? u.role}
-                    {' · '}{ROLES[u.role]?.crossBranch ? 'both branches' : (BRANCHES.find((b) => b.code === u.branch)?.short ?? u.branch) + (u.extra_branches?.length ? ` +${u.extra_branches.length}` : '')}
-                    {u.email ? ' · ' + u.email : ' · no email on the account'}
-                  </span>
-                </span>
-              </label>
-            ))}
+      {editing && (
+        <div className="mb-3 rounded-lg border border-brand/50 bg-brand/5 p-3">
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <span className="text-xs font-bold text-navy">Who receives "{editing.label}"</span>
+            <span className="text-[10px] text-status-neutral">only these people get this category — it leaves the default emails</span>
+            <span className="ml-auto flex gap-2">
+              {rc.audiences[editing.key] && (
+                <Button variant="secondary" onClick={() => { reminderConfigStore.setAudience(editing.key, null); setEditAud(null) }}>Use default recipients</Button>
+              )}
+              <Button variant="secondary" onClick={() => setEditAud(null)}>Done</Button>
+            </span>
           </div>
+          <RecipientPicker users={users}
+            value={rc.audiences[editing.key] ?? { user_ids: [], recipients: [] }}
+            onChange={(v) => reminderConfigStore.setAudience(editing.key, v)} />
         </div>
-        <label className="block">
-          <span className="mb-1 block text-xs font-medium text-navy">Extra addresses (no account) — one per line</span>
-          <textarea rows={6} value={shown} onChange={(e) => setText(e.target.value)} placeholder="md@inzumcs.com"
-            className="w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm text-navy outline-none focus:border-brand" />
-        </label>
-      </div>
+      )}
+      <span className="mb-1 block text-xs font-bold text-navy">Default recipients</span>
+      <RecipientPicker users={users} value={{ user_ids: rc.user_ids, recipients: rc.recipients }}
+        onChange={(v) => reminderConfigStore.set({ ...rc, user_ids: v.user_ids, recipients: v.recipients })} />
       <p className="mt-1.5 text-[10px] text-status-neutral">Each email carries an "Open INZU Workstation" button — recipients log in to see full details and who is responsible. Users are emailed at their account address and only for <b>their own branch</b>; cross-branch roles (MD, directors, board, administrator, HR manager) receive every branch. Extra typed addresses receive everything.</p>
       <div className="mt-2 flex items-center gap-2">
-        {dirty && <Button onClick={save}>Save recipients</Button>}
-        <Button variant="secondary" onClick={sendNow} disabled={busy || (!dirty && rc.recipients.length === 0 && picked.size === 0)}>
+        <Button variant="secondary" onClick={sendNow} disabled={busy}>
           <Mail size={14} /> {busy ? 'Sending…' : 'Send now'}
         </Button>
         {result && <span className="text-xs text-status-neutral">{result}</span>}

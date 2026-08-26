@@ -11,17 +11,29 @@ import { createSyncConfig } from '@/lib/supabase/syncTable'
  *
  * `categories` stores only the switched-OFF keys (missing = on), so a category
  * added later is on by default without touching anyone's saved config.
+ *
+ * `audiences` targets a category at its OWN people (safety things to Safety,
+ * fuel to the fuel supervisor…): a category with an entry here goes ONLY to
+ * that list; without one it goes to the default list. Categories of the same
+ * nature still share one email when their recipients end up identical — a
+ * differently-targeted category simply becomes its own email to its own people.
  */
+
+export interface ReminderAudience { user_ids: string[]; recipients: string[] }
 
 export interface ReminderConfig {
   enabled: boolean
-  user_ids: string[] // Workstation users on the list — resolved to their account email at send time
-  recipients: string[] // extra addresses for people without an account
+  user_ids: string[] // default list: Workstation users — resolved to their account email at send time
+  recipients: string[] // default list: extra addresses for people without an account
   categories: Record<string, boolean>
+  audiences: Record<string, ReminderAudience> // per-category recipients; missing key = default list
   site_url: string // where "log in for details" points; stamped from the deployed site on save
 }
 
-export const DEFAULT_REMINDERS: ReminderConfig = { enabled: true, user_ids: [], recipients: [], categories: {}, site_url: '' }
+export const DEFAULT_REMINDERS: ReminderConfig = { enabled: true, user_ids: [], recipients: [], categories: {}, audiences: {}, site_url: '' }
+
+/** Is a category on? Missing from the map = on. */
+export const categoryOn = (rc: ReminderConfig, key: string): boolean => rc.categories[key] !== false
 
 // The deployed site records its own address whenever the config is saved there,
 // so the emails can link back without anyone typing a URL. Dev servers don't count.
@@ -29,9 +41,6 @@ function currentSiteUrl(fallback: string): string {
   const origin = typeof window !== 'undefined' ? window.location.origin : ''
   return /^https:\/\//.test(origin) && !/localhost|127\.0\.0\.1/.test(origin) ? origin : fallback
 }
-
-/** Is a category on? Missing from the map = on. */
-export const categoryOn = (rc: ReminderConfig, key: string): boolean => rc.categories[key] !== false
 
 // The selectable categories, grouped the way they are grouped into EMAILS —
 // everything of the same nature goes out at once, never one email per item.
@@ -56,6 +65,12 @@ export const REMINDER_GROUPS: ReminderGroup[] = [
     ],
   },
   {
+    title: 'Safety',
+    cats: [
+      { key: 'open_incidents', label: 'Open incidents', hint: 'Incidents still under review — how long each has waited to be closed' },
+    ],
+  },
+  {
     title: 'Contracts & documents',
     cats: [
       { key: 'employee_contracts', label: 'Employment contracts', hint: 'From the HR employee files' },
@@ -70,21 +85,36 @@ export const REMINDER_GROUPS: ReminderGroup[] = [
   },
 ]
 
+const cleanEmails = (list: string[] | undefined) =>
+  [...new Set((list ?? []).map((r) => r.trim().toLowerCase()).filter(Boolean))]
+
 const cfg = createSyncConfig<ReminderConfig>({
   key: 'reminder_config', lsKey: 'inzu_reminder_config', default: DEFAULT_REMINDERS,
-  merge: (saved) => ({ ...DEFAULT_REMINDERS, ...saved, user_ids: saved?.user_ids ?? [], categories: saved?.categories ?? {}, site_url: saved?.site_url ?? '' }),
+  merge: (saved) => ({
+    ...DEFAULT_REMINDERS, ...saved,
+    user_ids: saved?.user_ids ?? [], categories: saved?.categories ?? {},
+    audiences: saved?.audiences ?? {}, site_url: saved?.site_url ?? '',
+  }),
 })
 
 export const reminderConfigStore = {
   get: (): ReminderConfig => cfg.get(),
   subscribe: cfg.subscribe,
   set(next: ReminderConfig) {
+    // Audience entries with nobody in them mean "back to the default list".
+    const audiences: Record<string, ReminderAudience> = {}
+    for (const [k, a] of Object.entries(next.audiences ?? {})) {
+      const user_ids = [...new Set((a?.user_ids ?? []).filter(Boolean))]
+      const recipients = cleanEmails(a?.recipients)
+      if (user_ids.length || recipients.length) audiences[k] = { user_ids, recipients }
+    }
     cfg.set({
       enabled: !!next.enabled,
       user_ids: [...new Set((next.user_ids ?? []).filter(Boolean))],
-      recipients: [...new Set(next.recipients.map((r) => r.trim().toLowerCase()).filter(Boolean))],
+      recipients: cleanEmails(next.recipients),
       // keep only the OFF entries — on is the default and stays implicit
       categories: Object.fromEntries(Object.entries(next.categories ?? {}).filter(([, v]) => v === false)),
+      audiences,
       site_url: currentSiteUrl(next.site_url ?? ''),
     })
   },
@@ -92,9 +122,13 @@ export const reminderConfigStore = {
     const cur = cfg.get()
     this.set({ ...cur, categories: { ...cur.categories, [key]: on } })
   },
-  toggleUser(id: string, on: boolean) {
+  /** Give a category its own recipients; null returns it to the default list. */
+  setAudience(key: string, audience: ReminderAudience | null) {
     const cur = cfg.get()
-    this.set({ ...cur, user_ids: on ? [...cur.user_ids, id] : cur.user_ids.filter((x) => x !== id) })
+    const audiences = { ...cur.audiences }
+    if (audience) audiences[key] = audience
+    else delete audiences[key]
+    this.set({ ...cur, audiences })
   },
 }
 
